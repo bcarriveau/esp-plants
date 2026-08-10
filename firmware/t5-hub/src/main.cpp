@@ -18,6 +18,7 @@
 #include "lgfx/v1/platforms/esp32/Panel_EPD.hpp"
 
 #include "plant_protocol.h"
+#include "t5_off_screen_xbm.h"
 
 using lgfx::epd_mode_t;
 
@@ -30,12 +31,23 @@ namespace {
 // Plant names are NOT compiled into firmware anymore. They are stored in NVS
 // and edited from the T5 setup page.
 //
-// Short press of the existing side/function button toggles setup mode.
-// Long hold requests the same true PMU shutdown already proven on this board.
-constexpr uint32_t POWER_HOLD_MS = 1500;
+// The physical enclosure button labeled IO48 is the user/function button.
+// On this board revision it is read through PCA9535 P1.2; ESP32 GPIO48 remains
+// the e-paper CKV signal and is not used as a pushbutton.
+// Short press toggles setup mode. Long hold draws the final OFF image and then
+// requests true BQ25896 PMU shutdown. The physical PWR/QON button wakes the unit.
+constexpr uint32_t FUNCTION_HOLD_MS = 1500;
 
 // Protect the e-paper from unnecessary refreshes during development.
 constexpr uint32_t MIN_NORMAL_REFRESH_MS = 60000;
+constexpr uint32_t POWER_SOURCE_REFRESH_MIN_MS = 5000;
+constexpr uint32_t POWER_SAMPLE_INTERVAL_MS = 10000;
+constexpr uint32_t LAST_READING_CACHE_MIN_WRITE_MS = 60000;
+constexpr uint8_t T5_BATTERY_REFRESH_DELTA = 3;
+
+constexpr uint32_t HOME_WIFI_RECONNECT_INTERVAL_MS = 5000;
+constexpr uint32_t UDP_RETRY_INTERVAL_MS = 3000;
+constexpr uint32_t WIFI_UDP_SETTLE_MS = 500;
 
 // Setup hotspot. The password is generated once per T5 and stored in NVS.
 constexpr uint16_t SETUP_HTTP_PORT = 80;
@@ -60,7 +72,12 @@ constexpr int I2C_SCL = 40;
 
 constexpr uint8_t PCA9535_ADDR = 0x20;
 constexpr uint8_t BQ25896_ADDR = 0x6B;
+constexpr uint8_t BQ27220_ADDR = 0x55;
 constexpr uint8_t TPS65185_ADDR = 0x68;
+
+// BQ27220 standard command registers. These are read-only status accesses.
+constexpr uint8_t BQ27220_REG_VOLTAGE = 0x08;
+constexpr uint8_t BQ27220_REG_STATE_OF_CHARGE = 0x2C;
 
 constexpr uint8_t PCA_INPUT_PORT0  = 0x00;
 constexpr uint8_t PCA_OUTPUT_PORT0 = 0x02;
@@ -69,7 +86,7 @@ constexpr uint8_t PCA_CONFIG_PORT0 = 0x06;
 // PCA9535 logical pin numbering: P0.0..P0.7 = 0..7, P1.0..P1.7 = 8..15.
 constexpr uint8_t PCA_PIN_EPD_OE         = 8;
 constexpr uint8_t PCA_PIN_EPD_MODE       = 9;
-constexpr uint8_t PCA_PIN_BUTTON         = 10; // P1.2, active-low
+constexpr uint8_t PCA_PIN_FUNCTION_BUTTON = 10; // physical IO48-labeled button; PCA P1.2, active-low
 constexpr uint8_t PCA_PIN_TPS_PWRUP      = 11;
 constexpr uint8_t PCA_PIN_VCOM_CTRL      = 12;
 constexpr uint8_t PCA_PIN_TPS_WAKEUP     = 13;
@@ -139,6 +156,19 @@ bool i2cReadRegister(uint8_t address, uint8_t reg,
   return true;
 }
 
+bool i2cReadU16LE(uint8_t address, uint8_t reg, uint16_t& value) {
+  uint8_t bytes[2] = {0, 0};
+
+  if (!i2cReadRegister(address, reg, bytes, sizeof(bytes)))
+    return false;
+
+  value =
+      static_cast<uint16_t>(bytes[0]) |
+      (static_cast<uint16_t>(bytes[1]) << 8);
+
+  return true;
+}
+
 bool pca9535Init() {
   // Match LILYGO's current M5GFX example:
   // Port 1 bit 2 (button) remains input.
@@ -184,12 +214,12 @@ bool pca9535GetLevel(uint8_t pin, bool& level) {
   return true;
 }
 
-bool powerButtonPressed() {
+bool functionButtonPressed() {
   bool level = true;
-  if (!pca9535GetLevel(PCA_PIN_BUTTON, level)) {
+  if (!pca9535GetLevel(PCA_PIN_FUNCTION_BUTTON, level)) {
     return false;
   }
-  return !level; // active-low, same as LILYGO factory code
+  return !level; // active-low, same electrical behavior as LILYGO factory code
 }
 
 bool tpsWriteRegister(uint8_t reg, const uint8_t* data, size_t length) {
@@ -376,6 +406,11 @@ constexpr uint16_t CONFIG_VERSION = 1;
 constexpr char CONFIG_NAMESPACE[] = "plantmon";
 constexpr char CONFIG_KEY[] = "cfg";
 
+constexpr uint32_t LAST_READING_MAGIC = 0x504C4153UL;  // "PLAS"
+constexpr uint16_t LAST_READING_VERSION = 1;
+constexpr char LAST_READING_NAMESPACE[] = "plantlast";
+constexpr char LAST_READING_KEY[] = "reading";
+
 constexpr uint32_t HOME_WIFI_CONNECT_TIMEOUT_MS = 15000;
 constexpr uint32_t DEVELOPMENT_WAKE_SECONDS = 60;
 
@@ -416,6 +451,21 @@ struct ReceivedEvent {
   bool via_udp;
 };
 
+struct T5PowerState {
+  bool gauge_valid;
+  bool external_power;
+  uint8_t percent;
+  uint16_t battery_mv;
+};
+
+struct CachedReadingRecord {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t structure_size;
+  plant::ReadingPacket packet;
+  uint32_t checksum;
+};
+
 PersistedConfig config_data{};
 LivePlant live_plants[MAX_PLANTS]{};
 
@@ -443,6 +493,21 @@ plant::ReadingPacket displayed_packet{};
 uint32_t displayed_sensor_id = 0;
 bool have_displayed_packet = false;
 uint32_t last_display_refresh_ms = 0;
+bool displayed_packet_is_cached = false;
+
+T5PowerState t5_power{};
+bool t5_power_sampled = false;
+uint32_t last_power_sample_ms = 0;
+
+CachedReadingRecord cached_reading{};
+bool cached_reading_valid = false;
+plant::ReadingPacket pending_cached_packet{};
+bool cached_reading_dirty = false;
+uint32_t last_cached_reading_write_ms = 0;
+
+uint32_t wifi_connected_at_ms = 0;
+uint32_t last_wifi_reconnect_attempt_ms = 0;
+uint32_t last_udp_retry_ms = 0;
 
 // Last application-level provisioning acknowledgement.
 volatile uint32_t provision_ack_sensor_id = 0;
@@ -576,6 +641,146 @@ bool loadConfig() {
 
 bool wifiCredentialsSaved() {
   return config_data.wifi_ssid[0] != '\0';
+}
+
+uint32_t cachedReadingChecksum(const CachedReadingRecord& source) {
+  CachedReadingRecord copy = source;
+  copy.checksum = 0;
+
+  return plant::fnv1a(
+      reinterpret_cast<const uint8_t*>(&copy),
+      sizeof(copy));
+}
+
+bool loadCachedReading() {
+  Preferences cache_preferences;
+
+  if (!cache_preferences.begin(
+          LAST_READING_NAMESPACE, true)) {
+    Serial.println(
+        "Last-reading cache unavailable.");
+    return false;
+  }
+
+  const size_t stored_size =
+      cache_preferences.getBytesLength(
+          LAST_READING_KEY);
+
+  bool valid = false;
+
+  if (stored_size == sizeof(cached_reading)) {
+    const size_t read =
+        cache_preferences.getBytes(
+            LAST_READING_KEY,
+            &cached_reading,
+            sizeof(cached_reading));
+
+    valid =
+        read == sizeof(cached_reading) &&
+        cached_reading.magic ==
+            LAST_READING_MAGIC &&
+        cached_reading.version ==
+            LAST_READING_VERSION &&
+        cached_reading.structure_size ==
+            sizeof(CachedReadingRecord) &&
+        cached_reading.checksum ==
+            cachedReadingChecksum(
+                cached_reading) &&
+        plant::validatePacket(
+            cached_reading.packet);
+  }
+
+  cache_preferences.end();
+
+  cached_reading_valid = valid;
+
+  if (valid) {
+    Serial.printf(
+        "Restored last-known sensor 0x%08lX: %u%%.\n",
+        static_cast<unsigned long>(
+            cached_reading.packet.sensor_id),
+        cached_reading.packet.moisture_percent);
+  }
+
+  return valid;
+}
+
+bool saveCachedReading(
+    const plant::ReadingPacket& packet) {
+  CachedReadingRecord record{};
+
+  record.magic = LAST_READING_MAGIC;
+  record.version = LAST_READING_VERSION;
+  record.structure_size =
+      sizeof(CachedReadingRecord);
+  record.packet = packet;
+  record.checksum =
+      cachedReadingChecksum(record);
+
+  Preferences cache_preferences;
+
+  if (!cache_preferences.begin(
+          LAST_READING_NAMESPACE, false)) {
+    Serial.println(
+        "Last-reading cache save failed: Preferences.begin().");
+    return false;
+  }
+
+  const size_t written =
+      cache_preferences.putBytes(
+          LAST_READING_KEY,
+          &record,
+          sizeof(record));
+
+  cache_preferences.end();
+
+  if (written != sizeof(record)) {
+    Serial.printf(
+        "Last-reading cache save failed: wrote %u/%u bytes.\n",
+        static_cast<unsigned>(written),
+        static_cast<unsigned>(
+            sizeof(record)));
+    return false;
+  }
+
+  cached_reading = record;
+  cached_reading_valid = true;
+  cached_reading_dirty = false;
+  last_cached_reading_write_ms = millis();
+
+  Serial.printf(
+      "Cached last-known reading for 0x%08lX.\n",
+      static_cast<unsigned long>(
+          packet.sensor_id));
+
+  return true;
+}
+
+void queueCachedReading(
+    const plant::ReadingPacket& packet) {
+  pending_cached_packet = packet;
+  cached_reading_dirty = true;
+
+  // First-ever reading is worth persisting immediately. Later writes are
+  // throttled so service-mode reports do not hammer flash.
+  if (!cached_reading_valid) {
+    saveCachedReading(
+        pending_cached_packet);
+  }
+}
+
+void serviceCachedReading() {
+  if (!cached_reading_dirty)
+    return;
+
+  if ((millis() -
+       last_cached_reading_write_ms) <
+      LAST_READING_CACHE_MIN_WRITE_MS) {
+    return;
+  }
+
+  saveCachedReading(
+      pending_cached_packet);
 }
 
 // ============================================================================
@@ -780,6 +985,84 @@ String sanitizePlantName(String value) {
 }
 
 // ============================================================================
+// T5 POWER STATUS
+// ============================================================================
+
+bool readT5PowerState(
+    T5PowerState& state) {
+  state = {};
+
+  if (pmu_ready) {
+    const auto bus_status =
+        PPM.getBusStatus();
+
+    state.external_power =
+        bus_status ==
+            XPowersPPM::BUS_STATE_USB_SDP ||
+        bus_status ==
+            XPowersPPM::BUS_STATE_ADAPTER;
+  }
+
+  uint16_t soc = 0;
+  uint16_t battery_mv = 0;
+
+  const bool soc_ok =
+      i2cReadU16LE(
+          BQ27220_ADDR,
+          BQ27220_REG_STATE_OF_CHARGE,
+          soc);
+
+  const bool voltage_ok =
+      i2cReadU16LE(
+          BQ27220_ADDR,
+          BQ27220_REG_VOLTAGE,
+          battery_mv);
+
+  state.gauge_valid =
+      soc_ok &&
+      voltage_ok &&
+      soc <= 100 &&
+      battery_mv >= 2500 &&
+      battery_mv <= 5000;
+
+  if (state.gauge_valid) {
+    state.percent =
+        static_cast<uint8_t>(soc);
+    state.battery_mv = battery_mv;
+  }
+
+  return state.gauge_valid;
+}
+
+void refreshT5PowerState() {
+  T5PowerState next{};
+  readT5PowerState(next);
+  t5_power = next;
+  t5_power_sampled = true;
+  last_power_sample_ms = millis();
+}
+
+String t5PowerLabel() {
+  if (!t5_power_sampled) {
+    return String("BAT --");
+  }
+
+  if (!t5_power.gauge_valid) {
+    return t5_power.external_power
+        ? String("USB  BAT --")
+        : String("BAT --");
+  }
+
+  return
+      String(
+          t5_power.external_power
+              ? "USB  "
+              : "BAT  ") +
+      String(t5_power.percent) +
+      "%";
+}
+
+// ============================================================================
 // E-PAPER UI
 // ============================================================================
 
@@ -830,6 +1113,14 @@ void drawHeader(const char* subtitle) {
   display.setFont(&fonts::Font2);
   display.drawString(
       subtitle, 30, 61);
+
+  display.setTextDatum(
+      textdatum_t::middle_right);
+
+  display.drawString(
+      t5PowerLabel(),
+      w - 28,
+      31);
 }
 
 void drawWaitingScreen() {
@@ -870,13 +1161,13 @@ void drawWaitingScreen() {
         display.height() / 2 + 45);
   } else {
     display.drawString(
-        "Short press: setup / provisioning",
+        "Short IO48 press: setup / provisioning",
         display.width() / 2,
         display.height() / 2 + 15);
   }
 
   display.drawString(
-      "Long hold: power off",
+      "Hold IO48: power off",
       display.width() / 2,
       display.height() - 55);
 
@@ -885,7 +1176,8 @@ void drawWaitingScreen() {
 
 void drawPlantScreen(
     const plant::ReadingPacket& packet,
-    const String& plant_name) {
+    const String& plant_name,
+    bool last_known = false) {
   if (!display_ready) return;
 
   beginFrame();
@@ -906,6 +1198,17 @@ void drawPlantScreen(
   display.setFont(&fonts::Font4);
   display.drawString(
       plant_name, 38, 112);
+
+  if (last_known) {
+    display.setFont(&fonts::Font2);
+    display.setTextColor(
+        gray(80), TFT_WHITE);
+    display.drawString(
+        "LAST KNOWN READING - waiting for fresh sensor report",
+        40, 154);
+    display.setTextColor(
+        TFT_BLACK, TFT_WHITE);
+  }
 
   display.setTextDatum(
       textdatum_t::middle_center);
@@ -1017,7 +1320,7 @@ void drawSetupScreen() {
       415);
 
   display.drawString(
-      "Short press again to return to home Wi-Fi",
+      "Short IO48 press again to return to home Wi-Fi",
       display.width() / 2,
       465);
 
@@ -1029,32 +1332,26 @@ void drawPowerOffScreen() {
 
   beginFrame();
 
-  display.setTextColor(
-      TFT_BLACK, TFT_WHITE);
+  display.drawXBitmap(
+      0,
+      0,
+      t5_off_screen_xbm,
+      T5_OFF_SCREEN_WIDTH,
+      T5_OFF_SCREEN_HEIGHT,
+      TFT_BLACK,
+      TFT_WHITE);
 
-  display.setTextDatum(
-      textdatum_t::middle_center);
-
-  display.setFont(&fonts::Font4);
-
-  display.drawString(
-      "POWERING OFF",
-      display.width() / 2,
-      display.height() / 2 - 30);
-
-  display.setFont(&fonts::Font2);
-
-  display.drawString(
-      "Use RST to start again",
-      display.width() / 2,
-      display.height() / 2 + 25);
-
+  // finishFrame() waits for the physical e-paper refresh to complete before
+  // shutdown, so this final OFF image remains visible with power removed.
   finishFrame();
 }
 
 bool shouldRefreshFor(
     const plant::ReadingPacket& packet) {
   if (!have_displayed_packet)
+    return true;
+
+  if (displayed_packet_is_cached)
     return true;
 
   if (packet.sensor_id !=
@@ -1102,11 +1399,68 @@ void restoreNormalDisplay() {
     drawPlantScreen(
         displayed_packet,
         plantNameFor(
-            displayed_sensor_id));
+            displayed_sensor_id),
+        displayed_packet_is_cached);
     return;
   }
 
   drawWaitingScreen();
+}
+
+void serviceT5PowerDisplay() {
+  if ((millis() - last_power_sample_ms) <
+      POWER_SAMPLE_INTERVAL_MS) {
+    return;
+  }
+
+  const T5PowerState previous =
+      t5_power;
+  const bool had_sample =
+      t5_power_sampled;
+
+  refreshT5PowerState();
+
+  if (!had_sample)
+    return;
+
+  const bool source_changed =
+      previous.external_power !=
+      t5_power.external_power;
+
+  const bool validity_changed =
+      previous.gauge_valid !=
+      t5_power.gauge_valid;
+
+  int percent_delta = 0;
+
+  if (previous.gauge_valid &&
+      t5_power.gauge_valid) {
+    percent_delta =
+        abs(
+            static_cast<int>(
+                previous.percent) -
+            static_cast<int>(
+                t5_power.percent));
+  }
+
+  const uint32_t since_refresh =
+      millis() -
+      last_display_refresh_ms;
+
+  if ((source_changed ||
+       validity_changed) &&
+      since_refresh >=
+          POWER_SOURCE_REFRESH_MIN_MS) {
+    restoreNormalDisplay();
+    return;
+  }
+
+  if (percent_delta >=
+          T5_BATTERY_REFRESH_DELTA &&
+      since_refresh >=
+          MIN_NORMAL_REFRESH_MS) {
+    restoreNormalDisplay();
+  }
 }
 
 // ============================================================================
@@ -1655,6 +2009,8 @@ bool connectHomeWifi() {
     return false;
   }
 
+  WiFi.setAutoReconnect(true);
+
   Serial.printf(
       "Connecting T5 to \"%s\"...\n",
       config_data.wifi_ssid);
@@ -1671,7 +2027,7 @@ bool connectHomeWifi() {
       Serial.println(
           "T5 home Wi-Fi connection timed out.");
 
-      WiFi.disconnect(true, false);
+      WiFi.disconnect(false, false);
       home_wifi_connected = false;
       return false;
     }
@@ -1680,6 +2036,7 @@ bool connectHomeWifi() {
   }
 
   home_wifi_connected = true;
+  wifi_connected_at_ms = millis();
 
   Serial.println(
       "T5 home Wi-Fi connected.");
@@ -1692,9 +2049,86 @@ bool connectHomeWifi() {
       WiFi.channel());
 
   web_server.begin();
-  startUdp();
+
+  // Battery-powered resets can settle differently from USB-powered resets.
+  // Wait briefly after WL_CONNECTED before binding the UDP listener.
+  delay(WIFI_UDP_SETTLE_MS);
+
+  last_udp_retry_ms = millis();
+
+  if (!startUdp()) {
+    Serial.println(
+        "Home Wi-Fi is up; UDP listener will retry automatically.");
+  }
 
   return true;
+}
+
+void serviceHomeNetwork() {
+  if (setup_mode ||
+      !wifiCredentialsSaved()) {
+    return;
+  }
+
+  const bool connected =
+      WiFi.status() == WL_CONNECTED;
+
+  if (!connected) {
+    if (home_wifi_connected ||
+        udp_ready) {
+      Serial.println(
+          "Home Wi-Fi lost; stopping UDP until Wi-Fi recovers.");
+      stopUdp();
+      home_wifi_connected = false;
+    }
+
+    if ((millis() -
+         last_wifi_reconnect_attempt_ms) <
+        HOME_WIFI_RECONNECT_INTERVAL_MS) {
+      return;
+    }
+
+    last_wifi_reconnect_attempt_ms =
+        millis();
+
+    Serial.println(
+        "Retrying T5 home Wi-Fi...");
+    WiFi.reconnect();
+    return;
+  }
+
+  if (!home_wifi_connected) {
+    home_wifi_connected = true;
+    wifi_connected_at_ms = millis();
+
+    Serial.print(
+        "T5 home Wi-Fi recovered, IP: ");
+    Serial.println(WiFi.localIP());
+
+    web_server.begin();
+  }
+
+  if (udp_ready)
+    return;
+
+  if ((millis() -
+       wifi_connected_at_ms) <
+      WIFI_UDP_SETTLE_MS) {
+    return;
+  }
+
+  if ((millis() -
+       last_udp_retry_ms) <
+      UDP_RETRY_INTERVAL_MS) {
+    return;
+  }
+
+  last_udp_retry_ms = millis();
+
+  if (!startUdp()) {
+    Serial.println(
+        "UDP listener retry failed; will try again.");
+  }
 }
 
 bool startSetupMode() {
@@ -1827,6 +2261,60 @@ String buildWebPage() {
   }
 
   html += F("</div>");
+
+  refreshT5PowerState();
+
+  html += F(
+      "<div class='card'><h2>T5 Hub Status</h2><div class='grid'>");
+
+  html += F(
+      "<div class='pill'><strong>Power</strong><br>");
+  html += t5_power.external_power
+      ? F("USB / external")
+      : F("Battery");
+  html += F("</div>");
+
+  html += F(
+      "<div class='pill'><strong>T5 battery</strong><br>");
+  if (t5_power.gauge_valid) {
+    html += String(t5_power.percent);
+    html += F("%</div>");
+  } else {
+    html += F("Unavailable</div>");
+  }
+
+  html += F(
+      "<div class='pill'><strong>Battery voltage</strong><br>");
+  if (t5_power.gauge_valid) {
+    html += String(t5_power.battery_mv);
+    html += F(" mV</div>");
+  } else {
+    html += F("--</div>");
+  }
+
+  html += F(
+      "<div class='pill'><strong>Wi-Fi</strong><br>");
+  html +=
+      WiFi.status() == WL_CONNECTED
+          ? F("CONNECTED")
+          : F("DOWN");
+  html += F("</div>");
+
+  html += F(
+      "<div class='pill'><strong>UDP listener</strong><br>");
+  html += udp_ready
+      ? F("READY")
+      : F("RETRYING / OFF");
+  html += F("</div>");
+
+  html += F(
+      "<div class='pill'><strong>T5 IP</strong><br>");
+  if (WiFi.status() == WL_CONNECTED) {
+    html += WiFi.localIP().toString();
+  } else {
+    html += F("--");
+  }
+  html += F("</div></div></div>");
 
   html += F(
       "<div class='card'><h2>Home Wi-Fi</h2>");
@@ -2004,7 +2492,7 @@ String buildWebPage() {
   if (!setup_mode) {
     html += F(
         "<div class='card'><h2>Setup / Provisioning Mode</h2>"
-        "<p>Short-press the T5 side/function button to switch from home Wi-Fi "
+        "<p>Short-press the physical IO48-labeled function button to switch from home Wi-Fi "
         "to the local setup network.</p></div>");
   }
 
@@ -2149,7 +2637,8 @@ void handleRename() {
           sensor_id) {
     drawPlantScreen(
         displayed_packet,
-        plantNameFor(sensor_id));
+        plantNameFor(sensor_id),
+        displayed_packet_is_cached);
   }
 
   redirectToRoot();
@@ -2302,20 +2791,33 @@ void initPmu() {
   if (!pmu_ready) {
     Serial.println(
         "Warning: BQ25896 PMU init failed.");
+  } else {
+    PPM.setSysPowerDownVoltage(3300);
+    PPM.enableMeasure();
 
-    return;
+    Serial.println(
+        "BQ25896 PMU ready.");
   }
 
-  PPM.setSysPowerDownVoltage(3300);
-  PPM.enableMeasure();
+  refreshT5PowerState();
 
-  Serial.println(
-      "BQ25896 PMU ready.");
+  if (t5_power.gauge_valid) {
+    Serial.printf(
+        "BQ27220 battery: %u%%, %u mV, external power=%s.\n",
+        t5_power.percent,
+        t5_power.battery_mv,
+        t5_power.external_power
+            ? "YES"
+            : "NO");
+  } else {
+    Serial.println(
+        "Warning: BQ27220 battery gauge read failed.");
+  }
 }
 
 void shutdownNow() {
   Serial.println(
-      "Side button held: PMU shutdown.");
+      "IO48 function button held: PMU shutdown.");
 
   drawPowerOffScreen();
   delay(300);
@@ -2326,6 +2828,11 @@ void shutdownNow() {
 
     restoreNormalDisplay();
     return;
+  }
+
+  if (cached_reading_dirty) {
+    saveCachedReading(
+        pending_cached_packet);
   }
 
   dns_server.stop();
@@ -2356,7 +2863,7 @@ void serviceControlButton() {
   static bool long_action = false;
 
   const bool pressed =
-      powerButtonPressed();
+      functionButtonPressed();
 
   if (pressed && !was_pressed) {
     pressed_since = millis();
@@ -2366,7 +2873,7 @@ void serviceControlButton() {
   if (pressed &&
       !long_action &&
       (millis() - pressed_since) >=
-          POWER_HOLD_MS) {
+          FUNCTION_HOLD_MS) {
     long_action = true;
     shutdownNow();
   }
@@ -2422,6 +2929,9 @@ void processReceivedEvent(
         persistent_index].provisioned = 1;
   }
 
+  queueCachedReading(
+      event.packet);
+
   if (setup_mode)
     return;
 
@@ -2429,7 +2939,10 @@ void processReceivedEvent(
     drawPlantScreen(
         event.packet,
         plantNameFor(
-            event.packet.sensor_id));
+            event.packet.sensor_id),
+        false);
+
+    displayed_packet_is_cached = false;
 
     displayed_packet =
         event.packet;
@@ -2439,6 +2952,8 @@ void processReceivedEvent(
 
     have_displayed_packet = true;
   } else {
+    displayed_packet_is_cached = false;
+
     displayed_packet =
         event.packet;
 
@@ -2467,6 +2982,16 @@ void setup() {
       plant::PROTOCOL_VERSION);
 
   loadConfig();
+  loadCachedReading();
+
+  if (cached_reading_valid) {
+    displayed_packet =
+        cached_reading.packet;
+    displayed_sensor_id =
+        cached_reading.packet.sensor_id;
+    have_displayed_packet = true;
+    displayed_packet_is_cached = true;
+  }
 
   receive_queue =
       xQueueCreate(
@@ -2486,9 +3011,19 @@ void setup() {
   if (wifiCredentialsSaved() &&
       connectHomeWifi()) {
     Serial.println(
-        "Normal mode: home Wi-Fi / UDP.");
+        udp_ready
+            ? "Normal mode: home Wi-Fi / UDP ready."
+            : "Normal mode: home Wi-Fi connected; UDP retrying.");
 
-    drawWaitingScreen();
+    if (have_displayed_packet) {
+      drawPlantScreen(
+          displayed_packet,
+          plantNameFor(
+              displayed_sensor_id),
+          displayed_packet_is_cached);
+    } else {
+      drawWaitingScreen();
+    }
   } else {
     Serial.println(
         "Starting local setup/provisioning mode.");
@@ -2497,8 +3032,9 @@ void setup() {
   }
 
   Serial.println(
-      "Short press: setup mode. "
-      "Long hold: power off.");
+      "Physical IO48 button: short press = setup mode; "
+      "long hold = draw OFF screen + PMU shutdown. "
+      "Physical PWR button wakes the unit.");
 }
 
 void loop() {
@@ -2507,8 +3043,12 @@ void loop() {
   if (setup_mode) {
     dns_server.processNextRequest();
   } else {
+    serviceHomeNetwork();
     serviceUdp();
   }
+
+  serviceCachedReading();
+  serviceT5PowerDisplay();
 
   web_server.handleClient();
 

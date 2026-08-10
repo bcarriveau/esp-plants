@@ -1,0 +1,28 @@
+ESP PLANTS - T5 replacement-file bundle
+
+Copy the contents of this ZIP directly over the repository root.
+
+Files included:
+
+CHANGELOG.md
+README.md
+docs/TESTING.md
+firmware/t5-hub/src/main.cpp
+firmware/t5-hub/include/t5_off_screen_xbm.h
+firmware/t5-hub/assets/t5_off_screen.png
+COMMIT MESSAGE.txt
+
+Nothing else should be deleted or replaced.
+
+.gitignore:
+No change needed. The new PNG and XBM header are intentional tracked source files.
+
+VERSION:
+Do not bump yet. Keep this work under Unreleased until the T5 builds and passes
+the physical battery/UDP/power checks.
+
+After copying:
+1. Review the GitKraken diff.
+2. Build the T5 firmware.
+3. Flash/test on battery.
+4. Commit using COMMIT MESSAGE.txt.

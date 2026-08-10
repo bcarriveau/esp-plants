@@ -34,9 +34,16 @@ Use this as the minimum regression plan for the GitHub baseline.
 - [ ] e-paper initializes.
 - [ ] normal display refresh occurs.
 - [ ] refresh protection avoids needless rapid updates.
-- [ ] short function-button action toggles setup mode.
-- [ ] long hold reaches real shutdown path.
-- [ ] device can be started again using the expected board behavior.
+- [ ] physical IO48-labeled function button short press toggles setup mode.
+- [ ] physical IO48-labeled function button long hold draws the final OFF screen.
+- [ ] final OFF image remains visible after PMU shutdown.
+- [ ] physical PWR button wakes the shut-down T5.
+- [ ] RST remains an independent reset action.
+- [ ] T5 header shows plausible BQ27220 battery percentage while unplugged.
+- [ ] USB/external-power state is reported correctly.
+- [ ] battery-only reset reaches home Wi-Fi and UDP READY without USB power.
+- [ ] reboot with cached plant data immediately shows `LAST KNOWN READING`.
+- [ ] next fresh sensor report removes the last-known indication.
 
 ## D. T5 setup page
 
@@ -73,6 +80,10 @@ With an XIAO that has no saved home network:
 - [ ] T5 returns ACK with matching sensor ID and sequence.
 - [ ] XIAO recognizes ACK.
 - [ ] T5 displays/maps the correct plant name.
+- [ ] if the initial UDP bind fails, the T5 retries without requiring a reset.
+- [ ] if home Wi-Fi drops, UDP is stopped and reconnect is requested.
+- [ ] after Wi-Fi recovery, UDP returns to READY and a later sensor packet is accepted.
+- [ ] web status page reports Wi-Fi, T5 IP, and UDP listener state accurately.
 
 ## G. Adaptive unattended wake
 
@@ -154,6 +165,16 @@ Manual-service watering edge case:
 - [ ] sensor returns to provisioning behavior.
 
 ## L. Battery / long-run test
+
+T5 hub:
+
+- [ ] BQ27220 state-of-charge is plausible across battery discharge.
+- [ ] BQ27220 voltage is plausible.
+- [ ] T5 battery-only cold/reset boots continue to receive sensor UDP reports.
+- [ ] battery-driven display updates respect refresh thresholds.
+- [ ] last-reading cache writes are throttled rather than written every packet.
+
+XIAO sensors:
 
 - [ ] no unexpected rapid wake loop.
 - [ ] no persistent Wi-Fi when stable.

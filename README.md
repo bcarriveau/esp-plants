@@ -81,9 +81,31 @@ nearby unprovisioned XIAO
 - plant names are **not** compiled into sensor firmware
 - normal UDP receiver on port `42100`
 - validates protocol/checksum and returns application ACK
-- short press enters/leaves setup mode
-- long hold uses the board PMU shutdown path
+- physical IO48-labeled function button short press enters/leaves setup mode
+- physical IO48-labeled function button long hold draws the final OFF screen and
+  requests PMU shutdown
+- physical PWR/QON button wakes the T5 after PMU shutdown
+- on-board T5 battery percentage / voltage reporting
+- USB/external-power indication
+- self-healing home-Wi-Fi and UDP-listener recovery
+- last-known plant reading restored after T5 reboot while waiting for a fresh
+  sensor report
+- persistent `ESP PLANTS / OFF` e-paper screen before true PMU shutdown
 - e-paper refresh protection
+
+### T5 physical controls
+
+- **PWR**: PMU/QON wake / power-on.
+- **RST**: independent reset.
+- **BOOT**: boot/programming control.
+- **IO48-labeled button**: firmware function button.
+  - short press enters/leaves setup mode,
+  - long hold draws the final OFF screen, waits for the e-paper refresh, and
+    requests BQ25896 PMU shutdown.
+
+The physical `IO48` enclosure label is not the ESP32-S3 GPIO48 signal in this
+firmware. The user-button state is read through PCA9535 P1.2; ESP32 GPIO48
+remains the e-paper CKV line.
 
 ### XIAO soil sensor
 

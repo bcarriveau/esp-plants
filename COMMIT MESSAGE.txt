@@ -1,0 +1,9 @@
+T5: improve power handling and sensor receive reliability
+
+- show T5 battery percentage/voltage and USB power state
+- recover Wi-Fi and UDP listener after battery/reset timing failures
+- cache and restore the last-known plant reading after T5 reboot
+- clarify physical IO48 function-button vs PWR behavior
+- draw a persistent ESP PLANTS OFF screen before PMU shutdown
+- add T5 power/network diagnostics to the local web page
+- update README, CHANGELOG, and hardware test coverage

@@ -5,6 +5,47 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Added
+
+- T5 on-board battery state-of-charge and battery voltage reporting from the
+  BQ27220 fuel gauge.
+- T5 power source, battery, Wi-Fi, IP, and UDP-listener diagnostics on the local
+  web status page.
+- T5 battery/power indication in the e-paper header.
+- Throttled NVS caching of the last-known plant reading so a T5 reboot can show
+  useful plant data while waiting for a sleeping sensor to report again.
+- Final 960x540 `ESP PLANTS / OFF` e-paper screen with
+  `Designed by Bill Carriveau` and `Press PWR to wake`.
+
+### Fixed
+
+- T5 home Wi-Fi / UDP receive path now recovers after Wi-Fi loss instead of
+  leaving a dead UDP listener until the next reset.
+- UDP listener startup is retried if the initial bind fails.
+- Added a short post-Wi-Fi settling period before the first UDP bind to reduce
+  the battery-reset timing issue where Wi-Fi appeared connected but sensor
+  packets were not received.
+- A fresh sensor report always replaces the `LAST KNOWN READING` state even when
+  the new moisture/battery values are unchanged.
+
+### Changed
+
+- The physical button labeled `IO48` is now named/documented as the T5
+  function/setup/shutdown button.
+- Long-holding the physical IO48-labeled button draws the final OFF image,
+  waits for the e-paper refresh to finish, and then requests PMU shutdown.
+- Physical `PWR` is documented as the PMU/QON wake/power-on control; `RST`
+  remains the separate reset button.
+- ESP32-S3 GPIO48 remains the e-paper CKV signal; the physical IO48-labeled
+  function button is read through the PCA9535 expander.
+
+### Verification status
+
+- Source prepared for build and physical testing.
+- Battery-only reset/UDP receive, BQ27220 battery reporting, last-known restore,
+  OFF-screen persistence, IO48 shutdown, and PWR wake remain to be physically
+  verified before this work is promoted out of `Unreleased`.
+
 ### Planned / open
 
 - Physically verify the complete Phase 3E calibration workflow.
