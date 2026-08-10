@@ -1,0 +1,165 @@
+# Changelog
+
+This project uses this file for user-visible behavior, protocol, hardware, and
+architecture changes. Do not rely on commit messages alone for project history.
+
+## [Unreleased]
+
+### Planned / open
+
+- Physically verify the complete Phase 3E calibration workflow.
+- Decide and document final production moisture-state thresholds.
+- Add authenticated/encrypted provisioning before calling provisioning
+  production-ready.
+- Decide whether adaptive thresholds/intervals should become T5-configurable.
+- Expand the T5 dashboard from the current receiver/setup baseline.
+- Add a stable release tag only after both firmware projects build cleanly and
+  the release checklist passes on hardware.
+
+## [0.1.0-alpha.1] - 2026-08-09
+
+### Added
+
+- Established the first clean GitHub-oriented repository baseline.
+- Added both firmware projects as intentionally separate PlatformIO projects.
+- Added repository documentation, test plan, release checklist, security notes,
+  development rules, CI skeleton, issue templates, and protocol-sync checking.
+- Added a baseline source manifest so the imported firmware can be identified
+  later.
+
+### Baseline firmware
+
+- T5: Phase 3B home-Wi-Fi / UDP receiver and local setup/provisioning portal.
+- XIAO: Phase 3E adaptive sender with factory-style per-sensor calibration.
+- Shared wire protocol: v3.
+
+### Verification note
+
+This repository baseline is a development starting point, not a claim that every
+new Phase 3E path has already passed final hardware verification.
+
+---
+
+# Pre-GitHub development history
+
+These entries summarize confirmed project milestones that produced the current
+baseline.
+
+## Phase 3E - Factory-style calibration
+
+### Added
+
+- Restored per-sensor two-point calibration behavior inspired by the factory
+  firmware.
+- Triple short-press starts calibration while already awake in service mode.
+- Dry stage and wet stage each use a placement window and 10 averaged samples.
+- Calibration is validated before saving.
+- Calibration values are stored in a separate XIAO NVS namespace.
+- Existing home-Wi-Fi provisioning data remains separate.
+- Adaptive RTC percentage history is cleared after a successful calibration so
+  values calculated with the old scale are not compared to the new scale.
+
+### Preserved
+
+- Plant names remain T5-only.
+- Adaptive scheduling and watering follow-up remain sensor-side.
+- Normal Wi-Fi/UDP transport remains unchanged.
+
+## Phase 3D.1 - Watering follow-up fix
+
+### Fixed
+
+- Watering detected during the two-minute manual service window now arms the
+  same post-watering watch used by scheduled wakes.
+- An initially soaked/WET probe can no longer end the service window and then
+  automatically fall into the ordinary 30-minute WET sleep.
+- Active watering watch forces the first follow-up after 5 minutes.
+
+## Phase 3D - Adaptive plant logic
+
+### Added
+
+- Local sensor checks separate from network transmissions.
+- 15-minute checks for DRY and ALMOST DRY.
+- 30-minute checks for NORMAL and WET.
+- Wi-Fi skipped when no meaningful report is needed.
+- 4-percentage-point meaningful-change trigger.
+- state-change reporting.
+- 8-percentage-point watering-rise detection.
+- 5-minute first watering follow-up.
+- 10-minute later watering follow-ups.
+- stable-reading exit logic for watering watch.
+- 6-hour heartbeat.
+- RTC-retained adaptive state across deep sleep.
+
+### Changed
+
+- Sensor-side adaptive logic became authoritative for the next local check.
+- The development `next_wake_seconds` value returned in the T5 ACK is retained
+  for protocol compatibility but no longer controls Phase 3D+ sensor scheduling.
+
+## Phase 3C.1 - Automatic service sampling
+
+### Added
+
+- While the green service LED is on, the XIAO automatically takes and sends a
+  fresh measurement every 5 seconds.
+- Physical actions such as removing, wiping, reinserting, or watering the probe
+  can be observed without another button press.
+
+## Phase 3C - Button service mode
+
+### Added
+
+- GPIO2 top-button deep-sleep wake.
+- Two-minute manual-awake service window.
+- Green LED stays on during the service window.
+- Short press requests another immediate reading and resets the service timer.
+- Deliberate 10-second hold while already awake erases saved home-Wi-Fi
+  provisioning.
+- Timer wake and button wake are both enabled before deep sleep.
+
+### Removed
+
+- Risky hold-during-boot Wi-Fi erase behavior.
+
+## Phase 3B - Home Wi-Fi / UDP transport
+
+### Added
+
+- Household Wi-Fi/router/mesh became the normal transport for sensor data.
+- XIAO uses directed LAN broadcast for protocol-v3 readings.
+- T5 listens on UDP port 42100 and returns application ACK.
+- ESP-NOW retained for nearby provisioning rather than whole-house telemetry.
+- T5 setup page saves home Wi-Fi and provisions nearby unconfigured sensors.
+- XIAO stores received Wi-Fi credentials in NVS.
+
+### T5 fixes
+
+- Removed duplicate setup/product constants accidentally carried over from the
+  prior setup-page work.
+- Fixed the live-plant source-IP field mismatch.
+
+## Phase 3A - T5 setup portal / centralized naming
+
+### Added
+
+- Local `PlantMonitor-xxxx` setup hotspot.
+- Generated setup password stored on the T5.
+- Local setup page.
+- persistent home-Wi-Fi settings.
+- sensor discovery.
+- up to 16 persisted plant records.
+- rename by stable sensor ID.
+- plant names stored centrally on the T5 rather than compiled into sensors.
+
+## Earlier transport proof
+
+### Proven direction
+
+- Direct ESP-NOW sensor-to-T5 readings and T5-to-sensor application ACK were
+  proven locally.
+- Whole-house fringe behavior showed that direct ESP-NOW was not the desired
+  family-proof normal transport.
+- The architecture therefore moved normal data to the household Wi-Fi
+  infrastructure while retaining ESP-NOW for nearby provisioning.

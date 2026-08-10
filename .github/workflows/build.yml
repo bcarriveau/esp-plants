@@ -1,0 +1,40 @@
+name: Build firmware
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  protocol-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Check protocol copies
+        run: python tools/check_protocol_sync.py
+
+  build-t5:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build T5 hub
+        run: pio run -d firmware/t5-hub
+
+  build-xiao:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build XIAO sensor
+        run: pio run -d firmware/xiao-soil-sensor

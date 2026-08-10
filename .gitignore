@@ -1,0 +1,32 @@
+# PlatformIO build/package state
+**/.pio/
+**/.pio-packages/
+
+# VS Code / PlatformIO local workspace state
+**/.vscode/
+*.code-workspace
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python/tooling
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local notes / secrets / exports
+.env
+.env.*
+secrets.*
+*.local
+*.bak
+*.tmp
+
+# Serial/build logs
+*.log
+logs/

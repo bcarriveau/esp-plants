@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a focused project improvement
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - T5 hub
+        - XIAO sensor
+        - Provisioning
+        - Protocol
+        - Documentation
+        - Whole system
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / goal
+      description: What user problem should this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Hardware / battery / e-paper / compatibility constraints

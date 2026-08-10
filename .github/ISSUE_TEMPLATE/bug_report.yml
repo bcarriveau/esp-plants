@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible firmware/hardware problem
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - T5 hub
+        - XIAO sensor
+        - Provisioning
+        - UDP/protocol
+        - Calibration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: "0.1.0-alpha.1 or git commit"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Serial logs
+      description: Remove passwords/private information before posting.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Basic checks
+      options:
+        - label: I tested the current repository version.
+        - label: I removed credentials/private data from logs.
