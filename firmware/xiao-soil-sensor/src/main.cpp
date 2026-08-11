@@ -89,6 +89,13 @@ constexpr uint32_t WIFI_FAILURE_SLEEP_SECONDS = 5 * 60;
 constexpr uint32_t PROVISION_WINDOW_MS = 120000;
 constexpr uint32_t PROVISION_BEACON_INTERVAL_MS = 2500;
 
+// A brand-new sensor does not know the T5/home channel yet. It walks the
+// 2.4 GHz channels until it hears the T5's ESP-NOW ACK, then locks there.
+constexpr uint8_t PROVISION_CHANNEL_MIN = 1;
+constexpr uint8_t PROVISION_CHANNEL_MAX = 13;
+constexpr uint32_t PROVISION_CHANNEL_DWELL_MS = 320;
+constexpr uint32_t PROVISION_CHANNEL_LOCK_TIMEOUT_MS = 6500;
+
 // A GPIO2 button wake enters a two-minute service window.
 // The green LED stays on for this entire manual-awake period.
 constexpr uint32_t SERVICE_WINDOW_MS = 120000;
@@ -192,7 +199,19 @@ RTC_DATA_ATTR AdaptiveRtcState adaptive{};
 
 WiFiUDP udp;
 
+// True only after the original wake press has been released and the sensor is
+// actively in the two-minute manual service window. Blocking Wi-Fi/UDP helpers
+// use this to yield immediately when GPIO2 is pressed so the 10-second erase
+// hold cannot be starved by network timeouts.
+bool service_mode_active = false;
+bool provisioning_mode_active = false;
+bool esp_now_ready = false;
+std::atomic<bool> provision_channel_locked{false};
+std::atomic<uint8_t> discovered_t5_channel{0};
+std::atomic<uint32_t> last_t5_espnow_ack_ms{0};
+
 std::atomic<bool> provision_received{false};
+std::atomic<uint32_t> locate_request_ms{0};
 SensorConfig pending_config{};
 
 struct AdcReading {
@@ -1166,11 +1185,95 @@ void sendProvisionAck(const uint8_t* mac) {
       sizeof(ack));
 }
 
-void handleProvisionPacket(
+uint8_t currentRadioChannel();
+
+bool acceptLocatePacket(
+    const uint8_t* data,
+    int length,
+    const char* transport_name) {
+  if (length !=
+      sizeof(plant::LocatePacket)) {
+    return false;
+  }
+
+  plant::LocatePacket packet{};
+  memcpy(
+      &packet,
+      data,
+      sizeof(packet));
+
+  if (!plant::validatePacket(packet))
+    return false;
+
+  if (packet.sensor_id != sensor_id)
+    return false;
+
+  uint32_t flash_ms =
+      packet.flash_ms;
+
+  if (flash_ms < 2000)
+    flash_ms = 2000;
+
+  if (flash_ms > 15000)
+    flash_ms = 15000;
+
+  locate_request_ms.store(
+      flash_ms,
+      std::memory_order_release);
+
+  Serial.printf(
+      "Locate request accepted via %s: flash for %lu ms.\n",
+      transport_name,
+      static_cast<unsigned long>(
+          flash_ms));
+
+  return true;
+}
+
+void handleEspNowPacket(
     const uint8_t* source_mac,
     const uint8_t* data,
     int length) {
-  if (length != sizeof(plant::ProvisionPacket)) {
+  if (acceptLocatePacket(
+          data,
+          length,
+          "ESP-NOW")) {
+    return;
+  }
+
+  if (length ==
+      sizeof(plant::AckPacket)) {
+    plant::AckPacket ack{};
+    memcpy(&ack, data, sizeof(ack));
+
+    if (plant::validatePacket(ack) &&
+        ack.sensor_id == sensor_id &&
+        ack.accepted == 1) {
+      if (provisioning_mode_active) {
+        const uint8_t channel =
+            currentRadioChannel();
+
+        discovered_t5_channel.store(
+            channel,
+            std::memory_order_release);
+        last_t5_espnow_ack_ms.store(
+            millis(),
+            std::memory_order_release);
+        provision_channel_locked.store(
+            true,
+            std::memory_order_release);
+
+        Serial.printf(
+            "T5 ESP-NOW discovered; locking provisioning to channel %u.\n",
+            channel);
+      }
+    }
+
+    return;
+  }
+
+  if (length !=
+      sizeof(plant::ProvisionPacket)) {
     return;
   }
 
@@ -1228,21 +1331,36 @@ void onEspNowReceive(
     const esp_now_recv_info_t* info,
     const uint8_t* data,
     int length) {
-  handleProvisionPacket(
+  handleEspNowPacket(
       info->src_addr,
       data,
       length);
 }
 
-bool setProvisionChannel() {
+uint8_t currentRadioChannel() {
+  uint8_t primary = 0;
+  wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
+
+  if (esp_wifi_get_channel(
+          &primary,
+          &secondary) != ESP_OK) {
+    return 0;
+  }
+
+  return primary;
+}
+
+bool setProvisionChannel(
+    uint8_t channel) {
   const esp_err_t result =
       esp_wifi_set_channel(
-          plant::PROVISION_ESPNOW_CHANNEL,
+          channel,
           WIFI_SECOND_CHAN_NONE);
 
   if (result != ESP_OK) {
     Serial.printf(
-        "Provision channel failed: %s\n",
+        "Provision channel %u failed: %s\n",
+        channel,
         esp_err_to_name(result));
     return false;
   }
@@ -1274,6 +1392,75 @@ bool addBroadcastPeer() {
   return true;
 }
 
+bool startEspNowCurrentChannel() {
+  esp_now_ready = false;
+
+  const esp_err_t deinit_result =
+      esp_now_deinit();
+
+  if (deinit_result != ESP_OK &&
+      deinit_result != ESP_ERR_ESPNOW_NOT_INIT) {
+    Serial.printf(
+        "ESP-NOW pre-init deinit warning: %s\n",
+        esp_err_to_name(deinit_result));
+  }
+
+  const esp_err_t init_result =
+      esp_now_init();
+
+  if (init_result != ESP_OK) {
+    Serial.printf(
+        "ESP-NOW init failed: %s\n",
+        esp_err_to_name(init_result));
+    return false;
+  }
+
+  const esp_err_t recv_result =
+      esp_now_register_recv_cb(
+          onEspNowReceive);
+
+  if (recv_result != ESP_OK) {
+    Serial.printf(
+        "ESP-NOW receive callback failed: %s\n",
+        esp_err_to_name(recv_result));
+    esp_now_deinit();
+    return false;
+  }
+
+  if (!addBroadcastPeer()) {
+    esp_now_deinit();
+    return false;
+  }
+
+  esp_now_ready = true;
+
+  Serial.printf(
+      "ESP-NOW ready on current Wi-Fi channel %u.\n",
+      currentRadioChannel());
+
+  return true;
+}
+
+void sendEspNowReadingBeacon(
+    const plant::ReadingPacket& reading,
+    const char* label) {
+  if (!esp_now_ready)
+    return;
+
+  const esp_err_t result =
+      esp_now_send(
+          BROADCAST_MAC,
+          reinterpret_cast<const uint8_t*>(&reading),
+          sizeof(reading));
+
+  Serial.printf(
+      "%s ESP-NOW beacon ch%u: %s\n",
+      label,
+      currentRadioChannel(),
+      esp_err_to_name(result));
+}
+
+
 void sendProvisionBeacon(
     const plant::ReadingPacket& reading) {
   const esp_err_t result =
@@ -1287,22 +1474,65 @@ void sendProvisionBeacon(
       esp_err_to_name(result));
 }
 
+void runLocateFlash(
+    uint32_t duration_ms) {
+  Serial.printf(
+      "LOCATE: flashing all status LEDs for %lu ms.\n",
+      static_cast<unsigned long>(
+          duration_ms));
+
+  const uint32_t started =
+      millis();
+
+  bool on = false;
+
+  while ((millis() - started) <
+         duration_ms) {
+    on = !on;
+
+    digitalWrite(
+        PIN_LED_YELLOW,
+        on ? HIGH : LOW);
+    digitalWrite(
+        PIN_LED_GREEN,
+        on ? HIGH : LOW);
+    digitalWrite(
+        PIN_LED_RED,
+        on ? HIGH : LOW);
+
+    delay(140);
+  }
+
+  allStatusLedsOff();
+
+  // Provisioning mode normally carries a steady green awake indicator.
+  serviceLedOn();
+
+  Serial.println(
+      "LOCATE: flash complete.");
+}
+
 [[noreturn]] void runProvisioningMode(
     const Measurement& measurement) {
   serviceLedOn();
+  provisioning_mode_active = true;
+  provision_channel_locked.store(
+      false,
+      std::memory_order_release);
+  discovered_t5_channel.store(
+      0,
+      std::memory_order_release);
+  last_t5_espnow_ack_ms.store(
+      0,
+      std::memory_order_release);
 
   Serial.println();
   Serial.println(
       "=== SENSOR WI-FI PROVISIONING MODE ===");
 
   Serial.println(
-      "Keep this XIAO near the T5, "
-      "open the T5 setup page, and press "
-      "\"Send Wi-Fi to Sensor\".");
-
-  Serial.printf(
-      "Provisioning channel: %u\n",
-      plant::PROVISION_ESPNOW_CHANNEL);
+      "Searching 2.4 GHz channels for the T5 ESP-NOW receiver. "
+      "Once found, this sensor locks to that channel for Locate/provisioning.");
 
   if (!WiFi.mode(WIFI_STA)) {
     Serial.println(
@@ -1310,26 +1540,17 @@ void sendProvisionBeacon(
     sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
   }
 
+  WiFi.disconnect(false, false);
   delay(100);
 
-  if (!setProvisionChannel()) {
+  uint8_t channel =
+      PROVISION_CHANNEL_MIN;
+
+  if (!setProvisionChannel(channel)) {
     sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
   }
 
-  const esp_err_t init_result =
-      esp_now_init();
-
-  if (init_result != ESP_OK) {
-    Serial.printf(
-        "ESP-NOW init failed: %s\n",
-        esp_err_to_name(init_result));
-
-    sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
-  }
-
-  esp_now_register_recv_cb(onEspNowReceive);
-
-  if (!addBroadcastPeer()) {
+  if (!startEspNowCurrentChannel()) {
     sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
   }
 
@@ -1337,16 +1558,26 @@ void sendProvisionBeacon(
       makeReadingPacket(measurement);
 
   uint32_t last_beacon_ms = 0;
+  uint32_t channel_started_ms =
+      millis();
   const uint32_t start_ms = millis();
 
   while ((millis() - start_ms) <
          PROVISION_WINDOW_MS) {
+    const uint32_t locate_ms =
+        locate_request_ms.exchange(
+            0,
+            std::memory_order_acq_rel);
+
+    if (locate_ms > 0) {
+      runLocateFlash(locate_ms);
+    }
+
     if (provision_received.load(
             std::memory_order_acquire)) {
       if (saveConfig(pending_config)) {
         Serial.println(
-            "Provisioning complete. Rebooting "
-            "into home Wi-Fi mode...");
+            "Provisioning complete. Rebooting into home Wi-Fi mode...");
 
         Serial.flush();
         delay(1200);
@@ -1358,15 +1589,73 @@ void sendProvisionBeacon(
           std::memory_order_release);
     }
 
-    if ((millis() - last_beacon_ms) >=
-        PROVISION_BEACON_INTERVAL_MS) {
+    bool locked =
+        provision_channel_locked.load(
+            std::memory_order_acquire);
+
+    if (locked) {
+      const uint32_t last_ack =
+          last_t5_espnow_ack_ms.load(
+              std::memory_order_acquire);
+
+      if (last_ack != 0 &&
+          (millis() - last_ack) >=
+              PROVISION_CHANNEL_LOCK_TIMEOUT_MS) {
+        Serial.printf(
+            "T5 disappeared from channel %u; resuming channel search.\n",
+            currentRadioChannel());
+
+        provision_channel_locked.store(
+            false,
+            std::memory_order_release);
+        discovered_t5_channel.store(
+            0,
+            std::memory_order_release);
+        locked = false;
+        channel_started_ms = millis();
+        last_beacon_ms = 0;
+      }
+    }
+
+    if (!locked &&
+        (millis() - channel_started_ms) >=
+            PROVISION_CHANNEL_DWELL_MS) {
+      channel++;
+
+      if (channel >
+          PROVISION_CHANNEL_MAX) {
+        channel =
+            PROVISION_CHANNEL_MIN;
+      }
+
+      if (setProvisionChannel(channel)) {
+        channel_started_ms =
+            millis();
+        last_beacon_ms = 0;
+      }
+    }
+
+    const uint32_t beacon_interval =
+        locked
+            ? PROVISION_BEACON_INTERVAL_MS
+            : PROVISION_CHANNEL_DWELL_MS;
+
+    if (last_beacon_ms == 0 ||
+        (millis() - last_beacon_ms) >=
+            beacon_interval) {
       last_beacon_ms = millis();
 
-      Serial.printf(
-          "Waiting for T5 provisioning "
-          "(sensor 0x%08lX)...\n",
-          static_cast<unsigned long>(
-              sensor_id));
+      if (locked) {
+        Serial.printf(
+            "Waiting for T5 provisioning (sensor 0x%08lX, locked ch%u)...\n",
+            static_cast<unsigned long>(sensor_id),
+            currentRadioChannel());
+      } else {
+        Serial.printf(
+            "Searching for T5: ESP-NOW channel %u (sensor 0x%08lX)...\n",
+            currentRadioChannel(),
+            static_cast<unsigned long>(sensor_id));
+      }
 
       sendProvisionBeacon(beacon);
     }
@@ -1377,6 +1666,7 @@ void sendProvisionBeacon(
   Serial.println(
       "Provisioning window expired.");
 
+  provisioning_mode_active = false;
   sleepFor(60);
 }
 
@@ -1398,6 +1688,14 @@ bool connectHomeWifi() {
   const uint32_t start = millis();
 
   while (WiFi.status() != WL_CONNECTED) {
+    if (service_mode_active &&
+        digitalRead(PIN_BUTTON) == LOW) {
+      Serial.println(
+          "Service button pressed; pausing Wi-Fi connect for hold detection.");
+      WiFi.disconnect(false, false);
+      return false;
+    }
+
     if ((millis() - start) >=
         WIFI_CONNECT_TIMEOUT_MS) {
       Serial.println(
@@ -1413,8 +1711,16 @@ bool connectHomeWifi() {
   Serial.println(WiFi.localIP());
 
   Serial.printf(
-      "RSSI: %d dBm\n",
-      WiFi.RSSI());
+      "RSSI: %d dBm, channel: %d\n",
+      WiFi.RSSI(),
+      WiFi.channel());
+
+  if (service_mode_active) {
+    if (!startEspNowCurrentChannel()) {
+      Serial.println(
+          "WARNING: service-mode ESP-NOW coexistence init failed; UDP will still operate.");
+    }
+  }
 
   return true;
 }
@@ -1426,6 +1732,21 @@ bool readUdpAck(
 
   while ((millis() - start) <
          UDP_ACK_TIMEOUT_MS) {
+    if (service_mode_active &&
+        locate_request_ms.load(
+            std::memory_order_acquire) > 0) {
+      Serial.println(
+          "ESP-NOW Locate received; pausing UDP ACK wait to flash now.");
+      return false;
+    }
+
+    if (service_mode_active &&
+        digitalRead(PIN_BUTTON) == LOW) {
+      Serial.println(
+          "Service button pressed; pausing UDP ACK wait for hold detection.");
+      return false;
+    }
+
     const int packet_size = udp.parsePacket();
 
     if (packet_size > 0) {
@@ -1453,6 +1774,22 @@ bool readUdpAck(
 
           return true;
         }
+      } else if (packet_size ==
+                 sizeof(plant::LocatePacket)) {
+        plant::LocatePacket locate{};
+
+        const int read =
+            udp.read(
+                reinterpret_cast<uint8_t*>(&locate),
+                sizeof(locate));
+
+        if (read == sizeof(locate)) {
+          acceptLocatePacket(
+              reinterpret_cast<const uint8_t*>(
+                  &locate),
+              sizeof(locate),
+              "Wi-Fi/UDP");
+        }
       } else {
         while (udp.available()) {
           udp.read();
@@ -1464,6 +1801,44 @@ bool readUdpAck(
   }
 
   return false;
+}
+
+void serviceUdpLocateCommands() {
+  if (!service_mode_active ||
+      WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  int packet_size =
+      udp.parsePacket();
+
+  while (packet_size > 0) {
+    if (packet_size ==
+        sizeof(plant::LocatePacket)) {
+      plant::LocatePacket locate{};
+
+      const int read =
+          udp.read(
+              reinterpret_cast<uint8_t*>(
+                  &locate),
+              sizeof(locate));
+
+      if (read == sizeof(locate)) {
+        acceptLocatePacket(
+            reinterpret_cast<const uint8_t*>(
+                &locate),
+            sizeof(locate),
+            "Wi-Fi/UDP");
+      }
+    } else {
+      while (udp.available()) {
+        udp.read();
+      }
+    }
+
+    packet_size =
+        udp.parsePacket();
+  }
 }
 
 IPAddress directedBroadcastAddress() {
@@ -1495,6 +1870,13 @@ bool sendReadingUdp(
 
   Serial.print("LAN broadcast: ");
   Serial.println(broadcast_ip);
+
+  Serial.printf(
+      "T5 UDP destination port: %u%s\n",
+      config_data.t5_udp_port,
+      config_data.t5_udp_port == plant::T5_UDP_PORT
+          ? ""
+          : " (saved non-default port)");
 
   for (uint8_t attempt = 1;
        attempt <= UDP_MAX_ATTEMPTS;
@@ -1537,6 +1919,13 @@ bool sendReadingUdp(
       Serial.println(
           "HOME WI-FI EXCHANGE SUCCEEDED");
       return true;
+    }
+
+    if (service_mode_active &&
+        digitalRead(PIN_BUTTON) == LOW) {
+      Serial.println(
+          "Service button pressed; aborting remaining UDP retries.");
+      return false;
     }
 
     Serial.println("UDP ACK timeout.");
@@ -1758,6 +2147,13 @@ bool sendFreshServiceReading(
 
   printMeasurement(measurement);
 
+  if (service_mode_active &&
+      digitalRead(PIN_BUTTON) == LOW) {
+    Serial.println(
+        "Service button pressed during measurement; UDP send deferred.");
+    return false;
+  }
+
   armWateringWatchIfRise(
       measurement,
       "service auto-sample");
@@ -1766,6 +2162,10 @@ bool sendFreshServiceReading(
 
   const plant::ReadingPacket reading =
       makeReadingPacket(measurement);
+
+  sendEspNowReadingBeacon(
+      reading,
+      "Service");
 
   const bool acknowledged =
       sendReadingUdp(
@@ -1797,6 +2197,8 @@ bool sendFreshServiceReading(
       "Triple short press: calibrate DRY then WET soil.");
   Serial.println(
       "Hold 10 seconds while already awake: erase saved Wi-Fi.");
+  Serial.println(
+      "While this green service window is active, Wi-Fi/UDP and ESP-NOW run together so the T5 can Locate this sensor directly.");
 
   uint32_t t5_requested_wake_seconds = 0;
 
@@ -1807,6 +2209,25 @@ bool sendFreshServiceReading(
   rememberObservation(
       initial_measurement);
 
+  // A button wake naturally enters this function with GPIO2 still LOW.
+  // Do not start Wi-Fi/UDP or count a reset hold until that original wake
+  // press has been released.
+  if (digitalRead(PIN_BUTTON) == LOW) {
+    Serial.println(
+        "Release wake button to start the 2-minute service window.");
+
+    while (digitalRead(PIN_BUTTON) == LOW) {
+      delay(20);
+    }
+
+    delay(80);
+  }
+
+  Serial.println(
+      "Wake button released; 2-minute service timer started.");
+
+  service_mode_active = true;
+
   bool wifi_connected =
       connectHomeWifi();
 
@@ -1814,6 +2235,10 @@ bool sendFreshServiceReading(
     const plant::ReadingPacket first_reading =
         makeReadingPacket(
             initial_measurement);
+
+    sendEspNowReadingBeacon(
+        first_reading,
+        "Service");
 
     if (sendReadingUdp(
             first_reading,
@@ -1836,14 +2261,7 @@ bool sendFreshServiceReading(
   uint32_t last_service_sample_ms =
       millis();
 
-  bool button_was_pressed =
-      digitalRead(PIN_BUTTON) == LOW;
-
-  // A button wake naturally starts with GPIO2 held LOW. Require the user to
-  // release that original wake press before short/long service actions count.
-  bool initial_wake_press_released =
-      !button_was_pressed;
-
+  bool button_was_pressed = false;
   uint32_t button_pressed_since_ms = 0;
   bool reset_action_fired = false;
 
@@ -1855,19 +2273,145 @@ bool sendFreshServiceReading(
     const bool button_pressed =
         digitalRead(PIN_BUTTON) == LOW;
 
-    if (!initial_wake_press_released) {
-      if (!button_pressed) {
-        initial_wake_press_released = true;
-        button_was_pressed = false;
-        last_activity_ms = millis();
+    // Button handling is deliberately FIRST. Network retries and the 5-second
+    // auto-sample are suspended for the entire press, so even a dead T5 cannot
+    // starve the 10-second Wi-Fi erase action.
+    if (button_pressed && !button_was_pressed) {
+      button_was_pressed = true;
+      button_pressed_since_ms = millis();
+      reset_action_fired = false;
 
-        Serial.println(
-            "Wake button released; "
-            "2-minute service timer started.");
-      }
+      last_activity_ms = millis();
 
+      Serial.println(
+          "Top button pressed; "
+          "service timer restarted.");
+    }
+
+    if (button_pressed &&
+        button_was_pressed &&
+        !reset_action_fired &&
+        (millis() - button_pressed_since_ms) >=
+            FACTORY_RESET_HOLD_MS) {
+      reset_action_fired = true;
+
+      Serial.println();
+      Serial.println(
+          "10-second hold confirmed: "
+          "erasing saved home Wi-Fi.");
+
+      digitalWrite(PIN_LED_GREEN, LOW);
+      digitalWrite(PIN_LED_RED, HIGH);
+
+      clearConfig();
+
+      Serial.println(
+          "Wi-Fi erased. Restarting into provisioning mode...");
+      Serial.flush();
+
+      delay(1200);
+      ESP.restart();
+    }
+
+    if (button_pressed) {
       delay(20);
       continue;
+    }
+
+    if (!button_pressed && button_was_pressed) {
+      button_was_pressed = false;
+
+      if (!reset_action_fired) {
+        last_activity_ms = millis();
+
+        short_click_count++;
+        last_short_click_ms =
+            millis();
+
+        Serial.printf(
+            "Short press %u/%u.\n",
+            short_click_count,
+            CALIBRATION_TRIGGER_CLICKS);
+
+        if (short_click_count >=
+            CALIBRATION_TRIGGER_CLICKS) {
+          short_click_count = 0;
+
+          // Calibration intentionally owns the LEDs and pauses ordinary
+          // 5-second service sampling while dry/wet reference points are
+          // captured.
+          runFactoryStyleCalibration();
+
+          last_activity_ms =
+              millis();
+          last_service_sample_ms =
+              millis();
+
+          // Immediately show a reading using the newly saved endpoints.
+          if (WiFi.status() ==
+              WL_CONNECTED) {
+            Serial.println(
+                "Calibration complete: "
+                "sending a reading with the new scale.");
+
+            sendFreshServiceReading(
+                t5_requested_wake_seconds);
+          }
+        }
+      }
+    }
+
+    // Accept Locate commands over the home network while the provisioned
+    // sensor is deliberately awake in service mode. A Locate received during
+    // the blocking ACK wait is queued by readUdpAck() and handled here too.
+    serviceUdpLocateCommands();
+
+    const uint32_t locate_ms =
+        locate_request_ms.exchange(
+            0,
+            std::memory_order_acq_rel);
+
+    if (locate_ms > 0) {
+      last_activity_ms = millis();
+
+      runLocateFlash(
+          locate_ms);
+
+      last_service_sample_ms =
+          millis();
+
+      continue;
+    }
+
+    // Do not fire a single-click action immediately, because the factory-style
+    // triple press must be distinguishable. Once the multi-click window
+    // expires, one or two clicks simply request a fresh reading.
+    if (short_click_count > 0 &&
+        (millis() - last_short_click_ms) >=
+            CALIBRATION_CLICK_WINDOW_MS) {
+      const uint8_t completed_clicks =
+          short_click_count;
+
+      short_click_count = 0;
+
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf(
+            "%u short press%s: sending fresh reading.\n",
+            completed_clicks,
+            completed_clicks == 1
+                ? ""
+                : "es");
+
+        sendFreshServiceReading(
+            t5_requested_wake_seconds);
+
+        last_service_sample_ms =
+            millis();
+      } else {
+        Serial.println(
+            "Short press completed, "
+            "but home Wi-Fi is not connected yet.");
+      }
     }
 
     // Keep Wi-Fi alive for the service window. If coverage disappears,
@@ -1917,119 +2461,10 @@ bool sendFreshServiceReading(
           t5_requested_wake_seconds);
     }
 
-    if (button_pressed && !button_was_pressed) {
-      button_was_pressed = true;
-      button_pressed_since_ms = millis();
-      reset_action_fired = false;
-
-      last_activity_ms = millis();
-
-      Serial.println(
-          "Top button pressed; "
-          "service timer restarted.");
-    }
-
-    if (button_pressed &&
-        button_was_pressed &&
-        !reset_action_fired &&
-        (millis() - button_pressed_since_ms) >=
-            FACTORY_RESET_HOLD_MS) {
-      reset_action_fired = true;
-
-      Serial.println();
-      Serial.println(
-          "10-second hold confirmed: "
-          "erasing saved home Wi-Fi.");
-
-      digitalWrite(PIN_LED_GREEN, LOW);
-      digitalWrite(PIN_LED_RED, HIGH);
-
-      clearConfig();
-
-      Serial.println(
-          "Wi-Fi erased. Restarting into provisioning mode...");
-      Serial.flush();
-
-      delay(1200);
-      ESP.restart();
-    }
-
-    if (!button_pressed && button_was_pressed) {
-      button_was_pressed = false;
-
-      if (!reset_action_fired) {
-        last_activity_ms = millis();
-
-        short_click_count++;
-        last_short_click_ms =
-            millis();
-
-        Serial.printf(
-            "Short press %u/%u.\n",
-            short_click_count,
-            CALIBRATION_TRIGGER_CLICKS);
-
-        if (short_click_count >=
-            CALIBRATION_TRIGGER_CLICKS) {
-          short_click_count = 0;
-
-          // Calibration intentionally owns the LEDs and pauses ordinary
-          // 5-second service sampling while dry/wet reference points are
-          // captured.
-          runFactoryStyleCalibration();
-
-          last_activity_ms =
-              millis();
-          last_service_sample_ms =
-              millis();
-
-          // Immediately show a reading using the newly saved endpoints.
-          if (WiFi.status() ==
-              WL_CONNECTED) {
-            Serial.println(
-                "Calibration complete: "
-                "sending a reading with the new scale.");
-
-            sendFreshServiceReading(
-                t5_requested_wake_seconds);
-          }
-        }
-      }
-    }
-
-    // Do not fire a single-click action immediately, because the factory-style
-    // triple press must be distinguishable.  Once the multi-click window
-    // expires, one or two clicks simply request a fresh reading.
-    if (short_click_count > 0 &&
-        (millis() - last_short_click_ms) >=
-            CALIBRATION_CLICK_WINDOW_MS) {
-      const uint8_t completed_clicks =
-          short_click_count;
-
-      short_click_count = 0;
-
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf(
-            "%u short press%s: sending fresh reading.\n",
-            completed_clicks,
-            completed_clicks == 1
-                ? ""
-                : "es");
-
-        sendFreshServiceReading(
-            t5_requested_wake_seconds);
-
-        last_service_sample_ms =
-            millis();
-      } else {
-        Serial.println(
-            "Short press completed, "
-            "but home Wi-Fi is not connected yet.");
-      }
-    }
-
     delay(20);
   }
+
+  service_mode_active = false;
 
   Serial.println();
   Serial.println(

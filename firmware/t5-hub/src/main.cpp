@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <SPI.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <Wire.h>
@@ -8,9 +9,6 @@
 #include <esp_system.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
-
-#define XPOWERS_CHIP_BQ25896
-#include <XPowersLib.h>
 
 #include <M5GFX.h>
 #include "driver/gpio.h"
@@ -36,7 +34,7 @@ namespace {
 // the e-paper CKV signal and is not used as a pushbutton.
 // Short press toggles setup mode. Long hold draws the final OFF image and then
 // requests true BQ25896 PMU shutdown. The physical PWR/QON button wakes the unit.
-constexpr uint32_t FUNCTION_HOLD_MS = 1500;
+constexpr uint32_t FUNCTION_HOLD_MS = 2000;
 
 // Protect the e-paper from unnecessary refreshes during development.
 constexpr uint32_t MIN_NORMAL_REFRESH_MS = 60000;
@@ -49,6 +47,17 @@ constexpr uint32_t HOME_WIFI_RECONNECT_INTERVAL_MS = 5000;
 constexpr uint32_t UDP_RETRY_INTERVAL_MS = 3000;
 constexpr uint32_t WIFI_UDP_SETTLE_MS = 500;
 
+// "Online" is intentionally based on very recent traffic, not just whether a
+// sensor has ever been seen. ESP PLANTS sensors sleep by design, so the web
+// page also shows the last-seen age instead of treating normal sleep as a fault.
+constexpr uint32_t WIFI_SENSOR_RECENT_MS = 12000;
+constexpr uint32_t WIFI_SERVICE_BURST_MAX_GAP_MS = 9000;
+constexpr uint32_t ESPNOW_SENSOR_RECENT_MS = 8000;
+
+// Wi-Fi and ESP-NOW share the same 2.4 GHz radio/channel. The T5 keeps
+// ESP-NOW active alongside home Wi-Fi instead of switching radio modes.
+constexpr uint32_t SETUP_AP_RESTART_DELAY_MS = 120;
+
 // Setup hotspot. The password is generated once per T5 and stored in NVS.
 constexpr uint16_t SETUP_HTTP_PORT = 80;
 constexpr uint16_t SETUP_DNS_PORT = 53;
@@ -57,6 +66,20 @@ constexpr size_t PLANT_NAME_LENGTH = 32;
 constexpr size_t WIFI_SSID_LENGTH = 33;
 constexpr size_t WIFI_PASSWORD_LENGTH = 65;
 constexpr size_t SETUP_PASSWORD_LENGTH = 12;
+
+// Display frontlight levels. OFF is the safe/default battery setting.
+constexpr uint8_t FRONTLIGHT_PWM_CHANNEL = 7;
+constexpr uint32_t FRONTLIGHT_PWM_HZ = 5000;
+constexpr uint8_t FRONTLIGHT_PWM_BITS = 8;
+constexpr char FRONTLIGHT_NAMESPACE[] = "plantui";
+constexpr char FRONTLIGHT_KEY[] = "frontlight";
+
+enum class FrontlightLevel : uint8_t {
+  Off = 0,
+  Low = 1,
+  Medium = 2,
+  High = 3
+};
 
 // ============================================================================
 // T5 S3 PRO HARDWARE — verified against LILYGO H752-01 sources
@@ -70,8 +93,56 @@ constexpr int VCOM_MV = 1560;
 constexpr int I2C_SDA = 39;
 constexpr int I2C_SCL = 40;
 
+// H752-01 peripheral pins preserved from the hardware-verified Test 9 /
+// T5S3-Reader baseline. GPS/LoRa stay disabled while ESP PLANTS is running.
+constexpr uint8_t PIN_GPS_RXD = 44;
+constexpr uint8_t PIN_GPS_TXD = 43;
+constexpr uint8_t PIN_SPI_MISO = 21;
+constexpr uint8_t PIN_SPI_MOSI = 13;
+constexpr uint8_t PIN_SPI_SCLK = 14;
+constexpr uint8_t PIN_SD_CS = 12;
+constexpr uint8_t PIN_LORA_CS = 46;
+constexpr uint8_t PIN_LORA_IRQ = 10;
+constexpr uint8_t PIN_LORA_RST = 1;
+constexpr uint8_t PIN_LORA_BUSY = 47;
+constexpr uint8_t PIN_PCA9535_INT = 38;
+constexpr uint8_t PIN_BOOT = 0;
+
 constexpr uint8_t PCA9535_ADDR = 0x20;
 constexpr uint8_t BQ25896_ADDR = 0x6B;
+
+// BQ25896 register/field definitions used by the exact Reader/Test-9 power
+// lifecycle. Keep this on the raw direct-I2C path used by Test 9.
+constexpr uint8_t BQ_REG00 = 0x00;
+constexpr uint8_t BQ_REG02 = 0x02;
+constexpr uint8_t BQ_REG03 = 0x03;
+constexpr uint8_t BQ_REG04 = 0x04;
+constexpr uint8_t BQ_REG05 = 0x05;
+constexpr uint8_t BQ_REG06 = 0x06;
+constexpr uint8_t BQ_REG07 = 0x07;
+constexpr uint8_t BQ_REG09 = 0x09;
+constexpr uint8_t BQ_REG0B = 0x0B;
+constexpr uint8_t BQ_REG11 = 0x11;
+constexpr uint8_t BQ_REG14 = 0x14;
+
+constexpr uint8_t BQ_REG00_EN_HIZ = 0x80;
+constexpr uint8_t BQ_REG00_EN_ILIM = 0x40;
+constexpr uint8_t BQ_REG00_IINLIM_MASK = 0x3F;
+constexpr uint8_t BQ_REG02_CONV_RATE = 0x40;
+constexpr uint8_t BQ_REG02_ICO_EN = 0x10;
+constexpr uint8_t BQ_REG03_OTG_CONFIG = 0x20;
+constexpr uint8_t BQ_REG03_CHG_CONFIG = 0x10;
+constexpr uint8_t BQ_REG03_SYS_MIN_MASK = 0x0E;
+constexpr uint8_t BQ_REG04_ICHG_MASK = 0x7F;
+constexpr uint8_t BQ_REG05_IPRECHG_MASK = 0xF0;
+constexpr uint8_t BQ_REG05_ITERM_MASK = 0x0F;
+constexpr uint8_t BQ_REG06_VREG_MASK = 0xFC;
+constexpr uint8_t BQ_REG07_WATCHDOG_MASK = 0x30;
+constexpr uint8_t BQ_REG09_BATFET_DIS = 0x20;
+constexpr uint8_t BQ_REG0B_PG_STAT = 0x04;
+constexpr uint8_t BQ_REG11_VBUS_GD = 0x80;
+constexpr uint8_t BQ_REG14_REG_RST = 0x80;
+
 constexpr uint8_t BQ27220_ADDR = 0x55;
 constexpr uint8_t TPS65185_ADDR = 0x68;
 
@@ -84,6 +155,7 @@ constexpr uint8_t PCA_OUTPUT_PORT0 = 0x02;
 constexpr uint8_t PCA_CONFIG_PORT0 = 0x06;
 
 // PCA9535 logical pin numbering: P0.0..P0.7 = 0..7, P1.0..P1.7 = 8..15.
+constexpr uint8_t PCA_PIN_LORA_GPS_EN    = 0;
 constexpr uint8_t PCA_PIN_EPD_OE         = 8;
 constexpr uint8_t PCA_PIN_EPD_MODE       = 9;
 constexpr uint8_t PCA_PIN_FUNCTION_BUTTON = 10; // physical IO48-labeled button; PCA P1.2, active-low
@@ -110,7 +182,7 @@ constexpr gpio_num_t PIN_EPD_D3 = GPIO_NUM_15;
 constexpr gpio_num_t PIN_EPD_D4 = GPIO_NUM_16;
 constexpr gpio_num_t PIN_EPD_D5 = GPIO_NUM_17;
 constexpr gpio_num_t PIN_EPD_D6 = GPIO_NUM_18;
-constexpr gpio_num_t PIN_DUMMY_BUS = GPIO_NUM_1;
+constexpr gpio_num_t PIN_DUMMY_BUS = GPIO_NUM_46;
 constexpr gpio_num_t PIN_EPD_STH = GPIO_NUM_41;
 constexpr gpio_num_t PIN_EPD_LE = GPIO_NUM_42;
 constexpr gpio_num_t PIN_EPD_STV = GPIO_NUM_45;
@@ -119,10 +191,12 @@ constexpr gpio_num_t PIN_EPD_CKV = GPIO_NUM_48;
 constexpr uint8_t PANEL_OFFSET_ROTATION = 3;
 constexpr int POWER_GOOD_TIMEOUT_MS = 400;
 
-uint8_t pca_output[2] = {0xFF, 0x00};
+uint8_t pca_output[2] = {0xFE, 0x00};
 
-XPowersPPM PPM;
 bool pmu_ready = false;
+
+// Defined later, but used by the Reader-style power-off deinit path.
+void frontlightHardwareOff();
 
 // ============================================================================
 // LOW-LEVEL I2C / E-PAPER POWER CONTROL
@@ -131,7 +205,7 @@ bool pmu_ready = false;
 bool i2cWriteBytes(uint8_t address, const uint8_t* data, size_t length) {
   Wire.beginTransmission(address);
   const size_t written = Wire.write(data, length);
-  return written == length && Wire.endTransmission() == 0;
+  return written == length && Wire.endTransmission(true) == 0;
 }
 
 bool i2cWriteRegister(uint8_t address, uint8_t reg, uint8_t value) {
@@ -170,9 +244,9 @@ bool i2cReadU16LE(uint8_t address, uint8_t reg, uint16_t& value) {
 }
 
 bool pca9535Init() {
-  // Match LILYGO's current M5GFX example:
-  // Port 1 bit 2 (button) remains input.
-  pca_output[0] = 0xFF;
+  // Test 10 proved the display with the Reader-safe peripheral state. Keep
+  // P0.0 (LORA_GPS_EN) low from the first output write; P1.2 remains input.
+  pca_output[0] = 0xFE;
   pca_output[1] = 0x00;
 
   if (!i2cWriteRegister(PCA9535_ADDR, PCA_OUTPUT_PORT0 + 0, pca_output[0]))
@@ -222,6 +296,340 @@ bool functionButtonPressed() {
   return !level; // active-low, same electrical behavior as LILYGO factory code
 }
 
+
+void forceReaderSafePeripheralState() {
+  pinMode(PIN_LORA_CS, OUTPUT);
+  digitalWrite(PIN_LORA_CS, HIGH);
+
+  pinMode(PIN_LORA_RST, OUTPUT);
+  digitalWrite(PIN_LORA_RST, LOW);
+
+  pinMode(PIN_LORA_IRQ, INPUT);
+  pinMode(PIN_LORA_BUSY, INPUT);
+  pinMode(PIN_GPS_RXD, INPUT);
+  pinMode(PIN_GPS_TXD, INPUT);
+
+  pca9535SetLevel(PCA_PIN_LORA_GPS_EN, false);
+}
+
+void prepareBoardLikeReader() {
+  pinMode(PIN_BOOT, INPUT_PULLUP);
+  pinMode(PIN_PCA9535_INT, INPUT_PULLUP);
+
+  // Reader prepareSdBus().
+  pinMode(PIN_LORA_CS, OUTPUT);
+  digitalWrite(PIN_LORA_CS, HIGH);
+
+  pinMode(PIN_SD_CS, OUTPUT);
+  digitalWrite(PIN_SD_CS, HIGH);
+
+  SPI.begin(
+      PIN_SPI_SCLK,
+      PIN_SPI_MISO,
+      PIN_SPI_MOSI,
+      PIN_SD_CS);
+
+  forceReaderSafePeripheralState();
+}
+
+void deinitForPowerOffLikeReader() {
+  digitalWrite(PIN_BACKLIGHT, LOW);
+  pinMode(PIN_BACKLIGHT, OUTPUT);
+
+  forceReaderSafePeripheralState();
+
+  pinMode(PIN_SD_CS, INPUT);
+  pinMode(PIN_GPS_RXD, INPUT);
+  pinMode(PIN_GPS_TXD, INPUT);
+}
+
+bool bqWriteReg(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(BQ25896_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission(true) == 0;
+}
+
+bool bqReadReg(uint8_t reg, uint8_t& value) {
+  Wire.beginTransmission(BQ25896_ADDR);
+  Wire.write(reg);
+
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  if (Wire.requestFrom(
+          BQ25896_ADDR,
+          static_cast<uint8_t>(1)) != 1) {
+    while (Wire.available()) {
+      Wire.read();
+    }
+    return false;
+  }
+
+  value = static_cast<uint8_t>(Wire.read());
+  return true;
+}
+
+bool bqUpdateBits(uint8_t reg, uint8_t mask, uint8_t value) {
+  uint8_t current = 0;
+
+  if (!bqReadReg(reg, current)) {
+    return false;
+  }
+
+  const uint8_t updated =
+      static_cast<uint8_t>(
+          (current & static_cast<uint8_t>(~mask)) |
+          (value & mask));
+
+  if (updated == current) {
+    return true;
+  }
+
+  return bqWriteReg(reg, updated);
+}
+
+bool resetBq25896ExactlyLikeReader() {
+  if (!bqUpdateBits(
+          BQ_REG14,
+          BQ_REG14_REG_RST,
+          BQ_REG14_REG_RST)) {
+    return false;
+  }
+
+  // Test 9 copied Reader's driver: poll REG_RST 10 times, 2 ms apart.
+  for (uint32_t attempt = 0;
+       attempt < 10;
+       ++attempt) {
+    uint8_t reg14 = 0;
+
+    if (!bqReadReg(BQ_REG14, reg14)) {
+      return false;
+    }
+
+    if ((reg14 & BQ_REG14_REG_RST) == 0) {
+      return true;
+    }
+
+    if (attempt + 1 < 10) {
+      delay(2);
+    }
+  }
+
+  return false;
+}
+
+bool configureBq25896ExactlyLikeReader() {
+  if (!resetBq25896ExactlyLikeReader()) {
+    return false;
+  }
+
+  if (!bqUpdateBits(
+          BQ_REG00,
+          BQ_REG00_EN_ILIM,
+          BQ_REG00_EN_ILIM))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG00,
+          BQ_REG00_EN_HIZ,
+          0))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG02,
+          BQ_REG02_ICO_EN,
+          BQ_REG02_ICO_EN))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG02,
+          BQ_REG02_CONV_RATE,
+          BQ_REG02_CONV_RATE))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG07,
+          BQ_REG07_WATCHDOG_MASK,
+          0))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_OTG_CONFIG,
+          0))
+    return false;
+
+  // Reader explicitly enables the battery path before applying its profile.
+  if (!bqUpdateBits(
+          BQ_REG09,
+          BQ_REG09_BATFET_DIS,
+          0))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG00,
+          BQ_REG00_EN_HIZ,
+          0))
+    return false;
+
+  // Reader BatteryProfile: 1000 mA input, 512 mA charge, 64 mA precharge,
+  // 64 mA termination, 4208 mV charge voltage, 3300 mV SYS_MIN.
+  if (!bqUpdateBits(
+          BQ_REG00,
+          BQ_REG00_IINLIM_MASK,
+          18))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG04,
+          BQ_REG04_ICHG_MASK,
+          8))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG05,
+          BQ_REG05_IPRECHG_MASK,
+          0))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG05,
+          BQ_REG05_ITERM_MASK,
+          0))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG06,
+          BQ_REG06_VREG_MASK,
+          static_cast<uint8_t>(23U << 2)))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_SYS_MIN_MASK,
+          static_cast<uint8_t>(3U << 1)))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_CHG_CONFIG,
+          BQ_REG03_CHG_CONFIG))
+    return false;
+
+  return true;
+}
+
+bool batteryOnlyAccordingToReader() {
+  uint8_t reg0b = 0;
+  uint8_t reg11 = 0;
+
+  if (!bqReadReg(BQ_REG0B, reg0b)) {
+    return false;
+  }
+
+  if (!bqReadReg(BQ_REG11, reg11)) {
+    return false;
+  }
+
+  const bool power_good =
+      (reg0b & BQ_REG0B_PG_STAT) != 0;
+
+  const bool vbus_good =
+      (reg11 & BQ_REG11_VBUS_GD) != 0;
+
+  return !power_good && !vbus_good;
+}
+
+bool readerShutdownBatteryPower() {
+  // Hardware-verified Test 9 shutdown sequence:
+  // 1) disable OTG, 2) disable charging, 3) BATFET_DIS.
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_OTG_CONFIG,
+          0))
+    return false;
+
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_CHG_CONFIG,
+          0))
+    return false;
+
+  // Successful true-off removes SYS during this final transaction.
+  return bqUpdateBits(
+      BQ_REG09,
+      BQ_REG09_BATFET_DIS,
+      BQ_REG09_BATFET_DIS);
+}
+
+
+[[noreturn]] void truePowerOffExactlyLikeDisplayTest10() {
+  // GOLDEN REFERENCE:
+  // ESP-PLANTS-T5-DISPLAY-TEST10.zip
+  //
+  // Keep the final cutoff sequence monolithic, exactly like the hardware-
+  // verified Display Test 10: Reader-safe peripherals -> final battery-only
+  // check -> OTG off -> charging off -> BATFET_DIS. Do not insert network,
+  // display, delay, deinit, or wrapper-return work between these operations.
+  forceReaderSafePeripheralState();
+
+  if (!batteryOnlyAccordingToReader()) {
+    // Same visible failure behavior as Display Test 10. Do not pretend the
+    // unit shut down when VBUS is present or the status read failed.
+    while (true) {
+      digitalWrite(PIN_BACKLIGHT, HIGH);
+      delay(80);
+      digitalWrite(PIN_BACKLIGHT, LOW);
+      delay(920);
+    }
+  }
+
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_OTG_CONFIG,
+          0)) {
+    while (true) {
+      digitalWrite(PIN_BACKLIGHT, HIGH);
+      delay(80);
+      digitalWrite(PIN_BACKLIGHT, LOW);
+      delay(170);
+    }
+  }
+
+  if (!bqUpdateBits(
+          BQ_REG03,
+          BQ_REG03_CHG_CONFIG,
+          0)) {
+    while (true) {
+      digitalWrite(PIN_BACKLIGHT, HIGH);
+      delay(80);
+      digitalWrite(PIN_BACKLIGHT, LOW);
+      delay(170);
+    }
+  }
+
+  // Final write. On the known-good Test 9 / Display Test 10 baseline, SYS
+  // collapses here and the board remains truly OFF: RST dead, PWR/QON wakes.
+  if (!bqUpdateBits(
+          BQ_REG09,
+          BQ_REG09_BATFET_DIS,
+          BQ_REG09_BATFET_DIS)) {
+    while (true) {
+      digitalWrite(PIN_BACKLIGHT, HIGH);
+      delay(80);
+      digitalWrite(PIN_BACKLIGHT, LOW);
+      delay(170);
+    }
+  }
+
+  // Normally unreachable. If BATFET_DIS does not remove SYS, stay inert.
+  while (true) {
+    delay(1000);
+  }
+}
+
 bool tpsWriteRegister(uint8_t reg, const uint8_t* data, size_t length) {
   uint8_t buffer[4] = {reg, 0, 0, 0};
   if (length > sizeof(buffer) - 1) return false;
@@ -257,6 +665,8 @@ class LilyGoT5ProEpdBus : public lgfx::Bus_EPD {
       Serial.println("PCA9535 init failed");
       return false;
     }
+
+    forceReaderSafePeripheralState();
 
     const bool ok = lgfx::Bus_EPD::init();
     if (!ok) Serial.println("Bus_EPD init failed");
@@ -440,6 +850,9 @@ struct LivePlant {
   uint8_t mac[6];
   plant::ReadingPacket packet;
   uint32_t last_seen_ms;
+  uint32_t last_udp_seen_ms;
+  uint32_t last_udp_service_ms;
+  uint32_t last_espnow_seen_ms;
   IPAddress source_ip;
   bool via_udp;
 };
@@ -478,7 +891,9 @@ bool setup_mode = false;
 bool web_routes_registered = false;
 bool home_wifi_connected = false;
 bool udp_ready = false;
+bool esp_now_ready = false;
 
+bool deferred_home_connect = false;
 bool deferred_exit_setup = false;
 uint32_t deferred_exit_at_ms = 0;
 
@@ -512,6 +927,197 @@ uint32_t last_udp_retry_ms = 0;
 // Last application-level provisioning acknowledgement.
 volatile uint32_t provision_ack_sensor_id = 0;
 volatile bool provision_ack_received = false;
+
+FrontlightLevel frontlight_level =
+    FrontlightLevel::Off;
+bool frontlight_pwm_ready = false;
+
+// ============================================================================
+// FRONTLIGHT SETTINGS
+// ============================================================================
+
+const char* frontlightLevelName(
+    FrontlightLevel level) {
+  switch (level) {
+    case FrontlightLevel::Low:
+      return "LOW";
+    case FrontlightLevel::Medium:
+      return "MEDIUM";
+    case FrontlightLevel::High:
+      return "HIGH";
+    case FrontlightLevel::Off:
+    default:
+      return "OFF";
+  }
+}
+
+uint8_t frontlightDuty(
+    FrontlightLevel level) {
+  switch (level) {
+    case FrontlightLevel::Low:
+      return 48;    // ~19%
+    case FrontlightLevel::Medium:
+      return 120;   // ~47%
+    case FrontlightLevel::High:
+      return 255;   // 100%
+    case FrontlightLevel::Off:
+    default:
+      return 0;
+  }
+}
+
+void frontlightHardwareOff() {
+  if (frontlight_pwm_ready) {
+    ledcWrite(
+        FRONTLIGHT_PWM_CHANNEL,
+        0);
+    ledcDetachPin(
+        static_cast<uint8_t>(
+            PIN_BACKLIGHT));
+    frontlight_pwm_ready = false;
+  }
+
+  pinMode(PIN_BACKLIGHT, OUTPUT);
+  digitalWrite(PIN_BACKLIGHT, LOW);
+}
+
+bool applyFrontlightSetting() {
+  const uint8_t duty =
+      frontlightDuty(
+          frontlight_level);
+
+  if (duty == 0) {
+    frontlightHardwareOff();
+
+    Serial.println(
+        "T5 frontlight: OFF.");
+    return true;
+  }
+
+  if (!frontlight_pwm_ready) {
+    const double actual_hz =
+        ledcSetup(
+            FRONTLIGHT_PWM_CHANNEL,
+            FRONTLIGHT_PWM_HZ,
+            FRONTLIGHT_PWM_BITS);
+
+    if (actual_hz <= 0.0) {
+      Serial.println(
+          "T5 frontlight PWM setup failed.");
+      frontlightHardwareOff();
+      return false;
+    }
+
+    ledcAttachPin(
+        static_cast<uint8_t>(
+            PIN_BACKLIGHT),
+        FRONTLIGHT_PWM_CHANNEL);
+
+    frontlight_pwm_ready = true;
+  }
+
+  ledcWrite(
+      FRONTLIGHT_PWM_CHANNEL,
+      duty);
+
+  Serial.printf(
+      "T5 frontlight: %s (duty %u/255).\n",
+      frontlightLevelName(
+          frontlight_level),
+      duty);
+
+  return true;
+}
+
+void loadFrontlightSetting() {
+  frontlight_level =
+      FrontlightLevel::Off;
+
+  Preferences ui_preferences;
+
+  // Open read/write so a brand-new T5 can create the independent plantui
+  // namespace on first boot. Opening a nonexistent namespace read-only fails.
+  if (!ui_preferences.begin(
+          FRONTLIGHT_NAMESPACE,
+          false)) {
+    Serial.println(
+        "Frontlight NVS unavailable; using OFF for this boot.");
+    return;
+  }
+
+  constexpr uint8_t UNSET = 0xFF;
+  uint8_t stored =
+      ui_preferences.getUChar(
+          FRONTLIGHT_KEY,
+          UNSET);
+
+  if (stored == UNSET) {
+    stored =
+        static_cast<uint8_t>(
+            FrontlightLevel::Off);
+
+    const size_t written =
+        ui_preferences.putUChar(
+            FRONTLIGHT_KEY,
+            stored);
+
+    if (written != 1) {
+      Serial.println(
+          "Frontlight default could not be persisted; using OFF.");
+    } else {
+      Serial.println(
+          "Frontlight setting initialized to OFF.");
+    }
+  }
+
+  ui_preferences.end();
+
+  if (stored <=
+      static_cast<uint8_t>(
+          FrontlightLevel::High)) {
+    frontlight_level =
+        static_cast<FrontlightLevel>(
+            stored);
+  } else {
+    frontlight_level =
+        FrontlightLevel::Off;
+  }
+
+  Serial.printf(
+      "Saved T5 frontlight: %s.\n",
+      frontlightLevelName(
+          frontlight_level));
+}
+
+bool saveFrontlightSetting(
+    FrontlightLevel level) {
+  Preferences ui_preferences;
+
+  if (!ui_preferences.begin(
+          FRONTLIGHT_NAMESPACE,
+          false)) {
+    Serial.println(
+        "Frontlight NVS save failed.");
+    return false;
+  }
+
+  const size_t written =
+      ui_preferences.putUChar(
+          FRONTLIGHT_KEY,
+          static_cast<uint8_t>(
+              level));
+
+  ui_preferences.end();
+
+  if (written != 1) {
+    Serial.println(
+        "Frontlight NVS write failed.");
+    return false;
+  }
+
+  frontlight_level = level;
+  return applyFrontlightSetting();
+}
 
 // ============================================================================
 // CONFIG STORAGE
@@ -818,11 +1424,19 @@ int ensurePersistedPlant(
       findPersistedPlant(sensor_id);
 
   if (index >= 0) {
-    if (mac != nullptr) {
+    if (mac != nullptr &&
+        memcmp(
+            config_data.plants[index].mac,
+            mac,
+            6) != 0) {
       memcpy(
           config_data.plants[index].mac,
           mac,
           6);
+
+      // A local ESP-NOW beacon gives us the MAC required by Locate. Persist
+      // it only when learned/changed, not on every beacon.
+      saveConfig();
     }
     return index;
   }
@@ -925,6 +1539,18 @@ String macToString(const uint8_t* mac) {
   return String(buffer);
 }
 
+bool plantMacKnown(const uint8_t* mac) {
+  if (mac == nullptr)
+    return false;
+
+  for (uint8_t i = 0; i < 6; ++i) {
+    if (mac[i] != 0)
+      return true;
+  }
+
+  return false;
+}
+
 String plantNameFor(uint32_t sensor_id) {
   const int index =
       findPersistedPlant(sensor_id);
@@ -937,6 +1563,78 @@ String plantNameFor(uint32_t sensor_id) {
 
   return String("Sensor ") +
          sensorIdToHex(sensor_id);
+}
+
+bool timestampRecent(
+    uint32_t timestamp_ms,
+    uint32_t recent_window_ms) {
+  return timestamp_ms != 0 &&
+         (millis() - timestamp_ms) <=
+             recent_window_ms;
+}
+
+String lastSeenAgeLabel(
+    uint32_t timestamp_ms) {
+  if (timestamp_ms == 0) {
+    return String("never");
+  }
+
+  const uint32_t age_seconds =
+      (millis() - timestamp_ms) /
+      1000UL;
+
+  if (age_seconds < 60) {
+    return String(age_seconds) +
+           String(" sec ago");
+  }
+
+  const uint32_t age_minutes =
+      age_seconds / 60UL;
+
+  if (age_minutes < 60) {
+    return String(age_minutes) +
+           String(" min ago");
+  }
+
+  const uint32_t age_hours =
+      age_minutes / 60UL;
+
+  return String(age_hours) +
+         String(" hr ago");
+}
+
+bool ipAddressKnown(
+    const IPAddress& address) {
+  return address[0] != 0 ||
+         address[1] != 0 ||
+         address[2] != 0 ||
+         address[3] != 0;
+}
+
+bool wifiTransportRecent(
+    const LivePlant& live) {
+  return timestampRecent(
+      live.last_udp_seen_ms,
+      WIFI_SENSOR_RECENT_MS);
+}
+
+bool wifiLocateRouteRecent(
+    const LivePlant& live) {
+  // A fresh UDP report is enough to know the provisioned sensor is awake
+  // right now. Candidate 3 required a second closely spaced service report,
+  // which delayed/withheld the Locate button even though the green service
+  // window was already active. The short freshness window prevents stale
+  // scheduled wakes from leaving Locate enabled for long.
+  return timestampRecent(
+      live.last_udp_seen_ms,
+      WIFI_SENSOR_RECENT_MS);
+}
+
+bool espNowTransportRecent(
+    const LivePlant& live) {
+  return timestampRecent(
+      live.last_espnow_seen_ms,
+      ESPNOW_SENSOR_RECENT_MS);
 }
 
 String htmlEscape(const String& input) {
@@ -992,15 +1690,16 @@ bool readT5PowerState(
     T5PowerState& state) {
   state = {};
 
+  // Use the same BQ25896 status bits Test 9 trusts before ship-mode cut.
   if (pmu_ready) {
-    const auto bus_status =
-        PPM.getBusStatus();
-
-    state.external_power =
-        bus_status ==
-            XPowersPPM::BUS_STATE_USB_SDP ||
-        bus_status ==
-            XPowersPPM::BUS_STATE_ADAPTER;
+    uint8_t reg0b = 0;
+    uint8_t reg11 = 0;
+    if (bqReadReg(BQ_REG0B, reg0b) &&
+        bqReadReg(BQ_REG11, reg11)) {
+      state.external_power =
+          (reg0b & BQ_REG0B_PG_STAT) != 0 ||
+          (reg11 & BQ_REG11_VBUS_GD) != 0;
+    }
   }
 
   uint16_t soc = 0;
@@ -1344,6 +2043,12 @@ void drawPowerOffScreen() {
   // finishFrame() waits for the physical e-paper refresh to complete before
   // shutdown, so this final OFF image remains visible with power removed.
   finishFrame();
+
+  // Frontlight PWM is an application feature, not part of the hardware-verified
+  // Reader/Test-9 power sequence. Quiesce it here, after the OFF image is fully
+  // refreshed, then let deinitForPowerOffLikeReader() perform the exact proven
+  // GPIO11 LOW/output sequence again immediately before BATFET shutdown.
+  frontlightHardwareOff();
 }
 
 bool shouldRefreshFor(
@@ -1467,47 +2172,35 @@ void serviceT5PowerDisplay() {
 // RADIO MODE CONTROL
 // ============================================================================
 
-bool setProvisionChannel() {
-  const esp_err_t result =
-      esp_wifi_set_channel(
-          plant::PROVISION_ESPNOW_CHANNEL,
-          WIFI_SECOND_CHAN_NONE);
+uint8_t currentRadioChannel() {
+  uint8_t primary = 0;
+  wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
 
-  if (result != ESP_OK) {
-    Serial.printf(
-        "Provision channel failed: %s\n",
-        esp_err_to_name(result));
-    return false;
+  if (esp_wifi_get_channel(
+          &primary,
+          &secondary) != ESP_OK) {
+    return 0;
   }
 
-  return true;
+  return primary;
 }
 
-bool initEspNowOnce() {
-  static bool initialized = false;
-
-  if (initialized) return true;
-
-  const esp_err_t result =
-      esp_now_init();
-
-  if (result != ESP_OK) {
-    Serial.printf(
-        "ESP-NOW init failed: %s\n",
-        esp_err_to_name(result));
-    return false;
-  }
-
-  initialized = true;
-  return true;
-}
 
 bool ensureEspNowPeer(const uint8_t* mac) {
+  if (!esp_now_ready) {
+    Serial.println(
+        "ESP-NOW peer unavailable: radio is not initialized.");
+    return false;
+  }
+
   if (esp_now_is_peer_exist(mac))
     return true;
 
   esp_now_peer_info_t peer{};
   memcpy(peer.peer_addr, mac, 6);
+
+  // Channel 0 means the current Wi-Fi channel. This is what lets ESP-NOW
+  // coexist with a connected STA without hard-coding channel 1 or channel 6.
   peer.channel = 0;
   peer.encrypt = false;
 
@@ -1542,19 +2235,37 @@ void stopUdp() {
 bool startUdp() {
   stopUdp();
 
-  if (!home_wifi_connected)
+  if (!home_wifi_connected ||
+      WiFi.status() != WL_CONNECTED) {
+    Serial.println(
+        "T5 UDP bind skipped: home Wi-Fi is not connected.");
     return false;
+  }
+
+  // Give lwIP a moment to release any previous PCB/socket before rebinding.
+  // This is intentionally outside the proven PMU/shutdown path.
+  delay(25);
+
+  Serial.printf(
+      "T5 UDP bind: IP=%s mask=%s gateway=%s channel=%d RSSI=%d port=%u.\n",
+      WiFi.localIP().toString().c_str(),
+      WiFi.subnetMask().toString().c_str(),
+      WiFi.gatewayIP().toString().c_str(),
+      WiFi.channel(),
+      WiFi.RSSI(),
+      plant::T5_UDP_PORT);
 
   if (!udp.begin(plant::T5_UDP_PORT)) {
     Serial.println(
-        "T5 UDP listener failed.");
+        "T5 UDP listener failed to bind.");
     return false;
   }
 
   udp_ready = true;
 
   Serial.printf(
-      "T5 UDP listening on port %u.\n",
+      "T5 UDP READY on %s:%u.\n",
+      WiFi.localIP().toString().c_str(),
       plant::T5_UDP_PORT);
 
   return true;
@@ -1639,6 +2350,12 @@ void serviceUdp() {
 
   const uint16_t source_port =
       udp.remotePort();
+
+  Serial.printf(
+      "T5 UDP RX: %d bytes from %s:%u.\n",
+      packet_size,
+      source_ip.toString().c_str(),
+      source_port);
 
   if (packet_size !=
       sizeof(plant::ReadingPacket)) {
@@ -1834,54 +2551,87 @@ void onEspNowSent(
 #endif
 
 bool startProvisioningRadio() {
-  if (!WiFi.mode(WIFI_AP_STA)) {
-    Serial.println(
-        "Could not enter AP+STA mode.");
+  // ESP-NOW and Wi-Fi intentionally coexist on the radio's CURRENT channel.
+  // Never call esp_wifi_set_channel() here while STA is associated.
+  esp_now_ready = false;
+
+  const esp_err_t deinit_result =
+      esp_now_deinit();
+
+  if (deinit_result != ESP_OK &&
+      deinit_result != ESP_ERR_ESPNOW_NOT_INIT) {
+    Serial.printf(
+        "ESP-NOW pre-init deinit warning: %s\n",
+        esp_err_to_name(deinit_result));
+  }
+
+  const esp_err_t init_result =
+      esp_now_init();
+
+  if (init_result != ESP_OK) {
+    Serial.printf(
+        "ESP-NOW init failed: %s\n",
+        esp_err_to_name(init_result));
     return false;
   }
 
-  delay(100);
+  const esp_err_t recv_result =
+      esp_now_register_recv_cb(
+          onEspNowReceive);
 
-  if (!setProvisionChannel())
+  if (recv_result != ESP_OK) {
+    Serial.printf(
+        "ESP-NOW receive callback failed: %s\n",
+        esp_err_to_name(recv_result));
+    esp_now_deinit();
     return false;
-
-  if (!initEspNowOnce())
-    return false;
-
-  static bool callbacks_registered = false;
-
-  if (!callbacks_registered) {
-    esp_now_register_recv_cb(
-        onEspNowReceive);
-
-    esp_now_register_send_cb(
-        onEspNowSent);
-
-    callbacks_registered = true;
   }
+
+  const esp_err_t send_result =
+      esp_now_register_send_cb(
+          onEspNowSent);
+
+  if (send_result != ESP_OK) {
+    Serial.printf(
+        "ESP-NOW send callback failed: %s\n",
+        esp_err_to_name(send_result));
+    esp_now_deinit();
+    return false;
+  }
+
+  esp_now_ready = true;
+
+  Serial.printf(
+      "ESP-NOW ready on current Wi-Fi channel %u (%s).\n",
+      currentRadioChannel(),
+      home_wifi_connected
+          ? "home Wi-Fi coexistence"
+          : "setup/discovery");
 
   return true;
 }
 
 bool sendProvisionPacket(
     uint32_t sensor_id) {
-  if (!setup_mode) {
+  if (!wifiCredentialsSaved()) {
     Serial.println(
-        "Provisioning requires setup mode.");
+        "Provisioning requires saved home Wi-Fi first.");
     return false;
   }
 
-  if (!wifiCredentialsSaved()) {
+  if (!esp_now_ready) {
     Serial.println(
-        "Provisioning requires saved "
-        "home Wi-Fi first.");
+        "Provisioning unavailable: ESP-NOW is not ready.");
     return false;
   }
 
   const int index =
       findPersistedPlant(sensor_id);
 
-  if (index < 0) {
+  const int live_index =
+      findLivePlant(sensor_id);
+
+  if (index < 0 || live_index < 0) {
     Serial.println(
         "Provision target not found.");
     return false;
@@ -1889,6 +2639,16 @@ bool sendProvisionPacket(
 
   PersistedPlant& record =
       config_data.plants[index];
+
+  const LivePlant& live =
+      live_plants[live_index];
+
+  if (!plantMacKnown(record.mac) ||
+      !espNowTransportRecent(live)) {
+    Serial.println(
+        "Provision target is not currently reachable over ESP-NOW.");
+    return false;
+  }
 
   if (!ensureEspNowPeer(record.mac))
     return false;
@@ -1919,13 +2679,16 @@ bool sendProvisionPacket(
   provision_ack_sensor_id = 0;
 
   Serial.printf(
-      "Provisioning sensor 0x%08lX...\n",
+      "Provisioning sensor 0x%08lX on coexistence channel %u...\n",
       static_cast<unsigned long>(
-          sensor_id));
+          sensor_id),
+      currentRadioChannel());
 
-  // A few sends make the manual provisioning action forgiving.
+  // The unprovisioned XIAO locks onto this channel after hearing the automatic
+  // beacon ACK. Keep a forgiving send window in case the web click lands near
+  // a channel-hop boundary.
   for (uint8_t attempt = 1;
-       attempt <= 6;
+       attempt <= 12;
        ++attempt) {
     const esp_err_t result =
         esp_now_send(
@@ -1934,7 +2697,7 @@ bool sendProvisionPacket(
             sizeof(packet));
 
     Serial.printf(
-        "Provision send %u/6: %s\n",
+        "Provision send %u/12: %s\n",
         attempt,
         esp_err_to_name(result));
 
@@ -1959,10 +2722,115 @@ bool sendProvisionPacket(
   }
 
   Serial.println(
-      "No application provisioning ACK "
-      "received.");
+      "No application provisioning ACK received.");
 
   return false;
+}
+
+bool sendLocatePacket(
+    uint32_t sensor_id) {
+  const int persistent_index =
+      findPersistedPlant(sensor_id);
+
+  if (persistent_index < 0) {
+    Serial.println(
+        "Locate target not found.");
+    return false;
+  }
+
+  const int live_index =
+      findLivePlant(sensor_id);
+
+  if (live_index < 0) {
+    Serial.println(
+        "Locate unavailable: sensor has not been seen since this T5 boot.");
+    return false;
+  }
+
+  const PersistedPlant& record =
+      config_data.plants[persistent_index];
+
+  const LivePlant& live =
+      live_plants[live_index];
+
+  plant::LocatePacket packet{};
+
+  packet.magic = plant::PACKET_MAGIC;
+  packet.version = plant::PROTOCOL_VERSION;
+  packet.packet_size = sizeof(packet);
+  packet.sensor_id = sensor_id;
+  packet.flash_ms = 8000;
+
+  plant::finalizePacket(packet);
+
+  // ESP-NOW is the preferred locate path whenever a fresh beacon proves the
+  // sensor is listening on the same current Wi-Fi channel. This works for both
+  // brand-new and already-provisioned sensors.
+  if (esp_now_ready &&
+      plantMacKnown(record.mac) &&
+      espNowTransportRecent(live)) {
+    if (!ensureEspNowPeer(record.mac))
+      return false;
+
+    const esp_err_t result =
+        esp_now_send(
+            record.mac,
+            reinterpret_cast<const uint8_t*>(
+                &packet),
+            sizeof(packet));
+
+    Serial.printf(
+        "Locate sensor 0x%08lX via ESP-NOW ch%u (%s): %s\n",
+        static_cast<unsigned long>(
+            sensor_id),
+        currentRadioChannel(),
+        macToString(record.mac).c_str(),
+        esp_err_to_name(result));
+
+    return result == ESP_OK;
+  }
+
+  // UDP remains a useful fallback while a provisioned sensor is awake even if
+  // an ESP-NOW service beacon was missed.
+  if (!home_wifi_connected ||
+      !udp_ready ||
+      !wifiLocateRouteRecent(live) ||
+      !ipAddressKnown(live.source_ip)) {
+    Serial.println(
+        "Locate unavailable: no recent ESP-NOW or Wi-Fi route.");
+    return false;
+  }
+
+  if (!udp.beginPacket(
+          live.source_ip,
+          plant::SENSOR_UDP_PORT)) {
+    Serial.println(
+        "Locate UDP beginPacket failed.");
+    return false;
+  }
+
+  const size_t written =
+      udp.write(
+          reinterpret_cast<const uint8_t*>(
+              &packet),
+          sizeof(packet));
+
+  const int end_result =
+      udp.endPacket();
+
+  const bool ok =
+      written == sizeof(packet) &&
+      end_result == 1;
+
+  Serial.printf(
+      "Locate sensor 0x%08lX via Wi-Fi %s:%u: %s\n",
+      static_cast<unsigned long>(
+          sensor_id),
+      live.source_ip.toString().c_str(),
+      plant::SENSOR_UDP_PORT,
+      ok ? "SENT" : "FAILED");
+
+  return ok;
 }
 
 // ============================================================================
@@ -2000,10 +2868,17 @@ bool connectHomeWifi() {
     return false;
   }
 
-  dns_server.stop();
-  WiFi.softAPdisconnect(true);
+  // When the local PlantMonitor AP is active, keep it alive and add STA rather
+  // than tearing it down. The AP and ESP-NOW will follow the STA/home channel.
+  if (!setup_mode) {
+    dns_server.stop();
+    WiFi.softAPdisconnect(false);
+  }
 
-  if (!WiFi.mode(WIFI_STA)) {
+  if (!WiFi.mode(
+          setup_mode
+              ? WIFI_AP_STA
+              : WIFI_STA)) {
     Serial.println(
         "Could not enable home Wi-Fi STA.");
     return false;
@@ -2011,9 +2886,16 @@ bool connectHomeWifi() {
 
   WiFi.setAutoReconnect(true);
 
+  // The T5 is the always-listening UDP hub. Do not let station power-save
+  // defer broadcast reception while sensors are waiting for a short ACK.
+  WiFi.setSleep(false);
+
   Serial.printf(
-      "Connecting T5 to \"%s\"...\n",
-      config_data.wifi_ssid);
+      "Connecting T5 to \"%s\"%s...\n",
+      config_data.wifi_ssid,
+      setup_mode
+          ? " while keeping the setup AP active"
+          : "");
 
   WiFi.begin(
       config_data.wifi_ssid,
@@ -2048,6 +2930,12 @@ bool connectHomeWifi() {
       "Home channel: %d\n",
       WiFi.channel());
 
+  Serial.printf(
+      "Home network: mask=%s gateway=%s RSSI=%d sleep=OFF.\n",
+      WiFi.subnetMask().toString().c_str(),
+      WiFi.gatewayIP().toString().c_str(),
+      WiFi.RSSI());
+
   web_server.begin();
 
   // Battery-powered resets can settle differently from USB-powered resets.
@@ -2061,12 +2949,16 @@ bool connectHomeWifi() {
         "Home Wi-Fi is up; UDP listener will retry automatically.");
   }
 
+  if (!startProvisioningRadio()) {
+    Serial.println(
+        "WARNING: home Wi-Fi is up but ESP-NOW coexistence init failed.");
+  }
+
   return true;
 }
 
 void serviceHomeNetwork() {
-  if (setup_mode ||
-      !wifiCredentialsSaved()) {
+  if (!wifiCredentialsSaved()) {
     return;
   }
 
@@ -2080,6 +2972,13 @@ void serviceHomeNetwork() {
           "Home Wi-Fi lost; stopping UDP until Wi-Fi recovers.");
       stopUdp();
       home_wifi_connected = false;
+      esp_now_ready = false;
+
+      if (setup_mode) {
+        // The local AP is still alive; keep ESP-NOW discovery available on
+        // that current channel while STA recovery is attempted.
+        startProvisioningRadio();
+      }
     }
 
     if ((millis() -
@@ -2105,7 +3004,17 @@ void serviceHomeNetwork() {
         "T5 home Wi-Fi recovered, IP: ");
     Serial.println(WiFi.localIP());
 
+    Serial.printf(
+        "Recovered on channel %d.\n",
+        WiFi.channel());
+
     web_server.begin();
+
+    // Association/channel changes can invalidate ESP-NOW state/peers.
+    if (!startProvisioningRadio()) {
+      Serial.println(
+          "WARNING: ESP-NOW coexistence restart failed after Wi-Fi recovery.");
+    }
   }
 
   if (udp_ready)
@@ -2135,10 +3044,26 @@ bool startSetupMode() {
   if (setup_mode)
     return true;
 
-  stopHomeWifi();
+  // If credentials exist, keep/establish the home STA first. ESP-NOW and the
+  // local setup AP will then share that same channel.
+  if (wifiCredentialsSaved() &&
+      WiFi.status() != WL_CONNECTED) {
+    if (!connectHomeWifi()) {
+      Serial.println(
+          "Home Wi-Fi unavailable; setup AP will still start for recovery.");
+    }
+  }
 
-  if (!startProvisioningRadio())
+  const bool sta_connected =
+      WiFi.status() == WL_CONNECTED;
+
+  if (!WiFi.mode(WIFI_AP_STA)) {
+    Serial.println(
+        "Could not enter AP+STA mode.");
     return false;
+  }
+
+  delay(SETUP_AP_RESTART_DELAY_MS);
 
   setup_ssid =
       setupNetworkName();
@@ -2152,15 +3077,38 @@ bool startSetupMode() {
     return false;
   }
 
+  const uint8_t setup_channel =
+      sta_connected
+          ? static_cast<uint8_t>(
+                WiFi.channel())
+          : plant::PROVISION_ESPNOW_CHANNEL;
+
   if (!WiFi.softAP(
           setup_ssid.c_str(),
           config_data.setup_password,
-          plant::PROVISION_ESPNOW_CHANNEL,
+          setup_channel,
           0,
           4)) {
     Serial.println(
         "Setup SoftAP failed.");
     return false;
+  }
+
+  setup_mode = true;
+
+  // Starting/changing AP mode can invalidate ESP-NOW. Rebuild it now on the
+  // radio's actual current channel without disconnecting the home STA.
+  if (!startProvisioningRadio()) {
+    Serial.println(
+        "WARNING: setup AP started but ESP-NOW init failed.");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    home_wifi_connected = true;
+
+    // AP/STA mode changes can disturb lwIP bindings on some Arduino builds;
+    // rebind the known-good UDP listener explicitly.
+    startUdp();
   }
 
   dns_server.start(
@@ -2170,14 +3118,12 @@ bool startSetupMode() {
 
   web_server.begin();
 
-  setup_mode = true;
-
   Serial.println();
   Serial.println(
-      "=== T5 SETUP / PROVISIONING ===");
+      "=== T5 SETUP / PROVISIONING (COEXISTENCE) ===");
 
   Serial.printf(
-      "SSID: %s\n",
+      "Setup SSID: %s\n",
       setup_ssid.c_str());
 
   Serial.printf(
@@ -2185,8 +3131,18 @@ bool startSetupMode() {
       config_data.setup_password);
 
   Serial.printf(
-      "Open: http://%s/\n",
-      WiFi.softAPIP().toString().c_str());
+      "Setup AP: http://%s/ channel %u\n",
+      WiFi.softAPIP().toString().c_str(),
+      currentRadioChannel());
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf(
+        "Home STA remains connected: http://%s/ channel %d; UDP=%s; ESP-NOW=%s.\n",
+        WiFi.localIP().toString().c_str(),
+        WiFi.channel(),
+        udp_ready ? "READY" : "RETRYING",
+        esp_now_ready ? "READY" : "ERROR");
+  }
 
   drawSetupScreen();
   return true;
@@ -2195,17 +3151,34 @@ bool startSetupMode() {
 void stopSetupModeAndConnectHome() {
   if (setup_mode) {
     dns_server.stop();
-    WiFi.softAPdisconnect(true);
+    WiFi.softAPdisconnect(false);
     setup_mode = false;
+
+    // Collapse AP+STA back to STA. Rebuild ESP-NOW afterward because Wi-Fi mode
+    // changes can clear its internal state.
+    WiFi.mode(WIFI_STA);
+    delay(100);
   }
 
-  if (!connectHomeWifi()) {
-    Serial.println(
-        "Could not return to home Wi-Fi; "
-        "re-entering setup mode.");
+  if (WiFi.status() != WL_CONNECTED) {
+    if (!connectHomeWifi()) {
+      Serial.println(
+          "Could not return to home Wi-Fi; re-entering setup mode.");
 
-    startSetupMode();
-    return;
+      startSetupMode();
+      return;
+    }
+  } else {
+    home_wifi_connected = true;
+    web_server.begin();
+
+    if (!udp_ready)
+      startUdp();
+
+    if (!startProvisioningRadio()) {
+      Serial.println(
+          "WARNING: ESP-NOW restart failed after closing setup AP.");
+    }
   }
 
   restoreNormalDisplay();
@@ -2217,7 +3190,7 @@ void stopSetupModeAndConnectHome() {
 
 String buildWebPage() {
   String html;
-  html.reserve(16000);
+  html.reserve(21000);
 
   html += F(
       "<!doctype html><html><head>"
@@ -2226,281 +3199,217 @@ String buildWebPage() {
       "<style>"
       "body{font-family:Arial,sans-serif;background:#f2f2f2;color:#171717;margin:0}"
       ".wrap{max-width:850px;margin:auto;padding:18px}"
-      ".card{background:#fff;border-radius:14px;padding:18px;margin:14px 0;"
-      "box-shadow:0 2px 8px #0002}"
+      ".card{background:#fff;border-radius:14px;padding:18px;margin:14px 0;box-shadow:0 2px 8px #0002}"
       ".sub{background:#fafafa;border:1px solid #ddd}"
       "h1{margin:4px 0}h2{margin-top:0}"
       "label{display:block;font-weight:bold;margin:12px 0 5px}"
-      "input{box-sizing:border-box;width:100%;padding:11px;border:1px solid #aaa;"
-      "border-radius:8px;font-size:16px}"
-      "button{padding:11px 15px;border:0;border-radius:8px;background:#222;color:#fff;"
-      "font-size:15px;cursor:pointer}"
+      "input{box-sizing:border-box;width:100%;padding:11px;border:1px solid #aaa;border-radius:8px;font-size:16px}"
+      "button{padding:11px 15px;border:0;border-radius:8px;background:#222;color:#fff;font-size:15px;cursor:pointer}"
       ".muted{color:#666}.pill{background:#eee;border-radius:8px;padding:10px}"
       ".good{background:#e7f4e8}.warn{background:#fff1d2}"
+      ".transport{display:inline-block;margin:4px 6px 4px 0;padding:8px 10px;border-radius:999px;background:#eee;font-size:14px}"
+      ".transport.live{background:#dff3e2;font-weight:bold}"
       ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}"
       "code{font-size:14px}"
       "</style></head><body><div class='wrap'>");
 
-  html += F("<h1>Plant Monitor</h1>");
+  html += F("<h1>Plant Monitor</h1><div class='muted'>");
 
-  html += F("<div class='muted'>");
+  if (home_wifi_connected &&
+      WiFi.status() == WL_CONNECTED) {
+    html += F("Home Wi-Fi: ");
+    html += htmlEscape(String(config_data.wifi_ssid));
+    html += F(" &bull; T5 ");
+    html += WiFi.localIP().toString();
+    html += F(" &bull; channel ");
+    html += String(WiFi.channel());
+  } else {
+    html += F("Home Wi-Fi: disconnected");
+  }
 
   if (setup_mode) {
-    html += F("Setup network: ");
+    html += F("<br>Setup AP: ");
     html += htmlEscape(setup_ssid);
     html += F(" &bull; ");
     html += WiFi.softAPIP().toString();
-  } else if (home_wifi_connected) {
-    html += F("Home Wi-Fi: ");
-    html += htmlEscape(
-        String(config_data.wifi_ssid));
-    html += F(" &bull; T5 IP ");
-    html += WiFi.localIP().toString();
-  } else {
-    html += F("Not connected");
   }
 
   html += F("</div>");
 
   refreshT5PowerState();
 
-  html += F(
-      "<div class='card'><h2>T5 Hub Status</h2><div class='grid'>");
-
-  html += F(
-      "<div class='pill'><strong>Power</strong><br>");
-  html += t5_power.external_power
-      ? F("USB / external")
-      : F("Battery");
-  html += F("</div>");
-
-  html += F(
-      "<div class='pill'><strong>T5 battery</strong><br>");
-  if (t5_power.gauge_valid) {
-    html += String(t5_power.percent);
-    html += F("%</div>");
-  } else {
-    html += F("Unavailable</div>");
+  html += F("<div class='card'><h2>T5 Hub Status</h2><div class='grid'>");
+  html += F("<div class='pill'><strong>Power</strong><br>");
+  html += t5_power.external_power ? F("USB / external") : F("Battery");
+  html += F("</div><div class='pill'><strong>T5 battery</strong><br>");
+  html += t5_power.gauge_valid ? String(t5_power.percent) + "%" : String("Unavailable");
+  html += F("</div><div class='pill'><strong>Battery voltage</strong><br>");
+  html += t5_power.gauge_valid ? String(t5_power.battery_mv) + " mV" : String("--");
+  html += F("</div><div class='pill'><strong>Home Wi-Fi</strong><br>");
+  html += WiFi.status() == WL_CONNECTED ? F("CONNECTED") : F("DOWN");
+  html += F("</div><div class='pill'><strong>UDP listener</strong><br>");
+  html += udp_ready ? F("READY") : F("RETRYING / OFF");
+  html += F("</div><div class='pill'><strong>ESP-NOW</strong><br>");
+  html += esp_now_ready ? F("READY") : F("OFF / ERROR");
+  if (esp_now_ready) {
+    html += F(" &middot; ch ");
+    html += String(currentRadioChannel());
   }
+  html += F("</div></div><p class='muted'>Wi-Fi, UDP and ESP-NOW share the same current 2.4 GHz channel; the T5 no longer switches away from home Wi-Fi to locate or provision sensors.</p></div>");
 
   html += F(
-      "<div class='pill'><strong>Battery voltage</strong><br>");
-  if (t5_power.gauge_valid) {
-    html += String(t5_power.battery_mv);
-    html += F(" mV</div>");
-  } else {
-    html += F("--</div>");
-  }
-
+      "<div class='card'><h2>Display Frontlight</h2><p class='muted'>Current: <strong>");
+  html += frontlightLevelName(frontlight_level);
   html += F(
-      "<div class='pill'><strong>Wi-Fi</strong><br>");
-  html +=
-      WiFi.status() == WL_CONNECTED
-          ? F("CONNECTED")
-          : F("DOWN");
-  html += F("</div>");
+      "</strong>. OFF is the battery-friendly default.</p>"
+      "<form method='post' action='/frontlight'><div class='grid'>"
+      "<button name='level' value='off' type='submit'>OFF</button>"
+      "<button name='level' value='low' type='submit'>LOW</button>"
+      "<button name='level' value='medium' type='submit'>MED</button>"
+      "<button name='level' value='high' type='submit'>HIGH</button>"
+      "</div></form></div>");
 
-  html += F(
-      "<div class='pill'><strong>UDP listener</strong><br>");
-  html += udp_ready
-      ? F("READY")
-      : F("RETRYING / OFF");
-  html += F("</div>");
-
-  html += F(
-      "<div class='pill'><strong>T5 IP</strong><br>");
-  if (WiFi.status() == WL_CONNECTED) {
-    html += WiFi.localIP().toString();
-  } else {
-    html += F("--");
-  }
-  html += F("</div></div></div>");
-
-  html += F(
-      "<div class='card'><h2>Home Wi-Fi</h2>");
-
+  html += F("<div class='card'><h2>Home Wi-Fi</h2>");
   if (wifiCredentialsSaved()) {
-    html += F(
-        "<div class='pill good'>Saved: <strong>");
-
-    html += htmlEscape(
-        String(config_data.wifi_ssid));
-
+    html += F("<div class='pill good'>Saved: <strong>");
+    html += htmlEscape(String(config_data.wifi_ssid));
     html += F("</strong></div>");
   } else {
-    html += F(
-        "<div class='pill warn'>No home Wi-Fi saved.</div>");
+    html += F("<div class='pill warn'>No home Wi-Fi saved.</div>");
   }
-
   html += F(
       "<form method='post' action='/wifi'>"
-      "<label>Wi-Fi name (SSID)</label>"
-      "<input name='ssid' maxlength='32' required value='");
-
-  html += htmlEscape(
-      String(config_data.wifi_ssid));
-
+      "<label>Wi-Fi name (SSID)</label><input name='ssid' maxlength='32' required value='");
+  html += htmlEscape(String(config_data.wifi_ssid));
   html += F(
-      "'><label>Wi-Fi password</label>"
-      "<input type='password' name='password' maxlength='64' "
-      "placeholder='Enter password'>"
+      "'><label>Wi-Fi password</label><input type='password' name='password' maxlength='64' placeholder='Enter password'>"
       "<p class='muted'>Password is stored on the T5 but never displayed back.</p>"
-      "<button type='submit'>Save Home Wi-Fi</button>"
-      "</form>");
+      "<button type='submit'>Save Home Wi-Fi</button></form>");
 
-  if (setup_mode &&
-      wifiCredentialsSaved()) {
+  if (setup_mode) {
     html += F(
-        "<form method='post' action='/home' style='margin-top:12px'>"
-        "<button type='submit'>Finish Setup & Connect Home Wi-Fi</button>"
-        "</form>");
+        "<p class='muted'>The local setup AP can stay active at the same time as home Wi-Fi. Saving new credentials will make the T5 try them without intentionally shutting down the setup portal.</p>"
+        "<form method='post' action='/home' style='margin-top:12px'><button type='submit'>Close Local Setup AP</button></form>");
+  } else {
+    html += F(
+        "<p class='muted'>Short-press the physical IO48-labeled button if you also want the local PlantMonitor setup AP. Home Wi-Fi/UDP stays active.</p>");
   }
-
   html += F("</div>");
 
   html += F(
-      "<div class='card'><h2>Plant Sensors</h2>");
+      "<div class='card'><h2>Plant Sensors</h2>"
+      "<p class='muted'>Green means the T5 saw that transport recently. Gray normally means the battery sensor is sleeping. During the XIAO green 2-minute service window, a provisioned sensor can show both Wi-Fi/UDP and ESP-NOW ONLINE at the same time.</p>"
+      "<form method='get' action='/' style='margin-bottom:12px'><button type='submit'>Refresh Sensor Status</button></form>");
 
   bool any = false;
 
-  for (size_t i = 0;
-       i < MAX_PLANTS;
-       ++i) {
+  for (size_t i = 0; i < MAX_PLANTS; ++i) {
     if (!config_data.plants[i].used)
       continue;
 
     any = true;
+    const PersistedPlant& record = config_data.plants[i];
+    const int live_index = findLivePlant(record.sensor_id);
 
-    const PersistedPlant& record =
-        config_data.plants[i];
-
-    const int live_index =
-        findLivePlant(record.sensor_id);
-
-    html += F(
-        "<div class='card sub'>");
-
-    html += F("<h2>");
-    html += htmlEscape(
-        String(record.name));
-    html += F("</h2>");
-
-    html += F("<div class='muted'><code>0x");
-    html += sensorIdToHex(
-        record.sensor_id);
+    html += F("<div class='card sub'><h2>");
+    html += htmlEscape(String(record.name));
+    html += F("</h2><div class='muted'><code>0x");
+    html += sensorIdToHex(record.sensor_id);
     html += F("</code><br><code>");
     html += macToString(record.mac);
-    html += F("</code></div>");
-
-    html += F("<div style='margin:10px 0'>");
-
-    if (record.provisioned) {
-      html += F(
-          "<span class='pill good'>Wi-Fi provisioned</span>");
-    } else {
-      html += F(
-          "<span class='pill warn'>Wi-Fi not confirmed</span>");
-    }
-
+    html += F("</code></div><div style='margin:10px 0'>");
+    html += record.provisioned
+        ? F("<span class='pill good'>Wi-Fi provisioned</span>")
+        : F("<span class='pill warn'>Wi-Fi not confirmed</span>");
     html += F("</div>");
 
+    bool wifi_recent = false;
+    bool espnow_recent = false;
+
     if (live_index >= 0) {
-      const LivePlant& live =
-          live_plants[live_index];
+      const LivePlant& live = live_plants[live_index];
+      wifi_recent = wifiTransportRecent(live);
+      espnow_recent = espNowTransportRecent(live);
 
-      html += F("<div class='grid'>");
+      html += F("<div style='margin:10px 0'>");
+      html += wifi_recent
+          ? F("<span class='transport live'>&#9679; Wi-Fi / UDP ONLINE &middot; ")
+          : F("<span class='transport'>&#9675; Wi-Fi / UDP &middot; ");
+      html += lastSeenAgeLabel(live.last_udp_seen_ms);
+      if (ipAddressKnown(live.source_ip)) {
+        html += F(" &middot; ");
+        html += live.source_ip.toString();
+      }
+      html += F("</span>");
 
-      html += F(
-          "<div class='pill'><strong>Moisture</strong><br>");
-      html += String(
-          live.packet.moisture_percent);
+      html += espnow_recent
+          ? F("<span class='transport live'>&#9679; ESP-NOW ONLINE &middot; ")
+          : F("<span class='transport'>&#9675; ESP-NOW &middot; ");
+      html += lastSeenAgeLabel(live.last_espnow_seen_ms);
+      html += F("</span></div><div class='grid'>");
+
+      html += F("<div class='pill'><strong>Moisture</strong><br>");
+      html += String(live.packet.moisture_percent);
       html += F("% &mdash; ");
-      html += plant::stateName(
-          live.packet.moisture_state);
-      html += F("</div>");
-
+      html += plant::stateName(live.packet.moisture_state);
+      html += F("</div><div class='pill'><strong>Battery</strong><br>");
+      html += String(live.packet.battery_percent);
+      html += F("%</div><div class='pill'><strong>Last sensor report</strong><br>");
+      html += lastSeenAgeLabel(live.last_seen_ms);
+      html += F("</div></div>");
+    } else {
       html += F(
-          "<div class='pill'><strong>Battery</strong><br>");
-      html += String(
-          live.packet.battery_percent);
-      html += F("%</div>");
-
-      html += F(
-          "<div class='pill'><strong>Transport</strong><br>");
-      html += live.via_udp
-          ? F("Home Wi-Fi")
-          : F("Local ESP-NOW");
-      html += F("</div>");
-
-      html += F(
-          "<div class='pill'><strong>Last seen</strong><br>");
-      html += String(
-          (millis() -
-           live.last_seen_ms) /
-          1000UL);
-      html += F(" sec ago</div>");
-
-      html += F("</div>");
+          "<div style='margin:10px 0'><span class='transport'>&#9675; Wi-Fi / UDP &middot; not seen this boot</span>"
+          "<span class='transport'>&#9675; ESP-NOW &middot; not seen this boot</span></div>");
     }
 
-    html += F(
-        "<form method='post' action='/rename'>"
-        "<input type='hidden' name='id' value='");
+    html += F("<form method='post' action='/rename'><input type='hidden' name='id' value='");
+    html += sensorIdToHex(record.sensor_id);
+    html += F("'><label>Plant name</label><input name='name' maxlength='31' required value='");
+    html += htmlEscape(String(record.name));
+    html += F("'><div style='margin-top:10px'><button type='submit'>Save Plant Name</button></div></form>");
 
-    html += sensorIdToHex(
-        record.sensor_id);
+    const bool locate_via_espnow =
+        live_index >= 0 &&
+        espnow_recent &&
+        plantMacKnown(record.mac) &&
+        esp_now_ready;
 
-    html += F(
-        "'><label>Plant name</label>"
-        "<input name='name' maxlength='31' required value='");
+    const bool locate_via_wifi =
+        live_index >= 0 &&
+        wifiLocateRouteRecent(live_plants[live_index]) &&
+        ipAddressKnown(live_plants[live_index].source_ip) &&
+        udp_ready;
 
-    html += htmlEscape(
-        String(record.name));
+    if (locate_via_espnow || locate_via_wifi) {
+      html += F("<form method='post' action='/locate' style='margin-top:12px'><input type='hidden' name='id' value='");
+      html += sensorIdToHex(record.sensor_id);
+      html += F("'><button type='submit'>Flash / Locate Sensor</button></form><p class='muted'>");
+      html += locate_via_espnow
+          ? F("ESP-NOW is active now and will be preferred for Locate.")
+          : F("A recent Wi-Fi/UDP route is active and will be used as fallback.");
+      html += F("</p>");
+    } else {
+      html += F("<p class='muted'>Wake the sensor. A brand-new sensor will channel-hop until ESP-NOW turns green; a provisioned sensor's green service window can make both indicators green.</p>");
+    }
 
-    html += F(
-        "'><div style='margin-top:10px'>"
-        "<button type='submit'>Save Plant Name</button>"
-        "</div></form>");
-
-    if (setup_mode &&
-        wifiCredentialsSaved()) {
-      html += F(
-          "<form method='post' action='/provision' style='margin-top:12px'>"
-          "<input type='hidden' name='id' value='");
-
-      html += sensorIdToHex(
-          record.sensor_id);
-
-      html += F(
-          "'><button type='submit'>Send Wi-Fi to Sensor</button>"
-          "</form>"
-          "<p class='muted'>The XIAO must currently be awake in provisioning mode nearby.</p>");
+    if (wifiCredentialsSaved() &&
+        live_index >= 0 &&
+        espnow_recent &&
+        plantMacKnown(record.mac)) {
+      html += F("<form method='post' action='/provision' style='margin-top:12px'><input type='hidden' name='id' value='");
+      html += sensorIdToHex(record.sensor_id);
+      html += F("'><button type='submit'>Send Wi-Fi to Sensor</button></form><p class='muted'>Provisioning uses the same current-channel ESP-NOW connection; the T5 does not leave home Wi-Fi.</p>");
     }
 
     html += F("</div>");
   }
 
   if (!any) {
-    html += F(
-        "<p>No sensors registered yet.</p>"
-        "<p class='muted'>An unprovisioned XIAO sends local ESP-NOW beacons "
-        "while it waits for Wi-Fi provisioning.</p>");
+    html += F("<p>No sensors registered yet.</p><p class='muted'>Wake an unprovisioned XIAO. It will hop 2.4 GHz channels until the T5 hears it, then lock to the T5 channel for Locate/provisioning.</p>");
   }
 
-  html += F("</div>");
-
-  if (!setup_mode) {
-    html += F(
-        "<div class='card'><h2>Setup / Provisioning Mode</h2>"
-        "<p>Short-press the physical IO48-labeled function button to switch from home Wi-Fi "
-        "to the local setup network.</p></div>");
-  }
-
-  html += F(
-      "<div class='muted' style='text-align:center;padding:16px'>"
-      "Plant names live only on the T5."
-      "</div></div></body></html>");
-
+  html += F("</div><div class='muted' style='text-align:center;padding:16px'>Plant names live only on the T5.</div></div></body></html>");
   return html;
 }
 
@@ -2511,7 +3420,7 @@ void redirectToRoot() {
   web_server.send(
       303,
       "text/plain",
-      "");
+      "Redirecting");
 }
 
 void handleRoot() {
@@ -2573,8 +3482,13 @@ void handleSaveWifi() {
       "Saved home Wi-Fi: %s\n",
       config_data.wifi_ssid);
 
-  if (setup_mode)
+  if (setup_mode) {
     drawSetupScreen();
+
+    // Send the HTTP response first, then join home Wi-Fi while keeping AP+STA.
+    // The setup AP may briefly move channels to follow the home STA.
+    deferred_home_connect = true;
+  }
 
   redirectToRoot();
 }
@@ -2644,16 +3558,40 @@ void handleRename() {
   redirectToRoot();
 }
 
-void handleProvision() {
-  if (!setup_mode) {
-    web_server.send(
-        409,
-        "text/plain",
-        "Enter setup mode first.");
+void handleFrontlight() {
+  const String level =
+      web_server.arg("level");
 
+  FrontlightLevel requested =
+      FrontlightLevel::Off;
+
+  if (level == "low") {
+    requested = FrontlightLevel::Low;
+  } else if (level == "medium") {
+    requested = FrontlightLevel::Medium;
+  } else if (level == "high") {
+    requested = FrontlightLevel::High;
+  } else if (level != "off") {
+    web_server.send(
+        400,
+        "text/plain",
+        "Invalid frontlight level.");
     return;
   }
 
+  if (!saveFrontlightSetting(
+          requested)) {
+    web_server.send(
+        500,
+        "text/plain",
+        "Could not save/apply frontlight level.");
+    return;
+  }
+
+  redirectToRoot();
+}
+
+void handleLocate() {
   const String id_text =
       web_server.arg("id");
 
@@ -2672,7 +3610,77 @@ void handleProvision() {
         400,
         "text/plain",
         "Invalid sensor ID.");
+    return;
+  }
 
+  bool espnow_recent = false;
+  bool wifi_recent = false;
+  const int live_index =
+      findLivePlant(sensor_id);
+
+  if (live_index >= 0) {
+    espnow_recent =
+        espNowTransportRecent(
+            live_plants[live_index]);
+    wifi_recent =
+        wifiLocateRouteRecent(
+            live_plants[live_index]);
+  }
+
+  const bool ok =
+      sendLocatePacket(
+          sensor_id);
+
+  String response =
+      "<!doctype html><html><body style='font-family:Arial;padding:30px'>";
+
+  if (ok) {
+    response +=
+        "<h2>Locate command sent.</h2><p>";
+
+    response +=
+        (espnow_recent && esp_now_ready)
+            ? "Sent over ESP-NOW on the current Wi-Fi channel."
+            : (wifi_recent
+                   ? "Sent over the recent home Wi-Fi/UDP route."
+                   : "Locate transmission queued.");
+
+    response +=
+        " Watch the selected sensor for rapid LED flashes for about 8 seconds.</p>";
+  } else {
+    response +=
+        "<h2>Locate command could not be sent.</h2>"
+        "<p>Wake the sensor and refresh the page. ESP-NOW or Wi-Fi/UDP must be green/recent.</p>";
+  }
+
+  response +=
+      "<p><a href='/'>Back</a></p></body></html>";
+
+  web_server.send(
+      ok ? 200 : 503,
+      "text/html; charset=utf-8",
+      response);
+}
+
+void handleProvision() {
+  const String id_text =
+      web_server.arg("id");
+
+  char* end = nullptr;
+
+  const uint32_t sensor_id =
+      static_cast<uint32_t>(
+          strtoul(
+              id_text.c_str(),
+              &end,
+              16));
+
+  if (end == id_text.c_str() ||
+      *end != '\0') {
+    web_server.send(
+        400,
+        "text/plain",
+        "Invalid sensor ID.");
     return;
   }
 
@@ -2686,15 +3694,15 @@ void handleProvision() {
         "<!doctype html><html><body style='font-family:Arial;padding:30px'>"
         "<h2>Sensor provisioned.</h2>"
         "<p>The XIAO saved the home Wi-Fi and is rebooting.</p>"
-        "<p>Finish setup on the T5 when you are ready. "
-        "The next sensor wake will use the home router/mesh.</p>"
-        "<p><a href='/'>Back</a></p>"
+        "<p>The T5 stayed on home Wi-Fi. UDP and ESP-NOW remain available on the same channel; there is no radio-mode switch to undo.</p>"
+        "<p>Wake the sensor into its green service window to see Wi-Fi/UDP and ESP-NOW status together and use Locate.</p>"
+        "<p><a href='/'>Back to sensors</a></p>"
         "</body></html>";
   } else {
     response =
         "<!doctype html><html><body style='font-family:Arial;padding:30px'>"
         "<h2>No provisioning confirmation.</h2>"
-        "<p>Make sure that XIAO is awake nearby in provisioning mode, then try again.</p>"
+        "<p>Make sure the XIAO is awake and its ESP-NOW indicator is green, then try again.</p>"
         "<p><a href='/'>Back</a></p>"
         "</body></html>";
   }
@@ -2706,26 +3714,22 @@ void handleProvision() {
 }
 
 void handleConnectHome() {
-  if (!wifiCredentialsSaved()) {
+  if (setup_mode) {
     web_server.send(
-        400,
-        "text/plain",
-        "Save home Wi-Fi first.");
+        200,
+        "text/html; charset=utf-8",
+        "<!doctype html><html><body style='font-family:Arial;padding:30px'>"
+        "<h2>Closing local setup AP...</h2>"
+        "<p>Home Wi-Fi, UDP and ESP-NOW remain active.</p>"
+        "</body></html>");
 
+    deferred_exit_setup = true;
+    deferred_exit_at_ms =
+        millis() + 700;
     return;
   }
 
-  web_server.send(
-      200,
-      "text/html; charset=utf-8",
-      "<!doctype html><html><body style='font-family:Arial;padding:30px'>"
-      "<h2>Connecting to home Wi-Fi...</h2>"
-      "<p>The PlantMonitor setup network will disappear.</p>"
-      "</body></html>");
-
-  deferred_exit_setup = true;
-  deferred_exit_at_ms =
-      millis() + 700;
+  redirectToRoot();
 }
 
 void registerWebRoutes() {
@@ -2740,6 +3744,16 @@ void registerWebRoutes() {
 
   web_server.on(
       "/rename", HTTP_POST, handleRename);
+
+  web_server.on(
+      "/frontlight",
+      HTTP_POST,
+      handleFrontlight);
+
+  web_server.on(
+      "/locate",
+      HTTP_POST,
+      handleLocate);
 
   web_server.on(
       "/provision",
@@ -2771,6 +3785,24 @@ void registerWebRoutes() {
       HTTP_GET,
       redirectToRoot);
 
+  // Browsers routinely request these even though ESP PLANTS has no icon.
+  // Register them explicitly so normal portal use does not look like a route
+  // failure in the serial log.
+  web_server.on(
+      "/favicon.ico",
+      HTTP_GET,
+      redirectToRoot);
+
+  web_server.on(
+      "/apple-touch-icon.png",
+      HTTP_GET,
+      redirectToRoot);
+
+  web_server.on(
+      "/apple-touch-icon-precomposed.png",
+      HTTP_GET,
+      redirectToRoot);
+
   web_server.onNotFound(
       redirectToRoot);
 
@@ -2782,22 +3814,13 @@ void registerWebRoutes() {
 // ============================================================================
 
 void initPmu() {
-  pmu_ready = PPM.init(
-      Wire,
-      I2C_SDA,
-      I2C_SCL,
-      BQ25896_SLAVE_ADDRESS);
+  pmu_ready =
+      configureBq25896ExactlyLikeReader();
 
-  if (!pmu_ready) {
-    Serial.println(
-        "Warning: BQ25896 PMU init failed.");
-  } else {
-    PPM.setSysPowerDownVoltage(3300);
-    PPM.enableMeasure();
-
-    Serial.println(
-        "BQ25896 PMU ready.");
-  }
+  Serial.println(
+      pmu_ready
+          ? "BQ25896 Reader/Test-9 profile ready."
+          : "Warning: BQ25896 Reader/Test-9 profile init failed.");
 
   refreshT5PowerState();
 
@@ -2815,21 +3838,35 @@ void initPmu() {
   }
 }
 
+[[noreturn]] void remainInertAfterShutdownReturn(bool returned) {
+  Serial.printf(
+      "PMU shutdown returned=%s; remaining inert.\n",
+      returned ? "true" : "false");
+  Serial.flush();
+
+  while (true) {
+    digitalWrite(PIN_BACKLIGHT, LOW);
+    delay(1000);
+  }
+}
+
 void shutdownNow() {
-  Serial.println(
-      "IO48 function button held: PMU shutdown.");
-
-  drawPowerOffScreen();
-  delay(300);
-
   if (!pmu_ready) {
     Serial.println(
-        "PMU unavailable; shutdown aborted.");
-
-    restoreNormalDisplay();
+        "BQ25896 Reader/Test-9 profile unavailable; shutdown rejected.");
     return;
   }
 
+  // Fast user-facing rejection before doing a full e-paper refresh. The
+  // golden Test-10 routine below re-checks battery-only again immediately
+  // before the actual BATFET sequence.
+  if (!batteryOnlyAccordingToReader()) {
+    Serial.println(
+        "External/VBUS power present (or PMU status unavailable); disconnect USB before shutdown.");
+    return;
+  }
+
+  // Finish application-owned work while the application is still alive.
   if (cached_reading_dirty) {
     saveCachedReading(
         pending_cached_packet);
@@ -2838,23 +3875,23 @@ void shutdownNow() {
   dns_server.stop();
   web_server.stop();
   stopUdp();
-
+  home_wifi_connected = false;
   WiFi.mode(WIFI_OFF);
 
-  Serial.flush();
-  PPM.shutdown();
-
-  delay(1200);
-
-  // If it returns, external power is still present.
   Serial.println(
-      "PMU shutdown returned; board still powered.");
+      "IO48 held: drawing OFF screen, then exact Display-Test10 cutoff.");
 
-  if (wifiCredentialsSaved()) {
-    connectHomeWifi();
-  }
+  // This blocks through the physical refresh, powers the EPD down, and also
+  // detaches/forces the application frontlight LOW.
+  drawPowerOffScreen();
 
-  restoreNormalDisplay();
+  Serial.flush();
+
+  // IMPORTANT: from here onward mirror ESP-PLANTS-T5-DISPLAY-TEST10.
+  // No Reader deinit helper, no 100 ms pause, and no bool-returning shutdown
+  // wrapper between the OFF refresh and BATFET_DIS.
+  forceReaderSafePeripheralState();
+  truePowerOffExactlyLikeDisplayTest10();
 }
 
 void serviceControlButton() {
@@ -2920,13 +3957,37 @@ void processReceivedEvent(
       live_plants[live_index];
 
   live.packet = event.packet;
-  live.last_seen_ms = millis();
-  live.source_ip = event.source_ip;
+
+  const uint32_t seen_ms =
+      millis();
+
+  live.last_seen_ms = seen_ms;
   live.via_udp = event.via_udp;
 
   if (event.via_udp) {
+    if (live.last_udp_seen_ms != 0 &&
+        (seen_ms - live.last_udp_seen_ms) <=
+            WIFI_SERVICE_BURST_MAX_GAP_MS) {
+      // Two reports only a few seconds apart match the XIAO green service
+      // window. Use this stronger signal for Wi-Fi Locate so a one-off
+      // scheduled wake is not mistaken for a sensor that is still awake.
+      live.last_udp_service_ms = seen_ms;
+    }
+
+    live.last_udp_seen_ms = seen_ms;
+    live.source_ip = event.source_ip;
+
     config_data.plants[
         persistent_index].provisioned = 1;
+  } else {
+    live.last_espnow_seen_ms = seen_ms;
+
+    if (mac != nullptr) {
+      memcpy(
+          live.mac,
+          mac,
+          6);
+    }
   }
 
   queueCachedReading(
@@ -2972,16 +4033,40 @@ void processReceivedEvent(
 
 void setup() {
   Serial.begin(115200);
-  delay(700);
+  delay(250);
 
   Serial.println();
   Serial.println(
-      "LILYGO T5 Pro Plant Receiver — Phase 3B Wi-Fi / UDP");
+      "LILYGO T5 Pro Plant Receiver — ESP PLANTS full integration");
   Serial.printf(
       "Protocol version: %u\n",
       plant::PROTOCOL_VERSION);
 
+  // Hardware-verified Test 9 / Test 10 bring-up order.
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(400000);
+  Wire.setTimeOut(50);
+
+  pinMode(PIN_BACKLIGHT, OUTPUT);
+  digitalWrite(PIN_BACKLIGHT, LOW);
+
+  if (!pca9535Init()) {
+    Serial.println(
+        "FATAL: PCA9535 init failed.");
+    while (true) delay(1000);
+  }
+
+  prepareBoardLikeReader();
+  initPmu();
+
+  if (!pmu_ready) {
+    Serial.println(
+        "FATAL: Reader/Test-9 BQ25896 profile init failed.");
+    while (true) delay(1000);
+  }
+
   loadConfig();
+  loadFrontlightSetting();
   loadCachedReading();
 
   if (cached_reading_valid) {
@@ -3005,7 +4090,10 @@ void setup() {
     display_ready = true;
   }
 
-  initPmu();
+  // M5GFX bus init deliberately forces GPIO11 LOW first. Apply the persisted
+  // frontlight level only after display initialization is complete.
+  applyFrontlightSetting();
+
   registerWebRoutes();
 
   if (wifiCredentialsSaved() &&
@@ -3033,8 +4121,8 @@ void setup() {
 
   Serial.println(
       "Physical IO48 button: short press = setup mode; "
-      "long hold = draw OFF screen + PMU shutdown. "
-      "Physical PWR button wakes the unit.");
+      "2-second hold = OFF screen + true PMU shutdown. "
+      "While truly off, RST stays dead and PWR/QON wakes the unit.");
 }
 
 void loop() {
@@ -3042,15 +4130,58 @@ void loop() {
 
   if (setup_mode) {
     dns_server.processNextRequest();
-  } else {
-    serviceHomeNetwork();
-    serviceUdp();
   }
+
+  serviceHomeNetwork();
+  serviceUdp();
 
   serviceCachedReading();
   serviceT5PowerDisplay();
 
   web_server.handleClient();
+
+  if (deferred_home_connect) {
+    deferred_home_connect = false;
+
+    if (!connectHomeWifi()) {
+      Serial.println(
+          "Saved home Wi-Fi could not be joined; local setup AP remains available.");
+    } else if (setup_mode) {
+      // STA association may move the shared AP/ESP-NOW channel. Rebuild the AP
+      // on the actual home channel so the local portal and ESP-NOW stay aligned.
+      dns_server.stop();
+      WiFi.softAPdisconnect(false);
+      delay(100);
+
+      const uint8_t home_channel =
+          static_cast<uint8_t>(
+              WiFi.channel());
+
+      WiFi.softAPConfig(
+          setup_ip,
+          setup_gateway,
+          setup_subnet);
+
+      if (WiFi.softAP(
+              setup_ssid.c_str(),
+              config_data.setup_password,
+              home_channel,
+              0,
+              4)) {
+        dns_server.start(
+            SETUP_DNS_PORT,
+            "*",
+            WiFi.softAPIP());
+
+        startProvisioningRadio();
+        startUdp();
+
+        Serial.printf(
+            "Setup AP now coexists with home Wi-Fi on channel %u.\n",
+            home_channel);
+      }
+    }
+  }
 
   if (deferred_exit_setup &&
       static_cast<int32_t>(

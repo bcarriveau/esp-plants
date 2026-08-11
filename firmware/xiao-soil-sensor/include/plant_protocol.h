@@ -70,6 +70,17 @@ struct __attribute__((packed)) ProvisionAckPacket {
   uint32_t checksum;
 };
 
+// Identification command used by either setup-mode ESP-NOW or the normal
+// home-Wi-Fi UDP path. It does not alter provisioning, calibration, or readings.
+struct __attribute__((packed)) LocatePacket {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t packet_size;
+  uint32_t sensor_id;
+  uint16_t flash_ms;
+  uint32_t checksum;
+};
+
 inline uint32_t fnv1a(const uint8_t* data, size_t length) {
   uint32_t hash = 2166136261UL;
 
@@ -121,5 +132,9 @@ inline const char* stateName(MoistureState state) {
 static_assert(
     sizeof(ProvisionPacket) <= 255,
     "ProvisionPacket packet_size field is only 8 bits.");
+
+static_assert(
+    sizeof(LocatePacket) <= 255,
+    "LocatePacket packet_size field is only 8 bits.");
 
 }  // namespace plant

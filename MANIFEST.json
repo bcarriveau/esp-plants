@@ -1,34 +1,54 @@
 {
-  "CHANGELOG.md": {
-    "bytes": 7608,
-    "sha256": "6decf662b8f1bf681a89afc5c8bb7f290e47e953d5f4ca8e671849119bf17227"
+  "project": "ESP PLANTS",
+  "candidate": "Wi-Fi + ESP-NOW coexistence / smart locate",
+  "github_source_of_truth": "bcarriveau/esp-plants",
+  "github_modified": false,
+  "version_bumped": false,
+  "compile_performed": false,
+  "static_validation": {
+    "cpp_lexical_and_delimiter_balance": "PASS",
+    "t5_protocol_matches_xiao_protocol": "PASS",
+    "t5_test9_reader_shutdown_functions_unchanged": "PASS",
+    "t5_shutdownNow_unchanged": "PASS",
+    "t5_startUdp_serviceUdp_sendUdpAck_unchanged": "PASS",
+    "xiao_measurement_calibration_adaptive_sleep_functions_unchanged": "PASS",
+    "t5_wifi_espnow_peer_channel_zero_current_channel": "PASS",
+    "xiao_unprovisioned_channel_search_and_lock_present": "PASS",
+    "xiao_channel_lock_loss_recovery_present": "PASS",
+    "xiao_service_wifi_espnow_coexistence_present": "PASS"
   },
-  "COMMIT MESSAGE.txt": {
-    "bytes": 480,
-    "sha256": "062b5e71adff22323f9f808bae4c0b2882731e35b741a40a3cbc226022aafd0a"
-  },
-  "COPY THESE FILES.txt": {
-    "bytes": 700,
-    "sha256": "f5800a53a62380f753a6b6c38710ccc0f06a6bc8892d5a60025fe7fcda2a1bb5"
-  },
-  "README.md": {
-    "bytes": 8206,
-    "sha256": "3440c2a85e8031a9ac6c370dbd1ac3121839f63388560bb18a3f7d43e59c8c2f"
-  },
-  "docs/TESTING.md": {
-    "bytes": 6269,
-    "sha256": "729d2666f86490753c1b5d31eea09c848e8f07c202f43dea240503f9ff25551f"
-  },
-  "firmware/t5-hub/assets/t5_off_screen.png": {
-    "bytes": 40816,
-    "sha256": "e6d83a67ccdd9f2275098d7f91b79a77198b52b8a75beede6d0ac327d2b0e195"
-  },
-  "firmware/t5-hub/include/t5_off_screen_xbm.h": {
-    "bytes": 397235,
-    "sha256": "76be71767ef15a051fcf10f605e07e6ca9f3750625398a12ab19b5250c6c4fa0"
-  },
-  "firmware/t5-hub/src/main.cpp": {
-    "bytes": 69066,
-    "sha256": "48d4833573e86520999be23753f8108eaa5af13afaba10eee77db6f24fbe8786"
+  "files": {
+    "COMMIT MESSAGE.txt": {
+      "bytes": 514,
+      "sha256": "ce38c8f6ba22b794951b9b54b490ddb26ddd498ef2ffad6de5f87a65f37eb6f4"
+    },
+    "VERIFY BEFORE COMMIT.txt": {
+      "bytes": 4142,
+      "sha256": "bc410b5db588504ebbc81e138d4816dfb357d61421d3f5cf9c464377f72c2ce7"
+    },
+    "firmware/t5-hub/boards/T5-ePaper-S3.json": {
+      "bytes": 971,
+      "sha256": "b0e1a9d86051b716315b0bd66a08fde48c57c5d1499dec4d35b46741e35d3e29"
+    },
+    "firmware/t5-hub/include/plant_protocol.h": {
+      "bytes": 3264,
+      "sha256": "0b38ebdb54f527a227aac35354dd80d81a2d743a9cb671c4ab246ae0c15bb6b9"
+    },
+    "firmware/t5-hub/platformio.ini": {
+      "bytes": 445,
+      "sha256": "0742341bc7ac169b0789ef7e2274c573cdcc2d3d810d57e38a45b92bc4629e84"
+    },
+    "firmware/t5-hub/src/main.cpp": {
+      "bytes": 101399,
+      "sha256": "a1c7534c7c0c9e4a7ea9e8381dfeb3912c24208ac870f7bd943e043ebf04ce2e"
+    },
+    "firmware/xiao-soil-sensor/include/plant_protocol.h": {
+      "bytes": 3264,
+      "sha256": "0b38ebdb54f527a227aac35354dd80d81a2d743a9cb671c4ab246ae0c15bb6b9"
+    },
+    "firmware/xiao-soil-sensor/src/main.cpp": {
+      "bytes": 64454,
+      "sha256": "686f9fdd24f5c404f2c8db40a9ed629779255c6d40ae8a05ad638a8624baf8ee"
+    }
   }
 }
