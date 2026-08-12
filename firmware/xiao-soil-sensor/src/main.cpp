@@ -31,6 +31,12 @@ constexpr uint32_t SENSOR_PWM_HZ = 200000;
 constexpr uint8_t SENSOR_PWM_BITS = 7;
 constexpr float SENSOR_PWM_DUTY = 0.68f;
 
+// The probe only needs excitation while soil is actually being measured.
+// Keep the proven 800 ms startup settling time, then shut PWM back off before
+// any battery/network work.
+constexpr uint32_t SENSOR_EXCITATION_SETTLE_MS = 800;
+constexpr uint32_t BATTERY_RECOVERY_MS = 100;
+
 // Default calibration used only until this individual sensor is calibrated.
 // These preserve the values already proven on this physical test sensor so a
 // firmware update does not silently change its scale.
@@ -206,6 +212,7 @@ WiFiUDP udp;
 bool service_mode_active = false;
 bool provisioning_mode_active = false;
 bool esp_now_ready = false;
+bool sensor_excitation_active = false;
 std::atomic<bool> provision_channel_locked{false};
 std::atomic<uint8_t> discovered_t5_channel{0};
 std::atomic<uint32_t> last_t5_espnow_ack_ms{0};
@@ -977,6 +984,10 @@ uint8_t batteryPercentFromMillivolts(float mv) {
 }
 
 bool startSensorExcitation() {
+  if (sensor_excitation_active) {
+    return true;
+  }
+
   if (!ledcAttach(
           PIN_SENSOR_PWM,
           SENSOR_PWM_HZ,
@@ -991,18 +1002,40 @@ bool startSensorExcitation() {
       static_cast<uint32_t>(
           (max_duty * SENSOR_PWM_DUTY) + 0.5f);
 
-  return ledcWrite(PIN_SENSOR_PWM, duty);
+  if (!ledcWrite(PIN_SENSOR_PWM, duty)) {
+    ledcDetach(PIN_SENSOR_PWM);
+    pinMode(PIN_SENSOR_PWM, OUTPUT);
+    digitalWrite(PIN_SENSOR_PWM, LOW);
+    return false;
+  }
+
+  sensor_excitation_active = true;
+  return true;
 }
 
 void stopSensorExcitation() {
-  ledcWrite(PIN_SENSOR_PWM, 0);
-  ledcDetach(PIN_SENSOR_PWM);
+  if (sensor_excitation_active) {
+    ledcWrite(PIN_SENSOR_PWM, 0);
+    ledcDetach(PIN_SENSOR_PWM);
+    sensor_excitation_active = false;
+  }
+
   pinMode(PIN_SENSOR_PWM, OUTPUT);
   digitalWrite(PIN_SENSOR_PWM, LOW);
 }
 
-Measurement takeMeasurement() {
-  Measurement result{};
+bool takeMeasurement(
+    Measurement& result,
+    const Measurement* battery_reference = nullptr) {
+  result = Measurement{};
+
+  if (!startSensorExcitation()) {
+    Serial.println(
+        "Soil excitation failed while taking measurement.");
+    return false;
+  }
+
+  delay(SENSOR_EXCITATION_SETTLE_MS);
 
   result.soil =
       readAveraged(
@@ -1010,11 +1043,32 @@ Measurement takeMeasurement() {
           SOIL_SAMPLES,
           200);
 
-  result.battery =
-      readAveraged(
-          PIN_BATTERY_ADC,
-          BATTERY_SAMPLES,
-          20);
+  // The probe is no longer needed once the soil ADC has been captured.
+  // Shut it off before battery/network work instead of leaving 200 kHz PWM
+  // running for the entire awake/service/provisioning window.
+  stopSensorExcitation();
+
+  if (battery_reference != nullptr) {
+    // Service mode already has a battery sample captured before Wi-Fi starts.
+    // Reuse it while Wi-Fi remains deliberately awake so radio load/sag is not
+    // misreported as rapid AA capacity loss every five seconds.
+    result.battery =
+        battery_reference->battery;
+    result.battery_percent =
+        battery_reference->battery_percent;
+  } else {
+    delay(BATTERY_RECOVERY_MS);
+
+    result.battery =
+        readAveraged(
+            PIN_BATTERY_ADC,
+            BATTERY_SAMPLES,
+            20);
+
+    result.battery_percent =
+        batteryPercentFromMillivolts(
+            static_cast<float>(result.battery.mv));
+  }
 
   result.moisture_percent =
       moisturePercentFromMillivolts(
@@ -1024,11 +1078,7 @@ Measurement takeMeasurement() {
       stateFromPercent(
           result.moisture_percent);
 
-  result.battery_percent =
-      batteryPercentFromMillivolts(
-          static_cast<float>(result.battery.mv));
-
-  return result;
+  return true;
 }
 
 plant::ReadingPacket makeReadingPacket(
@@ -1981,6 +2031,14 @@ float readCalibrationSoilMillivolts(
       label,
       CALIBRATION_SAMPLES);
 
+  if (!startSensorExcitation()) {
+    Serial.println(
+        "Calibration soil excitation failed.");
+    return NAN;
+  }
+
+  delay(SENSOR_EXCITATION_SETTLE_MS);
+
   uint64_t mv_sum = 0;
 
   // Prime the ADC in the same manner as normal readings.
@@ -2008,6 +2066,8 @@ float readCalibrationSoilMillivolts(
     delay(
         CALIBRATION_SAMPLE_DELAY_MS);
   }
+
+  stopSensorExcitation();
 
   const float average =
       static_cast<float>(mv_sum) /
@@ -2141,9 +2201,17 @@ bool runFactoryStyleCalibration() {
 // ============================================================================
 
 bool sendFreshServiceReading(
-    uint32_t& t5_requested_wake_seconds) {
-  const Measurement measurement =
-      takeMeasurement();
+    uint32_t& t5_requested_wake_seconds,
+    const Measurement& battery_reference) {
+  Measurement measurement{};
+
+  if (!takeMeasurement(
+          measurement,
+          &battery_reference)) {
+    Serial.println(
+        "Service measurement failed; keeping the service window alive.");
+    return false;
+  }
 
   printMeasurement(measurement);
 
@@ -2190,7 +2258,9 @@ bool sendFreshServiceReading(
   Serial.println(
       "Green LED stays ON while the sensor is manually awake.");
   Serial.println(
-      "Fresh readings are sampled automatically every 5 seconds.");
+      "Fresh soil readings are sampled automatically every 5 seconds.");
+  Serial.println(
+      "Battery value reuses the pre-Wi-Fi service-entry sample.");
   Serial.println(
       "Single short press: send immediately and restart the 2-minute timer.");
   Serial.println(
@@ -2355,7 +2425,8 @@ bool sendFreshServiceReading(
                 "sending a reading with the new scale.");
 
             sendFreshServiceReading(
-                t5_requested_wake_seconds);
+                t5_requested_wake_seconds,
+                initial_measurement);
           }
         }
       }
@@ -2403,7 +2474,8 @@ bool sendFreshServiceReading(
                 : "es");
 
         sendFreshServiceReading(
-            t5_requested_wake_seconds);
+            t5_requested_wake_seconds,
+            initial_measurement);
 
         last_service_sample_ms =
             millis();
@@ -2434,7 +2506,8 @@ bool sendFreshServiceReading(
               "Service mode: Wi-Fi restored.");
 
           sendFreshServiceReading(
-              t5_requested_wake_seconds);
+              t5_requested_wake_seconds,
+              initial_measurement);
 
           last_service_sample_ms =
               millis();
@@ -2458,7 +2531,8 @@ bool sendFreshServiceReading(
           "Service auto-sample: taking fresh reading...");
 
       sendFreshServiceReading(
-          t5_requested_wake_seconds);
+          t5_requested_wake_seconds,
+          initial_measurement);
     }
 
     delay(20);
@@ -2547,16 +2621,13 @@ void setup() {
 
   loadCalibration();
 
-  if (!startSensorExcitation()) {
+  Measurement measurement{};
+
+  if (!takeMeasurement(measurement)) {
     Serial.println(
-        "Fatal: soil excitation failed.");
+        "Fatal: initial soil measurement failed.");
     sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
   }
-
-  delay(800);
-
-  const Measurement measurement =
-      takeMeasurement();
 
   printMeasurement(measurement);
 

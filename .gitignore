@@ -30,3 +30,5 @@ secrets.*
 # Serial/build logs
 *.log
 logs/
+
+*.ps1
