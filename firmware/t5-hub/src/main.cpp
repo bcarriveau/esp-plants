@@ -10,6 +10,8 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 
+#include <atomic>
+
 #include <M5GFX.h>
 #include "driver/gpio.h"
 #include "lgfx/v1/platforms/esp32/Bus_EPD.h"
@@ -51,7 +53,6 @@ constexpr uint32_t WIFI_UDP_SETTLE_MS = 500;
 // sensor has ever been seen. ESP PLANTS sensors sleep by design, so the web
 // page also shows the last-seen age instead of treating normal sleep as a fault.
 constexpr uint32_t WIFI_SENSOR_RECENT_MS = 12000;
-constexpr uint32_t WIFI_SERVICE_BURST_MAX_GAP_MS = 9000;
 constexpr uint32_t ESPNOW_SENSOR_RECENT_MS = 8000;
 
 // Wi-Fi and ESP-NOW share the same 2.4 GHz radio/channel. The T5 keeps
@@ -195,7 +196,7 @@ uint8_t pca_output[2] = {0xFE, 0x00};
 
 bool pmu_ready = false;
 
-// Defined later, but used by the Reader-style power-off deinit path.
+// Defined later, but used by the display/frontlight shutdown path.
 void frontlightHardwareOff();
 
 // ============================================================================
@@ -332,16 +333,6 @@ void prepareBoardLikeReader() {
   forceReaderSafePeripheralState();
 }
 
-void deinitForPowerOffLikeReader() {
-  digitalWrite(PIN_BACKLIGHT, LOW);
-  pinMode(PIN_BACKLIGHT, OUTPUT);
-
-  forceReaderSafePeripheralState();
-
-  pinMode(PIN_SD_CS, INPUT);
-  pinMode(PIN_GPS_RXD, INPUT);
-  pinMode(PIN_GPS_TXD, INPUT);
-}
 
 bool bqWriteReg(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(BQ25896_ADDR);
@@ -540,28 +531,6 @@ bool batteryOnlyAccordingToReader() {
       (reg11 & BQ_REG11_VBUS_GD) != 0;
 
   return !power_good && !vbus_good;
-}
-
-bool readerShutdownBatteryPower() {
-  // Hardware-verified Test 9 shutdown sequence:
-  // 1) disable OTG, 2) disable charging, 3) BATFET_DIS.
-  if (!bqUpdateBits(
-          BQ_REG03,
-          BQ_REG03_OTG_CONFIG,
-          0))
-    return false;
-
-  if (!bqUpdateBits(
-          BQ_REG03,
-          BQ_REG03_CHG_CONFIG,
-          0))
-    return false;
-
-  // Successful true-off removes SYS during this final transaction.
-  return bqUpdateBits(
-      BQ_REG09,
-      BQ_REG09_BATFET_DIS,
-      BQ_REG09_BATFET_DIS);
 }
 
 
@@ -851,10 +820,8 @@ struct LivePlant {
   plant::ReadingPacket packet;
   uint32_t last_seen_ms;
   uint32_t last_udp_seen_ms;
-  uint32_t last_udp_service_ms;
   uint32_t last_espnow_seen_ms;
   IPAddress source_ip;
-  bool via_udp;
 };
 
 struct ReceivedEvent {
@@ -924,9 +891,10 @@ uint32_t wifi_connected_at_ms = 0;
 uint32_t last_wifi_reconnect_attempt_ms = 0;
 uint32_t last_udp_retry_ms = 0;
 
-// Last application-level provisioning acknowledgement.
-volatile uint32_t provision_ack_sensor_id = 0;
-volatile bool provision_ack_received = false;
+// Last application-level provisioning acknowledgement crosses the ESP-NOW
+// callback/task boundary, so use real C++ atomics rather than volatile.
+std::atomic<uint32_t> provision_ack_sensor_id{0};
+std::atomic<bool> provision_ack_received{false};
 
 FrontlightLevel frontlight_level =
     FrontlightLevel::Off;
@@ -2045,9 +2013,8 @@ void drawPowerOffScreen() {
   finishFrame();
 
   // Frontlight PWM is an application feature, not part of the hardware-verified
-  // Reader/Test-9 power sequence. Quiesce it here, after the OFF image is fully
-  // refreshed, then let deinitForPowerOffLikeReader() perform the exact proven
-  // GPIO11 LOW/output sequence again immediately before BATFET shutdown.
+  // Reader/Test-9 power sequence. Quiesce it here after the OFF image is fully
+  // refreshed; shutdownNow() then enters the exact proven Test-10 cutoff path.
   frontlightHardwareOff();
 }
 
@@ -2486,11 +2453,13 @@ void handleEspNowData(
     if (!plant::validatePacket(ack))
       return;
 
-    provision_ack_sensor_id =
-        ack.sensor_id;
+    provision_ack_sensor_id.store(
+        ack.sensor_id,
+        std::memory_order_relaxed);
 
-    provision_ack_received =
-        ack.accepted == 1;
+    provision_ack_received.store(
+        ack.accepted == 1,
+        std::memory_order_release);
 
     Serial.printf(
         "Provision ACK from sensor "
@@ -2675,8 +2644,12 @@ bool sendProvisionPacket(
 
   plant::finalizePacket(packet);
 
-  provision_ack_received = false;
-  provision_ack_sensor_id = 0;
+  provision_ack_received.store(
+      false,
+      std::memory_order_relaxed);
+  provision_ack_sensor_id.store(
+      0,
+      std::memory_order_relaxed);
 
   Serial.printf(
       "Provisioning sensor 0x%08lX on coexistence channel %u...\n",
@@ -2706,8 +2679,10 @@ bool sendProvisionPacket(
 
     while ((millis() - wait_start) <
            450) {
-      if (provision_ack_received &&
-          provision_ack_sensor_id ==
+      if (provision_ack_received.load(
+              std::memory_order_acquire) &&
+          provision_ack_sensor_id.load(
+              std::memory_order_relaxed) ==
               sensor_id) {
         record.provisioned = 1;
         saveConfig();
@@ -3838,17 +3813,6 @@ void initPmu() {
   }
 }
 
-[[noreturn]] void remainInertAfterShutdownReturn(bool returned) {
-  Serial.printf(
-      "PMU shutdown returned=%s; remaining inert.\n",
-      returned ? "true" : "false");
-  Serial.flush();
-
-  while (true) {
-    digitalWrite(PIN_BACKLIGHT, LOW);
-    delay(1000);
-  }
-}
 
 void shutdownNow() {
   if (!pmu_ready) {
@@ -3962,23 +3926,26 @@ void processReceivedEvent(
       millis();
 
   live.last_seen_ms = seen_ms;
-  live.via_udp = event.via_udp;
 
   if (event.via_udp) {
-    if (live.last_udp_seen_ms != 0 &&
-        (seen_ms - live.last_udp_seen_ms) <=
-            WIFI_SERVICE_BURST_MAX_GAP_MS) {
-      // Two reports only a few seconds apart match the XIAO green service
-      // window. Use this stronger signal for Wi-Fi Locate so a one-off
-      // scheduled wake is not mistaken for a sensor that is still awake.
-      live.last_udp_service_ms = seen_ms;
-    }
-
     live.last_udp_seen_ms = seen_ms;
     live.source_ip = event.source_ip;
 
-    config_data.plants[
-        persistent_index].provisioned = 1;
+    PersistedPlant& persisted =
+        config_data.plants[persistent_index];
+
+    // A valid home-Wi-Fi/UDP reading is proof that this sensor has working
+    // network credentials. Persist the 0->1 transition once instead of merely
+    // changing the in-memory status until the T5 reboots.
+    if (!persisted.provisioned) {
+      persisted.provisioned = 1;
+
+      if (!saveConfig()) {
+        persisted.provisioned = 0;
+        Serial.println(
+            "Could not persist Wi-Fi-provisioned sensor state; will retry on the next UDP reading.");
+      }
+    }
   } else {
     live.last_espnow_seen_ms = seen_ms;
 
@@ -4082,6 +4049,12 @@ void setup() {
       xQueueCreate(
           10,
           sizeof(ReceivedEvent));
+
+  if (receive_queue == nullptr) {
+    Serial.println(
+        "FATAL: receive queue allocation failed.");
+    while (true) delay(1000);
+  }
 
   if (!display.init_without_reset(false)) {
     Serial.println(
