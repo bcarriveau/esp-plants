@@ -81,6 +81,36 @@ struct __attribute__((packed)) LocatePacket {
   uint32_t checksum;
 };
 
+// T5-authoritative physical slot identity. This is additive protocol-v3
+// traffic; the existing Reading/Ack/Provision/Locate packet layouts remain
+// unchanged. Slot 0 is used only with Clear; Assign accepts slots 1..16.
+enum class IdentityCommand : uint8_t {
+  Assign = 1,
+  Clear = 2
+};
+
+struct __attribute__((packed)) IdentityPacket {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t packet_size;
+  uint32_t sensor_id;
+  IdentityCommand command;
+  uint8_t slot;
+  uint16_t request_id;
+  uint32_t checksum;
+};
+
+struct __attribute__((packed)) IdentityAckPacket {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t packet_size;
+  uint32_t sensor_id;
+  uint8_t slot;
+  uint8_t accepted;
+  uint16_t request_id;
+  uint32_t checksum;
+};
+
 inline uint32_t fnv1a(const uint8_t* data, size_t length) {
   uint32_t hash = 2166136261UL;
 
@@ -129,12 +159,16 @@ inline const char* stateName(MoistureState state) {
   }
 }
 
+static_assert(sizeof(ReadingPacket) == 30, "ReadingPacket layout changed.");
+static_assert(sizeof(AckPacket) == 23, "AckPacket layout changed.");
+static_assert(sizeof(ProvisionPacket) == 114, "ProvisionPacket layout changed.");
+static_assert(sizeof(ProvisionAckPacket) == 15, "ProvisionAckPacket layout changed.");
+static_assert(sizeof(LocatePacket) == 16, "LocatePacket layout changed.");
+static_assert(sizeof(IdentityPacket) == 18, "IdentityPacket layout changed.");
+static_assert(sizeof(IdentityAckPacket) == 18, "IdentityAckPacket layout changed.");
+
 static_assert(
     sizeof(ProvisionPacket) <= 255,
     "ProvisionPacket packet_size field is only 8 bits.");
-
-static_assert(
-    sizeof(LocatePacket) <= 255,
-    "LocatePacket packet_size field is only 8 bits.");
 
 }  // namespace plant

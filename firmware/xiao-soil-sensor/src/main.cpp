@@ -5,6 +5,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_sleep.h>
+#include <esp_mac.h>
 
 #include <atomic>
 
@@ -104,11 +105,14 @@ constexpr uint32_t PROVISION_SECOND_RETRY_SLEEP_SECONDS = 15 * 60;
 // window is actively searching for the T5.
 constexpr uint32_t UNPROVISIONED_LED_PHASE_MS = 350;
 
-// Sensor-number visual language. One long green pulse means ten; each short
-// green pulse means one. Example: #13 = one long + three short.
-constexpr uint32_t IDENTITY_SHORT_PULSE_MS = 180;
-constexpr uint32_t IDENTITY_LONG_PULSE_MS = 800;
-constexpr uint32_t IDENTITY_ELEMENT_GAP_MS = 180;
+// Sensor-number visual language. RED is reserved for the deliberate number
+// pattern so it is visually distinct from the solid GREEN service-ready state.
+// One long red pulse means ten; each short red pulse means one.
+// Example: #13 = one long + three short.
+constexpr uint32_t IDENTITY_SHORT_PULSE_MS = 300;
+constexpr uint32_t IDENTITY_LONG_PULSE_MS = 1000;
+constexpr uint32_t IDENTITY_ELEMENT_GAP_MS = 300;
+constexpr uint32_t IDENTITY_TO_SERVICE_PAUSE_MS = 600;
 
 // A brand-new sensor does not know the T5/home channel yet. It walks the
 // 2.4 GHz channels until it hears the T5's ESP-NOW ACK, then locks there.
@@ -261,6 +265,15 @@ std::atomic<bool> provision_received{false};
 std::atomic<uint32_t> locate_request_ms{0};
 SensorConfig pending_config{};
 
+bool identity_confirmed_this_wake = false;
+
+struct PendingIdentityEvent {
+  uint8_t source_mac[6];
+  plant::IdentityPacket packet;
+};
+
+QueueHandle_t identity_queue = nullptr;
+
 struct AdcReading {
   uint32_t raw;
   uint32_t mv;
@@ -314,12 +327,12 @@ void updateUnprovisionedIndicator(
       show_red ? LOW : HIGH);
 }
 
-void pulseGreen(
+void pulseIdentityRed(
     uint32_t on_ms) {
   allStatusLedsOff();
-  digitalWrite(PIN_LED_GREEN, HIGH);
+  digitalWrite(PIN_LED_RED, HIGH);
   delay(on_ms);
-  digitalWrite(PIN_LED_GREEN, LOW);
+  digitalWrite(PIN_LED_RED, LOW);
 }
 
 void flashSensorNumberOnce(
@@ -337,7 +350,8 @@ void flashSensorNumberOnce(
           : slot;
 
   if (slot >= 10) {
-    pulseGreen(IDENTITY_LONG_PULSE_MS);
+    pulseIdentityRed(
+        IDENTITY_LONG_PULSE_MS);
 
     if (short_count > 0) {
       delay(IDENTITY_ELEMENT_GAP_MS);
@@ -347,7 +361,8 @@ void flashSensorNumberOnce(
   for (uint8_t i = 0;
        i < short_count;
        ++i) {
-    pulseGreen(IDENTITY_SHORT_PULSE_MS);
+    pulseIdentityRed(
+        IDENTITY_SHORT_PULSE_MS);
 
     if (i + 1 < short_count) {
       delay(IDENTITY_ELEMENT_GAP_MS);
@@ -875,7 +890,7 @@ bool loadIdentity() {
   cached_identity_slot = stored.slot;
 
   Serial.printf(
-      "Cached T5 slot: #%u (awaiting T5 authority/confirmation).\\n",
+      "Cached T5 slot: #%u (awaiting T5 authority/confirmation).\n",
       cached_identity_slot);
 
   return true;
@@ -923,29 +938,92 @@ bool saveIdentitySlot(
   cached_identity_slot = slot;
 
   Serial.printf(
-      "Cached T5 slot saved: #%u.\\n",
+      "Cached T5 slot saved: #%u.\n",
       cached_identity_slot);
 
   return true;
 }
 
 bool clearIdentitySlot() {
-  bool removed = false;
+  if (cached_identity_slot == 0) {
+    initializeEmptyIdentity();
+    return true;
+  }
 
-  if (preferences.begin(
+  if (!preferences.begin(
           IDENTITY_NAMESPACE,
           false)) {
-    removed =
-        preferences.remove(
-            IDENTITY_KEY);
-    preferences.end();
+    Serial.println(
+        "Identity NVS clear failed: Preferences.begin().");
+    return false;
+  }
+
+  const bool removed =
+      preferences.remove(
+          IDENTITY_KEY);
+
+  preferences.end();
+
+  if (!removed) {
+    Serial.println(
+        "Identity NVS clear failed.");
+    return false;
   }
 
   initializeEmptyIdentity();
 
   Serial.println(
       "Cached T5 slot cleared.");
-  return removed;
+  return true;
+}
+
+bool applyIdentityPacket(
+    const plant::IdentityPacket& packet) {
+  if (!plant::validatePacket(packet) ||
+      packet.sensor_id != sensor_id) {
+    return false;
+  }
+
+  if (packet.command ==
+      plant::IdentityCommand::Assign) {
+    if (packet.slot < 1 ||
+        packet.slot > MAX_IDENTITY_SLOT) {
+      return false;
+    }
+
+    if (cached_identity_slot !=
+        packet.slot) {
+      if (!saveIdentitySlot(
+              packet.slot)) {
+        return false;
+      }
+    }
+
+    identity_confirmed_this_wake = true;
+
+    Serial.printf(
+        "T5 authority confirmed: Sensor #%u (request %u).\n",
+        packet.slot,
+        packet.request_id);
+    return true;
+  }
+
+  if (packet.command ==
+      plant::IdentityCommand::Clear) {
+    if (cached_identity_slot != 0 &&
+        !clearIdentitySlot()) {
+      return false;
+    }
+
+    identity_confirmed_this_wake = true;
+
+    Serial.printf(
+        "T5 authority cleared local slot assignment (request %u).\n",
+        packet.request_id);
+    return true;
+  }
+
+  return false;
 }
 
 
@@ -1494,7 +1572,7 @@ void printMeasurement(const Measurement& measurement) {
 
   if (button_wake_result != ESP_OK) {
     Serial.printf(
-        "WARNING: top-button wake setup failed: %s\\n",
+        "WARNING: top-button wake setup failed: %s\n",
         esp_err_to_name(button_wake_result));
     Serial.flush();
   }
@@ -1517,10 +1595,10 @@ void printMeasurement(const Measurement& measurement) {
   }
 
   Serial.printf(
-      "Provisioning attempt failed: %s\\n",
+      "Provisioning attempt failed: %s\n",
       reason);
   Serial.printf(
-      "Failed provisioning attempts: %u/%u.\\n",
+      "Failed provisioning attempts: %u/%u.\n",
       provisioning_failed_windows,
       PROVISION_MAX_FAILED_WINDOWS);
 
@@ -1540,7 +1618,7 @@ void printMeasurement(const Measurement& measurement) {
           : PROVISION_SECOND_RETRY_SLEEP_SECONDS;
 
   Serial.printf(
-      "Provisioning retry will wake in %lu minutes.\\n",
+      "Provisioning retry will wake in %lu minutes.\n",
       static_cast<unsigned long>(
           retry_sleep_seconds / 60));
 
@@ -1574,6 +1652,102 @@ void sendProvisionAck(const uint8_t* mac) {
       mac,
       reinterpret_cast<const uint8_t*>(&ack),
       sizeof(ack));
+}
+
+void sendIdentityAckEspNow(
+    const uint8_t* mac,
+    const plant::IdentityPacket& request,
+    bool accepted) {
+  if (!esp_now_is_peer_exist(mac)) {
+    esp_now_peer_info_t peer{};
+    memcpy(peer.peer_addr, mac, 6);
+    peer.channel = 0;
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = false;
+
+    const esp_err_t peer_result =
+        esp_now_add_peer(&peer);
+
+    if (peer_result != ESP_OK) {
+      Serial.printf(
+          "Identity ACK peer add failed: %s\n",
+          esp_err_to_name(peer_result));
+      return;
+    }
+  }
+
+  plant::IdentityAckPacket ack{};
+  ack.magic = plant::PACKET_MAGIC;
+  ack.version = plant::PROTOCOL_VERSION;
+  ack.packet_size = sizeof(ack);
+  ack.sensor_id = sensor_id;
+  ack.slot =
+      request.command ==
+              plant::IdentityCommand::Clear
+          ? 0
+          : request.slot;
+  ack.accepted = accepted ? 1 : 0;
+  ack.request_id =
+      request.request_id;
+
+  plant::finalizePacket(ack);
+
+  const esp_err_t result =
+      esp_now_send(
+          mac,
+          reinterpret_cast<const uint8_t*>(
+              &ack),
+          sizeof(ack));
+
+  Serial.printf(
+      "Identity ACK via ESP-NOW: request %u, slot #%u, %s (%s).\n",
+      ack.request_id,
+      ack.slot,
+      accepted ? "ACCEPTED" : "REJECTED",
+      esp_err_to_name(result));
+}
+
+void queueIdentityFromEspNow(
+    const uint8_t* source_mac,
+    const plant::IdentityPacket& packet) {
+  if (identity_queue == nullptr)
+    return;
+
+  PendingIdentityEvent event{};
+  memcpy(
+      event.source_mac,
+      source_mac,
+      6);
+  event.packet = packet;
+
+  if (xQueueSend(
+          identity_queue,
+          &event,
+          0) != pdPASS) {
+    Serial.println(
+        "Identity queue full; T5 will resend confirmation.");
+  }
+}
+
+void servicePendingEspNowIdentity() {
+  if (identity_queue == nullptr)
+    return;
+
+  PendingIdentityEvent event{};
+
+  while (xQueueReceive(
+             identity_queue,
+             &event,
+             0) == pdTRUE) {
+    const bool accepted =
+        applyIdentityPacket(
+            event.packet);
+
+    sendIdentityAckEspNow(
+        event.source_mac,
+        event.packet,
+        accepted);
+  }
 }
 
 uint8_t currentRadioChannel();
@@ -1625,6 +1799,24 @@ void handleEspNowPacket(
     const uint8_t* source_mac,
     const uint8_t* data,
     int length) {
+  if (length ==
+      sizeof(plant::IdentityPacket)) {
+    plant::IdentityPacket packet{};
+    memcpy(
+        &packet,
+        data,
+        sizeof(packet));
+
+    if (plant::validatePacket(packet) &&
+        packet.sensor_id == sensor_id) {
+      queueIdentityFromEspNow(
+          source_mac,
+          packet);
+    }
+
+    return;
+  }
+
   if (acceptLocatePacket(
           data,
           length,
@@ -1867,31 +2059,58 @@ void sendProvisionBeacon(
 
 void runLocateFlash(
     uint32_t duration_ms) {
-  Serial.printf(
-      "LOCATE: flashing all status LEDs for %lu ms.\n",
-      static_cast<unsigned long>(
-          duration_ms));
-
   const uint32_t started =
       millis();
 
-  bool on = false;
+  if (identity_confirmed_this_wake &&
+      cached_identity_slot >= 1 &&
+      cached_identity_slot <=
+          MAX_IDENTITY_SLOT) {
+    Serial.printf(
+        "IDENTIFY: Sensor #%u, RED long=10 / short=1, repeating for %lu ms.\n",
+        cached_identity_slot,
+        static_cast<unsigned long>(
+            duration_ms));
 
-  while ((millis() - started) <
-         duration_ms) {
-    on = !on;
+    while ((millis() - started) <
+           duration_ms) {
+      flashSensorNumberOnce(
+          cached_identity_slot);
 
-    digitalWrite(
-        PIN_LED_YELLOW,
-        on ? HIGH : LOW);
-    digitalWrite(
-        PIN_LED_GREEN,
-        on ? HIGH : LOW);
-    digitalWrite(
-        PIN_LED_RED,
-        on ? HIGH : LOW);
+      if ((millis() - started) <
+          duration_ms) {
+        delay(600);
+      }
+    }
 
-    delay(140);
+    delay(
+        IDENTITY_TO_SERVICE_PAUSE_MS);
+  } else {
+    // Never show a potentially stale cached number without current T5
+    // confirmation. Keep the old generic flash as a safe fallback.
+    Serial.printf(
+        "LOCATE: no T5-confirmed slot this wake; using generic LEDs for %lu ms.\n",
+        static_cast<unsigned long>(
+            duration_ms));
+
+    bool on = false;
+
+    while ((millis() - started) <
+           duration_ms) {
+      on = !on;
+
+      digitalWrite(
+          PIN_LED_YELLOW,
+          on ? HIGH : LOW);
+      digitalWrite(
+          PIN_LED_GREEN,
+          on ? HIGH : LOW);
+      digitalWrite(
+          PIN_LED_RED,
+          on ? HIGH : LOW);
+
+      delay(140);
+    }
   }
 
   allStatusLedsOff();
@@ -1904,7 +2123,7 @@ void runLocateFlash(
   }
 
   Serial.println(
-      "LOCATE: flash complete.");
+      "IDENTIFY/LOCATE complete.");
 }
 
 [[noreturn]] void runProvisioningMode(
@@ -1930,7 +2149,7 @@ void runLocateFlash(
           provisioning_failed_windows + 1);
 
   Serial.printf(
-      "Provisioning attempt %u/%u. Unprovisioned LED pattern: RED/GREEN alternating.\\n",
+      "Provisioning attempt %u/%u. Unprovisioned LED pattern: RED/GREEN alternating.\n",
       attempt_number,
       PROVISION_MAX_FAILED_WINDOWS);
 
@@ -1972,6 +2191,10 @@ void runLocateFlash(
     updateUnprovisionedIndicator(
         millis());
 
+    // ESP-NOW callbacks only queue identity requests. NVS writes and the
+    // application-level ACK happen here on the normal Arduino task.
+    servicePendingEspNowIdentity();
+
     const uint32_t locate_ms =
         locate_request_ms.exchange(
             0,
@@ -1986,8 +2209,23 @@ void runLocateFlash(
       if (saveConfig(pending_config)) {
         provisioning_failed_windows = 0;
 
-        allStatusLedsOff();
-        digitalWrite(PIN_LED_GREEN, HIGH);
+        // Drain any slot assignment that arrived immediately before the
+        // ProvisionPacket so the number survives this reboot too.
+        servicePendingEspNowIdentity();
+
+        if (identity_confirmed_this_wake &&
+            cached_identity_slot > 0) {
+          Serial.printf(
+              "Provisioned as Sensor #%u; showing RED physical identity once.\n",
+              cached_identity_slot);
+
+          flashSensorNumberOnce(
+              cached_identity_slot);
+          delay(
+              IDENTITY_TO_SERVICE_PAUSE_MS);
+        }
+
+        serviceLedOn();
 
         Serial.println(
             "Provisioning complete. Failed-attempt counter reset.");
@@ -1995,7 +2233,7 @@ void runLocateFlash(
             "Rebooting into home Wi-Fi mode...");
 
         Serial.flush();
-        delay(1200);
+        delay(900);
         ESP.restart();
       }
 
@@ -2140,6 +2378,97 @@ bool connectHomeWifi() {
   return true;
 }
 
+void sendIdentityAckUdp(
+    const IPAddress& remote_ip,
+    uint16_t remote_port,
+    const plant::IdentityPacket& request,
+    bool accepted) {
+  plant::IdentityAckPacket ack{};
+
+  ack.magic = plant::PACKET_MAGIC;
+  ack.version = plant::PROTOCOL_VERSION;
+  ack.packet_size = sizeof(ack);
+  ack.sensor_id = sensor_id;
+  ack.slot =
+      request.command ==
+              plant::IdentityCommand::Clear
+          ? 0
+          : request.slot;
+  ack.accepted = accepted ? 1 : 0;
+  ack.request_id =
+      request.request_id;
+
+  plant::finalizePacket(ack);
+
+  if (!udp.beginPacket(
+          remote_ip,
+          remote_port)) {
+    Serial.println(
+        "Identity UDP ACK beginPacket failed.");
+    return;
+  }
+
+  const size_t written =
+      udp.write(
+          reinterpret_cast<const uint8_t*>(
+              &ack),
+          sizeof(ack));
+
+  const int end_result =
+      udp.endPacket();
+
+  Serial.printf(
+      "Identity ACK via UDP: request %u, slot #%u, %s (%s).\n",
+      ack.request_id,
+      ack.slot,
+      accepted ? "ACCEPTED" : "REJECTED",
+      written == sizeof(ack) &&
+              end_result == 1
+          ? "SENT"
+          : "FAILED");
+}
+
+bool handleIdentityUdpPacket(
+    int packet_size) {
+  if (packet_size !=
+      sizeof(plant::IdentityPacket)) {
+    return false;
+  }
+
+  const IPAddress remote_ip =
+      udp.remoteIP();
+  const uint16_t remote_port =
+      udp.remotePort();
+
+  plant::IdentityPacket packet{};
+
+  const int read =
+      udp.read(
+          reinterpret_cast<uint8_t*>(
+              &packet),
+          sizeof(packet));
+
+  if (read != sizeof(packet) ||
+      !plant::validatePacket(packet) ||
+      packet.sensor_id != sensor_id) {
+    Serial.println(
+        "Rejected invalid UDP identity packet.");
+    return true;
+  }
+
+  const bool accepted =
+      applyIdentityPacket(
+          packet);
+
+  sendIdentityAckUdp(
+      remote_ip,
+      remote_port,
+      packet,
+      accepted);
+
+  return true;
+}
+
 bool readUdpAck(
     uint32_t expected_sequence,
     uint32_t& next_wake_seconds) {
@@ -2165,8 +2494,12 @@ bool readUdpAck(
     const int packet_size = udp.parsePacket();
 
     if (packet_size > 0) {
-      if (packet_size ==
-          sizeof(plant::AckPacket)) {
+      if (handleIdentityUdpPacket(
+              packet_size)) {
+        // Identity confirmation deliberately precedes the normal reading ACK.
+        // Keep waiting for the matching AckPacket.
+      } else if (packet_size ==
+                 sizeof(plant::AckPacket)) {
         plant::AckPacket ack{};
 
         const int read =
@@ -2228,8 +2561,11 @@ void serviceUdpLocateCommands() {
       udp.parsePacket();
 
   while (packet_size > 0) {
-    if (packet_size ==
-        sizeof(plant::LocatePacket)) {
+    if (handleIdentityUdpPacket(
+            packet_size)) {
+      // Continue draining queued service commands.
+    } else if (packet_size ==
+               sizeof(plant::LocatePacket)) {
       plant::LocatePacket locate{};
 
       const int read =
@@ -2661,10 +2997,18 @@ bool sendFreshServiceReading(
   Serial.println(
       "Wake button released; 2-minute service timer started.");
 
+  // Keep GREEN visible while Wi-Fi and the T5 identity handshake happen.
+  // Once the T5 confirms the slot, the deliberate RED number pattern briefly
+  // takes over, then service returns to solid GREEN.
+  serviceLedOn();
+  identity_confirmed_this_wake = false;
+
   service_mode_active = true;
 
   bool wifi_connected =
       connectHomeWifi();
+
+  bool identity_number_shown = false;
 
   if (wifi_connected) {
     const plant::ReadingPacket first_reading =
@@ -2681,11 +3025,29 @@ bool sendFreshServiceReading(
       rememberSuccessfulReport(
           initial_measurement);
     }
+
+    // ESP-NOW identity may have arrived while the UDP exchange was running.
+    servicePendingEspNowIdentity();
+
+    if (identity_confirmed_this_wake &&
+        cached_identity_slot > 0) {
+      Serial.printf(
+          "Button wake confirmed by T5 as Sensor #%u; showing RED identity.\n",
+          cached_identity_slot);
+
+      flashSensorNumberOnce(
+          cached_identity_slot);
+      identity_number_shown = true;
+      delay(
+          IDENTITY_TO_SERVICE_PAUSE_MS);
+    }
   } else {
     Serial.println(
         "Home Wi-Fi unavailable. "
         "Service mode will stay awake and retry.");
   }
+
+  serviceLedOn();
 
   uint32_t last_activity_ms =
       millis();
@@ -2800,10 +3162,26 @@ bool sendFreshServiceReading(
       }
     }
 
-    // Accept Locate commands over the home network while the provisioned
-    // sensor is deliberately awake in service mode. A Locate received during
-    // the blocking ACK wait is queued by readUdpAck() and handled here too.
+    // Accept identity/Locate commands over both transports while the
+    // provisioned sensor is deliberately awake.
+    servicePendingEspNowIdentity();
     serviceUdpLocateCommands();
+
+    if (!identity_number_shown &&
+        identity_confirmed_this_wake &&
+        cached_identity_slot > 0) {
+      Serial.printf(
+          "Late T5 identity confirmation: Sensor #%u; showing RED identity.\n",
+          cached_identity_slot);
+
+      flashSensorNumberOnce(
+          cached_identity_slot);
+      identity_number_shown = true;
+      delay(
+          IDENTITY_TO_SERVICE_PAUSE_MS);
+      serviceLedOn();
+      last_activity_ms = millis();
+    }
 
     const uint32_t locate_ms =
         locate_request_ms.exchange(
@@ -2835,11 +3213,23 @@ bool sendFreshServiceReading(
 
       if (WiFi.status() == WL_CONNECTED) {
         Serial.printf(
-            "%u short press%s: sending fresh reading.\n",
+            "%u short press%s: service timer restarted; identifying then sending fresh reading.\n",
             completed_clicks,
             completed_clicks == 1
                 ? ""
                 : "es");
+
+        // Triple-click calibration has already been consumed above and resets
+        // short_click_count to zero, so this only runs for ordinary one/two
+        // click service actions. Never show an unconfirmed cached number.
+        if (identity_confirmed_this_wake &&
+            cached_identity_slot > 0) {
+          flashSensorNumberOnce(
+              cached_identity_slot);
+          delay(
+              IDENTITY_TO_SERVICE_PAUSE_MS);
+          serviceLedOn();
+        }
 
         sendFreshServiceReading(
             t5_requested_wake_seconds,
@@ -2889,6 +3279,7 @@ bool sendFreshServiceReading(
     // user keep pressing the button to see soil changes. Re-sample and send
     // on a short cadence for the entire green-LED window.
     if (wifi_connected &&
+        short_click_count == 0 &&
         (millis() - last_service_sample_ms) >=
             SERVICE_SAMPLE_INTERVAL_MS) {
       last_service_sample_ms =
@@ -2975,8 +3366,36 @@ void setup() {
 
   sensor_id = createSensorId();
 
-  Serial.print("XIAO MAC: ");
-  Serial.println(WiFi.macAddress());
+  identity_queue =
+      xQueueCreate(
+          4,
+          sizeof(PendingIdentityEvent));
+
+  if (identity_queue == nullptr) {
+    Serial.println(
+        "FATAL: identity event queue allocation failed.");
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  uint8_t sta_mac[6] = {0};
+
+  if (esp_read_mac(
+          sta_mac,
+          ESP_MAC_WIFI_STA) == ESP_OK) {
+    Serial.printf(
+        "XIAO STA MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        sta_mac[0],
+        sta_mac[1],
+        sta_mac[2],
+        sta_mac[3],
+        sta_mac[4],
+        sta_mac[5]);
+  } else {
+    Serial.println(
+        "XIAO STA MAC: unavailable");
+  }
 
   Serial.printf(
       "Sensor ID: 0x%08lX\n",

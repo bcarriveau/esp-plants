@@ -896,6 +896,86 @@ uint32_t last_udp_retry_ms = 0;
 std::atomic<uint32_t> provision_ack_sensor_id{0};
 std::atomic<bool> provision_ack_received{false};
 
+// Identity ACKs can arrive asynchronously over ESP-NOW or later through UDP.
+// They are captured now so replacement/assignment UI can require a persisted
+// application ACK in the next lifecycle chunk.
+std::atomic<uint32_t> identity_ack_sensor_id{0};
+std::atomic<uint16_t> identity_ack_request_id{0};
+std::atomic<uint8_t> identity_ack_slot{0};
+std::atomic<bool> identity_ack_accepted{false};
+std::atomic<bool> identity_ack_received{false};
+uint16_t next_identity_request_id = 1;
+
+// Automatic identity confirmation is useful once when a sensor becomes active,
+// but normal 5-second service telemetry must not trigger another ASSIGN every
+// cycle. Keep this cooldown longer than the normal two-minute service window.
+// Explicit provisioning and Identify commands bypass this table.
+constexpr uint32_t AUTO_IDENTITY_COOLDOWN_MS =
+    3UL * 60UL * 1000UL;
+
+struct AutoIdentityThrottle {
+  uint32_t sensor_id = 0;
+  uint32_t last_sent_ms = 0;
+};
+
+AutoIdentityThrottle
+    auto_identity_throttle[MAX_PLANTS];
+
+bool automaticIdentityDue(
+    uint32_t sensor_id) {
+  const uint32_t now = millis();
+
+  for (size_t i = 0;
+       i < MAX_PLANTS;
+       ++i) {
+    const AutoIdentityThrottle& entry =
+        auto_identity_throttle[i];
+
+    if (entry.sensor_id != sensor_id) {
+      continue;
+    }
+
+    return entry.last_sent_ms == 0 ||
+           (now - entry.last_sent_ms) >=
+               AUTO_IDENTITY_COOLDOWN_MS;
+  }
+
+  return true;
+}
+
+void noteAutomaticIdentitySent(
+    uint32_t sensor_id) {
+  const uint32_t now = millis();
+  int empty_index = -1;
+
+  for (size_t i = 0;
+       i < MAX_PLANTS;
+       ++i) {
+    AutoIdentityThrottle& entry =
+        auto_identity_throttle[i];
+
+    if (entry.sensor_id == sensor_id) {
+      entry.last_sent_ms = now;
+      return;
+    }
+
+    if (entry.sensor_id == 0 &&
+        empty_index < 0) {
+      empty_index =
+          static_cast<int>(i);
+    }
+  }
+
+  if (empty_index >= 0) {
+    AutoIdentityThrottle& entry =
+        auto_identity_throttle[
+            empty_index];
+
+    entry.sensor_id = sensor_id;
+    entry.last_sent_ms = now;
+  }
+}
+
 FrontlightLevel frontlight_level =
     FrontlightLevel::Off;
 bool frontlight_pwm_ready = false;
@@ -1371,6 +1451,18 @@ int findPersistedPlant(uint32_t sensor_id) {
   }
 
   return -1;
+}
+
+uint8_t slotNumberForSensor(
+    uint32_t sensor_id) {
+  const int index =
+      findPersistedPlant(sensor_id);
+
+  if (index < 0)
+    return 0;
+
+  return static_cast<uint8_t>(
+      index + 1);
 }
 
 int findLivePlant(uint32_t sensor_id) {
@@ -1915,10 +2007,26 @@ void drawPlantScreen(
   display.setTextDatum(
       textdatum_t::middle_center);
 
-  display.drawString(
-      String("ID: ") +
-          sensorIdToHex(packet.sensor_id),
-      w / 2, h - 80);
+  {
+    const uint8_t slot =
+        slotNumberForSensor(
+            packet.sensor_id);
+
+    const String identity_label =
+        slot > 0
+            ? String("#") +
+                  String(slot) +
+                  String("  ID: ") +
+                  sensorIdToHex(
+                      packet.sensor_id)
+            : String("ID: ") +
+                  sensorIdToHex(
+                      packet.sensor_id);
+
+    display.drawString(
+        identity_label,
+        w / 2, h - 80);
+  }
 
   display.setTextDatum(
       textdatum_t::middle_right);
@@ -2188,6 +2296,100 @@ bool ensureEspNowPeer(const uint8_t* mac) {
   return true;
 }
 
+uint16_t allocateIdentityRequestId() {
+  if (next_identity_request_id == 0) {
+    next_identity_request_id = 1;
+  }
+
+  return next_identity_request_id++;
+}
+
+plant::IdentityPacket makeIdentityPacket(
+    uint32_t sensor_id,
+    plant::IdentityCommand command,
+    uint8_t slot) {
+  plant::IdentityPacket packet{};
+
+  packet.magic = plant::PACKET_MAGIC;
+  packet.version = plant::PROTOCOL_VERSION;
+  packet.packet_size = sizeof(packet);
+  packet.sensor_id = sensor_id;
+  packet.command = command;
+  packet.slot = slot;
+  packet.request_id =
+      allocateIdentityRequestId();
+
+  plant::finalizePacket(packet);
+  return packet;
+}
+
+void recordIdentityAck(
+    const plant::IdentityAckPacket& ack,
+    const char* transport_name) {
+  identity_ack_sensor_id.store(
+      ack.sensor_id,
+      std::memory_order_relaxed);
+  identity_ack_request_id.store(
+      ack.request_id,
+      std::memory_order_relaxed);
+  identity_ack_slot.store(
+      ack.slot,
+      std::memory_order_relaxed);
+  identity_ack_accepted.store(
+      ack.accepted == 1,
+      std::memory_order_relaxed);
+  identity_ack_received.store(
+      true,
+      std::memory_order_release);
+
+  Serial.printf(
+      "Identity ACK via %s from 0x%08lX: slot #%u, request %u, %s.\n",
+      transport_name,
+      static_cast<unsigned long>(
+          ack.sensor_id),
+      ack.slot,
+      ack.request_id,
+      ack.accepted == 1
+          ? "ACCEPTED"
+          : "REJECTED");
+}
+
+bool sendIdentityEspNow(
+    const uint8_t* mac,
+    uint32_t sensor_id,
+    plant::IdentityCommand command,
+    uint8_t slot) {
+  if (!ensureEspNowPeer(mac))
+    return false;
+
+  const plant::IdentityPacket packet =
+      makeIdentityPacket(
+          sensor_id,
+          command,
+          slot);
+
+  const esp_err_t result =
+      esp_now_send(
+          mac,
+          reinterpret_cast<const uint8_t*>(
+              &packet),
+          sizeof(packet));
+
+  Serial.printf(
+      "Identity %s #%u -> 0x%08lX via ESP-NOW ch%u, request %u: %s\n",
+      command == plant::IdentityCommand::Assign
+          ? "ASSIGN"
+          : "CLEAR",
+      slot,
+      static_cast<unsigned long>(
+          sensor_id),
+      currentRadioChannel(),
+      packet.request_id,
+      esp_err_to_name(result));
+
+  return result == ESP_OK;
+}
+
 // ============================================================================
 // UDP NORMAL TRANSPORT
 // ============================================================================
@@ -2236,6 +2438,58 @@ bool startUdp() {
       plant::T5_UDP_PORT);
 
   return true;
+}
+
+bool sendIdentityUdp(
+    const IPAddress& remote_ip,
+    uint16_t remote_port,
+    uint32_t sensor_id,
+    plant::IdentityCommand command,
+    uint8_t slot) {
+  if (!udp_ready)
+    return false;
+
+  const plant::IdentityPacket packet =
+      makeIdentityPacket(
+          sensor_id,
+          command,
+          slot);
+
+  if (!udp.beginPacket(
+          remote_ip,
+          remote_port)) {
+    Serial.println(
+        "Identity UDP beginPacket failed.");
+    return false;
+  }
+
+  const size_t written =
+      udp.write(
+          reinterpret_cast<const uint8_t*>(
+              &packet),
+          sizeof(packet));
+
+  const int end_result =
+      udp.endPacket();
+
+  const bool ok =
+      written == sizeof(packet) &&
+      end_result == 1;
+
+  Serial.printf(
+      "Identity %s #%u -> 0x%08lX via UDP %s:%u, request %u: %s\n",
+      command == plant::IdentityCommand::Assign
+          ? "ASSIGN"
+          : "CLEAR",
+      slot,
+      static_cast<unsigned long>(
+          sensor_id),
+      remote_ip.toString().c_str(),
+      remote_port,
+      packet.request_id,
+      ok ? "SENT" : "FAILED");
+
+  return ok;
 }
 
 void sendUdpAck(
@@ -2324,6 +2578,29 @@ void serviceUdp() {
       source_ip.toString().c_str(),
       source_port);
 
+  if (packet_size ==
+      sizeof(plant::IdentityAckPacket)) {
+    plant::IdentityAckPacket ack{};
+
+    const int read =
+        udp.read(
+            reinterpret_cast<uint8_t*>(
+                &ack),
+            sizeof(ack));
+
+    if (read == sizeof(ack) &&
+        plant::validatePacket(ack)) {
+      recordIdentityAck(
+          ack,
+          "UDP");
+    } else {
+      Serial.println(
+          "Rejected invalid UDP identity ACK.");
+    }
+
+    return;
+  }
+
   if (packet_size !=
       sizeof(plant::ReadingPacket)) {
     Serial.printf(
@@ -2358,6 +2635,10 @@ void serviceUdp() {
       "Sensor ID: 0x%08lX\n",
       static_cast<unsigned long>(
           packet.sensor_id));
+  Serial.printf(
+      "Sequence: %lu\n",
+      static_cast<unsigned long>(
+          packet.sequence));
 
   Serial.printf(
       "Moisture: %u%% (%s)\n",
@@ -2372,6 +2653,25 @@ void serviceUdp() {
 
   Serial.print("From IP: ");
   Serial.println(source_ip);
+
+  const int persistent_index =
+      ensurePersistedPlant(
+          packet.sensor_id,
+          nullptr);
+  if (persistent_index >= 0 &&
+      automaticIdentityDue(
+          packet.sensor_id)) {
+    if (sendIdentityUdp(
+            source_ip,
+            source_port,
+            packet.sensor_id,
+            plant::IdentityCommand::Assign,
+            static_cast<uint8_t>(
+                persistent_index + 1))) {
+      noteAutomaticIdentitySent(
+          packet.sensor_id);
+    }
+  }
 
   queueReceivedReading(
       nullptr,
@@ -2442,6 +2742,20 @@ void handleEspNowData(
         false);
 
     sendEspNowAck(mac, packet);
+    return;
+  }
+
+  if (length ==
+      sizeof(plant::IdentityAckPacket)) {
+    plant::IdentityAckPacket ack{};
+    memcpy(&ack, data, sizeof(ack));
+
+    if (!plant::validatePacket(ack))
+      return;
+
+    recordIdentityAck(
+        ack,
+        "ESP-NOW");
     return;
   }
 
@@ -2652,10 +2966,24 @@ bool sendProvisionPacket(
       std::memory_order_relaxed);
 
   Serial.printf(
-      "Provisioning sensor 0x%08lX on coexistence channel %u...\n",
+      "Provisioning sensor 0x%08lX as authoritative slot #%u on coexistence channel %u...\n",
       static_cast<unsigned long>(
           sensor_id),
+      static_cast<unsigned>(
+          index + 1),
       currentRadioChannel());
+
+  // Give the XIAO its T5-authoritative slot before Wi-Fi provisioning. The
+  // identity message is additive protocol-v3 traffic and does not alter the
+  // proven ProvisionPacket layout.
+  sendIdentityEspNow(
+      record.mac,
+      sensor_id,
+      plant::IdentityCommand::Assign,
+      static_cast<uint8_t>(
+          index + 1));
+
+  delay(25);
 
   // The unprovisioned XIAO locks onto this channel after hearing the automatic
   // beacon ACK. Keep a forgiving send window in case the web click lands near
@@ -2728,6 +3056,10 @@ bool sendLocatePacket(
   const LivePlant& live =
       live_plants[live_index];
 
+  const uint8_t authoritative_slot =
+      static_cast<uint8_t>(
+          persistent_index + 1);
+
   plant::LocatePacket packet{};
 
   packet.magic = plant::PACKET_MAGIC;
@@ -2746,6 +3078,15 @@ bool sendLocatePacket(
       espNowTransportRecent(live)) {
     if (!ensureEspNowPeer(record.mac))
       return false;
+
+    // Confirm the slot immediately before Locate so the physical sensor only
+    // uses a numbered pattern after current T5 authority has been received.
+    sendIdentityEspNow(
+        record.mac,
+        sensor_id,
+        plant::IdentityCommand::Assign,
+        authoritative_slot);
+    delay(20);
 
     const esp_err_t result =
         esp_now_send(
@@ -2775,6 +3116,15 @@ bool sendLocatePacket(
         "Locate unavailable: no recent ESP-NOW or Wi-Fi route.");
     return false;
   }
+
+  // Same ordering as ESP-NOW: slot confirmation first, Locate second.
+  sendIdentityUdp(
+      live.source_ip,
+      plant::SENSOR_UDP_PORT,
+      sensor_id,
+      plant::IdentityCommand::Assign,
+      authoritative_slot);
+  delay(20);
 
   if (!udp.beginPacket(
           live.source_ip,
@@ -3286,9 +3636,13 @@ String buildWebPage() {
     const PersistedPlant& record = config_data.plants[i];
     const int live_index = findLivePlant(record.sensor_id);
 
-    html += F("<div class='card sub'><h2>");
+    html += F("<div class='card sub'><h2>#");
+    html += String(i + 1);
+    html += F(" &mdash; ");
     html += htmlEscape(String(record.name));
-    html += F("</h2><div class='muted'><code>0x");
+    html += F("</h2><div class='muted'><strong>T5 slot #");
+    html += String(i + 1);
+    html += F("</strong><br><code>0x");
     html += sensorIdToHex(record.sensor_id);
     html += F("</code><br><code>");
     html += macToString(record.mac);
@@ -3359,7 +3713,9 @@ String buildWebPage() {
     if (locate_via_espnow || locate_via_wifi) {
       html += F("<form method='post' action='/locate' style='margin-top:12px'><input type='hidden' name='id' value='");
       html += sensorIdToHex(record.sensor_id);
-      html += F("'><button type='submit'>Flash / Locate Sensor</button></form><p class='muted'>");
+      html += F("'><button type='submit'>Identify Sensor #");
+      html += String(i + 1);
+      html += F("</button></form><p class='muted'>");
       html += locate_via_espnow
           ? F("ESP-NOW is active now and will be preferred for Locate.")
           : F("A recent Wi-Fi/UDP route is active and will be used as fallback.");
@@ -3374,7 +3730,9 @@ String buildWebPage() {
         plantMacKnown(record.mac)) {
       html += F("<form method='post' action='/provision' style='margin-top:12px'><input type='hidden' name='id' value='");
       html += sensorIdToHex(record.sensor_id);
-      html += F("'><button type='submit'>Send Wi-Fi to Sensor</button></form><p class='muted'>Provisioning uses the same current-channel ESP-NOW connection; the T5 does not leave home Wi-Fi.</p>");
+      html += F("'><button type='submit'>Provision Sensor #");
+      html += String(i + 1);
+      html += F("</button></form><p class='muted'>Provisioning sends this T5 slot identity first, then the unchanged Wi-Fi ProvisionPacket on the same current-channel ESP-NOW connection.</p>");
     }
 
     html += F("</div>");
@@ -3621,7 +3979,7 @@ void handleLocate() {
                    : "Locate transmission queued.");
 
     response +=
-        " Watch the selected sensor for rapid LED flashes for about 8 seconds.</p>";
+        " Watch the selected sensor repeat its numbered red identity pattern for about 8 seconds. Long = 10; short = 1.</p>";
   } else {
     response +=
         "<h2>Locate command could not be sent.</h2>"
@@ -3921,6 +4279,23 @@ void processReceivedEvent(
       live_plants[live_index];
 
   live.packet = event.packet;
+  // Discovery/service ESP-NOW beacons share the same automatic identity
+  // cooldown as UDP. Whichever transport confirms first suppresses the other
+  // for the rest of the normal two-minute service window.
+  if (!event.via_udp &&
+      mac != nullptr &&
+      automaticIdentityDue(
+          event.packet.sensor_id)) {
+    if (sendIdentityEspNow(
+            mac,
+            event.packet.sensor_id,
+            plant::IdentityCommand::Assign,
+            static_cast<uint8_t>(
+                persistent_index + 1))) {
+      noteAutomaticIdentitySent(
+          event.packet.sensor_id);
+    }
+  }
 
   const uint32_t seen_ms =
       millis();
