@@ -92,8 +92,23 @@ constexpr uint32_t HEARTBEAT_SECONDS = 6 * 60 * 60;
 constexpr uint32_t WIFI_FAILURE_SLEEP_SECONDS = 5 * 60;
 
 // Unprovisioned sensors stay awake long enough to be provisioned from the T5.
+// To protect an AA cell, only three automatic windows are allowed before the
+// sensor enters button-only deep sleep.
 constexpr uint32_t PROVISION_WINDOW_MS = 120000;
 constexpr uint32_t PROVISION_BEACON_INTERVAL_MS = 2500;
+constexpr uint8_t PROVISION_MAX_FAILED_WINDOWS = 3;
+constexpr uint32_t PROVISION_FIRST_RETRY_SLEEP_SECONDS = 5 * 60;
+constexpr uint32_t PROVISION_SECOND_RETRY_SLEEP_SECONDS = 15 * 60;
+
+// Unprovisioned physical indication: alternate red/green while a provisioning
+// window is actively searching for the T5.
+constexpr uint32_t UNPROVISIONED_LED_PHASE_MS = 350;
+
+// Sensor-number visual language. One long green pulse means ten; each short
+// green pulse means one. Example: #13 = one long + three short.
+constexpr uint32_t IDENTITY_SHORT_PULSE_MS = 180;
+constexpr uint32_t IDENTITY_LONG_PULSE_MS = 800;
+constexpr uint32_t IDENTITY_ELEMENT_GAP_MS = 180;
 
 // A brand-new sensor does not know the T5/home channel yet. It walks the
 // 2.4 GHz channels until it hears the T5's ESP-NOW ACK, then locks there.
@@ -154,6 +169,27 @@ struct SensorConfig {
 SensorConfig config_data{};
 Preferences preferences;
 
+// T5 slot identity is intentionally separate from Wi-Fi provisioning.
+// The T5 remains authoritative; this is only a cached physical-display number
+// for the XIAO. Slot 0 means unassigned; valid T5 slots are 1..16.
+constexpr uint32_t IDENTITY_MAGIC = 0x49443131UL;  // "ID11"
+constexpr uint16_t IDENTITY_VERSION = 1;
+constexpr char IDENTITY_NAMESPACE[] = "plantid";
+constexpr char IDENTITY_KEY[] = "id";
+constexpr uint8_t MAX_IDENTITY_SLOT = 16;
+
+struct IdentityData {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t structure_size;
+  uint8_t slot;
+  uint8_t reserved[3];
+  uint32_t checksum;
+};
+
+IdentityData identity_data{};
+uint8_t cached_identity_slot = 0;
+
 // Calibration lives in its own NVS namespace/key so adding calibration does
 // not invalidate or rewrite the already-proven Wi-Fi provisioning record.
 constexpr uint32_t CALIBRATION_MAGIC = 0x43414C31UL;  // "CAL1"
@@ -176,6 +212,10 @@ float active_cal_wet_mv = DEFAULT_CAL_WET_MV;
 
 uint32_t sensor_id = 0;
 RTC_DATA_ATTR uint32_t sequence_number = 1;
+
+// Number of failed provisioning attempts since the last manual reset or
+// successful provisioning. RTC memory preserves it across deep-sleep retries.
+RTC_DATA_ATTR uint8_t provisioning_failed_windows = 0;
 
 constexpr uint32_t ADAPTIVE_STATE_MAGIC = 0x41504431UL;  // "APD1"
 
@@ -258,6 +298,63 @@ void serviceLedOn() {
   digitalWrite(PIN_LED_YELLOW, LOW);
   digitalWrite(PIN_LED_RED, LOW);
   digitalWrite(PIN_LED_GREEN, HIGH);
+}
+
+void updateUnprovisionedIndicator(
+    uint32_t now_ms) {
+  const bool show_red =
+      ((now_ms / UNPROVISIONED_LED_PHASE_MS) & 1U) == 0;
+
+  digitalWrite(PIN_LED_YELLOW, LOW);
+  digitalWrite(
+      PIN_LED_RED,
+      show_red ? HIGH : LOW);
+  digitalWrite(
+      PIN_LED_GREEN,
+      show_red ? LOW : HIGH);
+}
+
+void pulseGreen(
+    uint32_t on_ms) {
+  allStatusLedsOff();
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  delay(on_ms);
+  digitalWrite(PIN_LED_GREEN, LOW);
+}
+
+void flashSensorNumberOnce(
+    uint8_t slot) {
+  if (slot == 0 ||
+      slot > MAX_IDENTITY_SLOT) {
+    return;
+  }
+
+  allStatusLedsOff();
+
+  const uint8_t short_count =
+      slot >= 10
+          ? static_cast<uint8_t>(slot - 10)
+          : slot;
+
+  if (slot >= 10) {
+    pulseGreen(IDENTITY_LONG_PULSE_MS);
+
+    if (short_count > 0) {
+      delay(IDENTITY_ELEMENT_GAP_MS);
+    }
+  }
+
+  for (uint8_t i = 0;
+       i < short_count;
+       ++i) {
+    pulseGreen(IDENTITY_SHORT_PULSE_MS);
+
+    if (i + 1 < short_count) {
+      delay(IDENTITY_ELEMENT_GAP_MS);
+    }
+  }
+
+  allStatusLedsOff();
 }
 
 bool wokeByButton() {
@@ -698,6 +795,157 @@ void clearConfig() {
 
   initializeEmptyConfig();
   Serial.println("Saved home Wi-Fi erased.");
+}
+
+
+uint32_t identityChecksum(
+    const IdentityData& source) {
+  IdentityData copy = source;
+  copy.checksum = 0;
+
+  return plant::fnv1a(
+      reinterpret_cast<const uint8_t*>(&copy),
+      sizeof(copy));
+}
+
+void initializeEmptyIdentity() {
+  memset(
+      &identity_data,
+      0,
+      sizeof(identity_data));
+
+  identity_data.magic = IDENTITY_MAGIC;
+  identity_data.version = IDENTITY_VERSION;
+  identity_data.structure_size =
+      sizeof(IdentityData);
+  identity_data.slot = 0;
+  identity_data.checksum =
+      identityChecksum(identity_data);
+
+  cached_identity_slot = 0;
+}
+
+bool loadIdentity() {
+  initializeEmptyIdentity();
+
+  if (!preferences.begin(
+          IDENTITY_NAMESPACE,
+          true)) {
+    Serial.println(
+        "Cached T5 slot: unassigned.");
+    return false;
+  }
+
+  const size_t stored_size =
+      preferences.getBytesLength(
+          IDENTITY_KEY);
+
+  IdentityData stored{};
+  bool valid = false;
+
+  if (stored_size == sizeof(stored)) {
+    const size_t read =
+        preferences.getBytes(
+            IDENTITY_KEY,
+            &stored,
+            sizeof(stored));
+
+    valid =
+        read == sizeof(stored) &&
+        stored.magic == IDENTITY_MAGIC &&
+        stored.version == IDENTITY_VERSION &&
+        stored.structure_size ==
+            sizeof(IdentityData) &&
+        stored.slot >= 1 &&
+        stored.slot <= MAX_IDENTITY_SLOT &&
+        stored.checksum ==
+            identityChecksum(stored);
+  }
+
+  preferences.end();
+
+  if (!valid) {
+    initializeEmptyIdentity();
+    Serial.println(
+        "Cached T5 slot: unassigned.");
+    return false;
+  }
+
+  identity_data = stored;
+  cached_identity_slot = stored.slot;
+
+  Serial.printf(
+      "Cached T5 slot: #%u (awaiting T5 authority/confirmation).\\n",
+      cached_identity_slot);
+
+  return true;
+}
+
+bool saveIdentitySlot(
+    uint8_t slot) {
+  if (slot < 1 ||
+      slot > MAX_IDENTITY_SLOT) {
+    return false;
+  }
+
+  IdentityData updated{};
+  updated.magic = IDENTITY_MAGIC;
+  updated.version = IDENTITY_VERSION;
+  updated.structure_size =
+      sizeof(IdentityData);
+  updated.slot = slot;
+  updated.checksum =
+      identityChecksum(updated);
+
+  if (!preferences.begin(
+          IDENTITY_NAMESPACE,
+          false)) {
+    Serial.println(
+        "Identity NVS save failed: Preferences.begin().");
+    return false;
+  }
+
+  const size_t written =
+      preferences.putBytes(
+          IDENTITY_KEY,
+          &updated,
+          sizeof(updated));
+
+  preferences.end();
+
+  if (written != sizeof(updated)) {
+    Serial.println(
+        "Identity NVS save failed.");
+    return false;
+  }
+
+  identity_data = updated;
+  cached_identity_slot = slot;
+
+  Serial.printf(
+      "Cached T5 slot saved: #%u.\\n",
+      cached_identity_slot);
+
+  return true;
+}
+
+bool clearIdentitySlot() {
+  bool removed = false;
+
+  if (preferences.begin(
+          IDENTITY_NAMESPACE,
+          false)) {
+    removed =
+        preferences.remove(
+            IDENTITY_KEY);
+    preferences.end();
+  }
+
+  initializeEmptyIdentity();
+
+  Serial.println(
+      "Cached T5 slot cleared.");
+  return removed;
 }
 
 
@@ -1207,6 +1455,99 @@ void printMeasurement(const Measurement& measurement) {
   }
 }
 
+[[noreturn]] void sleepUntilButtonOnly() {
+  initializeAdaptiveStateIfNeeded();
+  adaptive.planned_sleep_seconds = 0;
+
+  if (digitalRead(PIN_BUTTON) == LOW) {
+    Serial.println(
+        "Waiting for top button release before button-only sleep...");
+
+    while (digitalRead(PIN_BUTTON) == LOW) {
+      delay(20);
+    }
+
+    delay(80);
+  }
+
+  Serial.println(
+      "Entering timerless deep sleep after three failed provisioning attempts.");
+  Serial.println(
+      "Wake source: TOP BUTTON ONLY.");
+  Serial.flush();
+
+  allStatusLedsOff();
+
+  udp.stop();
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+
+  stopSensorExcitation();
+
+  esp_sleep_disable_wakeup_source(
+      ESP_SLEEP_WAKEUP_TIMER);
+
+  const esp_err_t button_wake_result =
+      esp_sleep_enable_ext1_wakeup(
+          1ULL << PIN_BUTTON,
+          ESP_EXT1_WAKEUP_ANY_LOW);
+
+  if (button_wake_result != ESP_OK) {
+    Serial.printf(
+        "WARNING: top-button wake setup failed: %s\\n",
+        esp_err_to_name(button_wake_result));
+    Serial.flush();
+  }
+
+  esp_deep_sleep_start();
+
+  while (true) {
+    delay(1000);
+  }
+}
+
+[[noreturn]] void finishFailedProvisioningAttempt(
+    const char* reason) {
+  provisioning_mode_active = false;
+  allStatusLedsOff();
+
+  if (provisioning_failed_windows <
+      UINT8_MAX) {
+    provisioning_failed_windows++;
+  }
+
+  Serial.printf(
+      "Provisioning attempt failed: %s\\n",
+      reason);
+  Serial.printf(
+      "Failed provisioning attempts: %u/%u.\\n",
+      provisioning_failed_windows,
+      PROVISION_MAX_FAILED_WINDOWS);
+
+  if (provisioning_failed_windows >=
+      PROVISION_MAX_FAILED_WINDOWS) {
+    Serial.println(
+        "Three provisioning attempts failed. Automatic retries are disabled.");
+    Serial.println(
+        "Press the top button to start a fresh three-attempt setup cycle.");
+
+    sleepUntilButtonOnly();
+  }
+
+  const uint32_t retry_sleep_seconds =
+      provisioning_failed_windows == 1
+          ? PROVISION_FIRST_RETRY_SLEEP_SECONDS
+          : PROVISION_SECOND_RETRY_SLEEP_SECONDS;
+
+  Serial.printf(
+      "Provisioning retry will wake in %lu minutes.\\n",
+      static_cast<unsigned long>(
+          retry_sleep_seconds / 60));
+
+  sleepFor(
+      retry_sleep_seconds);
+}
+
 // ============================================================================
 // ESP-NOW PROVISIONING
 // ============================================================================
@@ -1555,8 +1896,12 @@ void runLocateFlash(
 
   allStatusLedsOff();
 
-  // Provisioning mode normally carries a steady green awake indicator.
-  serviceLedOn();
+  if (provisioning_mode_active) {
+    updateUnprovisionedIndicator(
+        millis());
+  } else {
+    serviceLedOn();
+  }
 
   Serial.println(
       "LOCATE: flash complete.");
@@ -1564,7 +1909,7 @@ void runLocateFlash(
 
 [[noreturn]] void runProvisioningMode(
     const Measurement& measurement) {
-  serviceLedOn();
+  allStatusLedsOff();
   provisioning_mode_active = true;
   provision_channel_locked.store(
       false,
@@ -1580,14 +1925,22 @@ void runLocateFlash(
   Serial.println(
       "=== SENSOR WI-FI PROVISIONING MODE ===");
 
+  const uint8_t attempt_number =
+      static_cast<uint8_t>(
+          provisioning_failed_windows + 1);
+
+  Serial.printf(
+      "Provisioning attempt %u/%u. Unprovisioned LED pattern: RED/GREEN alternating.\\n",
+      attempt_number,
+      PROVISION_MAX_FAILED_WINDOWS);
+
   Serial.println(
       "Searching 2.4 GHz channels for the T5 ESP-NOW receiver. "
       "Once found, this sensor locks to that channel for Locate/provisioning.");
 
   if (!WiFi.mode(WIFI_STA)) {
-    Serial.println(
-        "Fatal: could not start Wi-Fi STA.");
-    sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
+    finishFailedProvisioningAttempt(
+        "could not start Wi-Fi STA");
   }
 
   WiFi.disconnect(false, false);
@@ -1597,11 +1950,13 @@ void runLocateFlash(
       PROVISION_CHANNEL_MIN;
 
   if (!setProvisionChannel(channel)) {
-    sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
+    finishFailedProvisioningAttempt(
+        "could not set initial ESP-NOW channel");
   }
 
   if (!startEspNowCurrentChannel()) {
-    sleepFor(WIFI_FAILURE_SLEEP_SECONDS);
+    finishFailedProvisioningAttempt(
+        "could not start ESP-NOW");
   }
 
   const plant::ReadingPacket beacon =
@@ -1614,6 +1969,9 @@ void runLocateFlash(
 
   while ((millis() - start_ms) <
          PROVISION_WINDOW_MS) {
+    updateUnprovisionedIndicator(
+        millis());
+
     const uint32_t locate_ms =
         locate_request_ms.exchange(
             0,
@@ -1626,8 +1984,15 @@ void runLocateFlash(
     if (provision_received.load(
             std::memory_order_acquire)) {
       if (saveConfig(pending_config)) {
+        provisioning_failed_windows = 0;
+
+        allStatusLedsOff();
+        digitalWrite(PIN_LED_GREEN, HIGH);
+
         Serial.println(
-            "Provisioning complete. Rebooting into home Wi-Fi mode...");
+            "Provisioning complete. Failed-attempt counter reset.");
+        Serial.println(
+            "Rebooting into home Wi-Fi mode...");
 
         Serial.flush();
         delay(1200);
@@ -1716,8 +2081,8 @@ void runLocateFlash(
   Serial.println(
       "Provisioning window expired.");
 
-  provisioning_mode_active = false;
-  sleepFor(60);
+  finishFailedProvisioningAttempt(
+      "two-minute provisioning window expired");
 }
 
 // ============================================================================
@@ -2373,10 +2738,13 @@ bool sendFreshServiceReading(
       digitalWrite(PIN_LED_GREEN, LOW);
       digitalWrite(PIN_LED_RED, HIGH);
 
+      provisioning_failed_windows = 0;
       clearConfig();
 
       Serial.println(
-          "Wi-Fi erased. Restarting into provisioning mode...");
+          "Wi-Fi erased. Provisioning failure counter reset.");
+      Serial.println(
+          "Restarting into provisioning mode...");
       Serial.flush();
 
       delay(1200);
@@ -2600,6 +2968,11 @@ void setup() {
   printWakeReason();
   accountForWakeTime();
 
+  if (provisioning_failed_windows >
+      PROVISION_MAX_FAILED_WINDOWS) {
+    provisioning_failed_windows = 0;
+  }
+
   sensor_id = createSensorId();
 
   Serial.print("XIAO MAC: ");
@@ -2620,6 +2993,7 @@ void setup() {
   analogReadResolution(12);
 
   loadCalibration();
+  loadIdentity();
 
   Measurement measurement{};
 
@@ -2635,8 +3009,21 @@ void setup() {
       loadConfig();
 
   if (!provisioned) {
-    // Provisioning already uses a two-minute window. Keep the green LED on so
-    // the physical behavior matches manual service mode.
+    if (button_service_wake) {
+      provisioning_failed_windows = 0;
+
+      Serial.println(
+          "Manual wake: provisioning failure counter reset for a fresh setup cycle.");
+    }
+
+    if (provisioning_failed_windows >=
+        PROVISION_MAX_FAILED_WINDOWS) {
+      Serial.println(
+          "Unprovisioned sensor is in battery-safe button-only state.");
+
+      sleepUntilButtonOnly();
+    }
+
     runProvisioningMode(measurement);
   }
 
