@@ -117,3 +117,39 @@ For a behavior change:
 Do not claim a build passed unless a build actually ran.
 
 Do not tag a stable release until `docs/RELEASE_CHECKLIST.md` passes.
+
+## Waveshare / Zigbee development
+
+The `waveshare-zigbee` branch is the isolated development line for the
+Waveshare ESP32-S3 7-inch hub plus M5Stack ESP32-H2 Zigbee coprocessor.
+
+- Preserve the existing `firmware/t5-hub` and
+  `firmware/xiao-soil-sensor` hardware-proven baseline unless a change is
+  explicitly intended to apply to those products too.
+- Keep the Waveshare and H2 as separate firmware projects. Do not create a
+  combined root PlatformIO environment.
+- The Waveshare ESP32-S3 owns the UI, plant names, user configuration,
+  history, Wi-Fi, and update experience.
+- The ESP32-H2 owns the Zigbee network, pairing, Zigbee device handling, and
+  ZG-303Z-specific Zigbee/Tuya translation.
+- Identify Zigbee sensors by their 64-bit IEEE address. A 16-bit Zigbee network
+  address is transient and must never be used as the permanent plant identity.
+- Home Assistant, MQTT, Zigbee2MQTT, and cloud services must not be required
+  for normal operation.
+- Persist user configuration separately from application firmware so a normal
+  firmware update does not erase plant names, assignments, thresholds, Wi-Fi
+  settings, or other personal configuration.
+- Persist the H2 Zigbee network across normal firmware updates. Network reset
+  must be a deliberate user action.
+- Do not guess Waveshare connector pin order, GPIO mapping, voltage, or H2
+  wiring. Verify against current board/module documentation and then verify on
+  hardware before marking it proven.
+
+## VS Code workspace rule
+
+The repository root is the one permanent VS Code workspace.
+
+Do not require contributors to open each firmware directory as a separate VS
+Code workspace. Build/upload/monitor helpers should target the desired
+subproject from the repository root. Independent firmware projects and
+toolchains remain isolated underneath that single workspace.

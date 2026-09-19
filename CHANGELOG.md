@@ -5,6 +5,32 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Waveshare / Zigbee development branch
+
+#### Added
+
+- Initial isolated project scaffold for a Waveshare ESP32-S3 7-inch hub and
+  M5Stack ESP32-H2 Zigbee coprocessor while retaining the existing T5/XIAO
+  baseline unchanged.
+- PlantLink v1 architecture for a framed, checksummed UART boundary between the
+  H2 Zigbee side and the Waveshare application side.
+- Repository rules establishing IEEE-64 Zigbee identity, separate persistent
+  user/Zigbee state, and a single root VS Code workspace.
+
+#### Architecture
+
+- The H2 is responsible for the Zigbee coordinator/network, pairing, device
+  handling, and ZG-303Z Zigbee/Tuya translation.
+- The Waveshare S3 is responsible for UI, plant identity/names, user settings,
+  history, Wi-Fi, and the update experience.
+- Home Assistant, MQTT, Zigbee2MQTT, and cloud services are not part of the
+  required runtime path.
+
+#### Verification status
+
+- Architecture/scaffold only. No Waveshare or H2 firmware build or hardware
+  verification is claimed by this entry.
+
 ### Authoritative sensor identity / service checkpoint
 
 #### Added
