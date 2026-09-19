@@ -3,7 +3,9 @@
 **/.pio-packages/
 
 # VS Code / PlatformIO local workspace state
-**/.vscode/
+# Keep only the root shared tasks in Git; ignore per-project/editor state.
+**/.vscode/*
+!.vscode/tasks.json
 *.code-workspace
 
 # OS/editor noise

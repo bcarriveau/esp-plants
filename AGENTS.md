@@ -153,3 +153,15 @@ Do not require contributors to open each firmware directory as a separate VS
 Code workspace. Build/upload/monitor helpers should target the desired
 subproject from the repository root. Independent firmware projects and
 toolchains remain isolated underneath that single workspace.
+
+## GitHub automation rule
+
+Firmware builds, tests, uploads, and release packaging are local/manual unless the
+project owner explicitly asks for GitHub automation.
+
+- Do not add GitHub Actions firmware builds or CI workflows.
+- Do not re-create `.github/workflows/build.yml`.
+- PlatformIO build/upload/monitor commands belong in the single root VS Code
+  workspace and local helper tasks.
+- GitHub is source control and release hosting for this project, not a remote
+  firmware build service.

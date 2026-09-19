@@ -1,24 +1,30 @@
 # M5Stack ESP32-H2 Zigbee firmware
 
-This directory is reserved for the M5Stack ESP32-H2 Thread/Zigbee Gateway Unit
-used by ESP PLANTS.
+Standalone Zigbee coordinator/translator for the M5Stack Unit Gateway H2 U195.
 
-## Responsibility
+## Current bring-up scope
 
-The H2 side owns:
+- ESP32-H2 native 802.15.4 radio
+- Zigbee coordinator role
+- M5Stack official 2 MB Zigbee partition layout
+- Grove UART on H2 RX GPIO23 / TX GPIO24
+- PlantLink UART to the Waveshare
+- raw APS packet capture with LQI/RSSI
+- permanent sensor identity resolved to IEEE-64
+- standard temperature/humidity/battery report decoding
+- initial stock HOBEIAN ZG-303Z Tuya 0xEF00 datapoint decoding
+- unknown Tuya datapoints stay visible in USB debug and RawZigbeeEvent traffic
+- permit-join command from the Waveshare UI
 
-- Zigbee coordinator/network creation and restore
-- permit-join, pairing, removal, and device lifecycle
-- stable identification by 64-bit IEEE address
-- HOBEIAN ZG-303Z Zigbee/Tuya decoding and supported sensor commands
-- persistent Zigbee network state
-- PlantLink device communication to the Waveshare ESP32-S3
-- human-readable USB debug logging, kept separate from the PlantLink UART
+## Decoder strategy
 
-The H2 must not own plant names or user-facing plant configuration.
+Do not assume every ZG-303Z firmware revision has the same DP table. The H2
+normalizes values it recognizes, but keeps the raw packet observable. That means
+the first real sensor pairing can correct a firmware-specific mapping without
+redesigning the display-side code.
 
-## Development status
+## Destructive reset
 
-Scaffold only. The exact ESP-IDF/PlatformIO environment and connector wiring
-will be added only after current M5Stack/Waveshare documentation is checked.
-No build or hardware verification is claimed yet.
+PlantLink reserves a factory-reset message, but this bring-up firmware ignores
+it. We will not allow a normal firmware update, UART reconnect, or accidental UI
+tap to destroy the Zigbee network.

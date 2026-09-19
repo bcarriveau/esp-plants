@@ -5,6 +5,44 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Waveshare / H2 executable bring-up scaffold
+
+#### Added
+
+- Waveshare PlatformIO project based on the hardware-proven ESP Aircraft Radar
+  display/touch stack rather than introducing a new LCD framework generation.
+- Native USB CDC debug on the Waveshare while dedicating UART0 GPIO43/44 to
+  PlantLink through the physical UART2 connector.
+- M5Stack Gateway H2 PlatformIO project for its 2 MB ESP32-H2 module in Zigbee
+  coordinator/router mode, using the M5Stack-recommended Zigbee partition map.
+- Framed PlantLink v1 COBS/CRC transport implementation and normalized
+  `SensorReport` payload.
+- H2 raw APS diagnostics, IEEE-64 sensor identity, standard
+  temperature/humidity/battery decoding, and initial stock ZG-303Z Tuya DP
+  decoding with unknown-DP visibility.
+- Waveshare bring-up UI with H2 link state, Zigbee state, sensor count, latest
+  event, and a 120-second `ADD SENSOR` permit-join action.
+- Root VS Code tasks for Waveshare/H2 build, upload, and monitor without opening
+  separate workspaces.
+- Removed the unwanted GitHub Actions firmware-build workflow; builds remain local
+  in the single VS Code workspace.
+- Native Waveshare USB-C is the normal upload/Serial Monitor connection; the
+  CH343 UART USB-C is not part of the normal ESP PLANTS development path.
+- Hardware wiring notes using Waveshare UART2 for data and the selectable 5 V
+  I2C header supply for H2 power.
+
+#### Verification status
+
+- Shared PlantLink framing/CRC/COBS and ZG-303Z parser logic were compiled and
+  exercised with host-side C++ tests.
+- Both partition tables were structurally checked for overlap and exact flash
+  bounds.
+- The full embedded projects are prepared/structurally reviewed but have not
+  been PlatformIO-compiled in this environment because PlatformIO/toolchain
+  downloads are unavailable here.
+- Waveshare/H2 wiring and Zigbee behavior remain pending physical hardware
+  verification.
+
 ### Waveshare / Zigbee development branch
 
 #### Added

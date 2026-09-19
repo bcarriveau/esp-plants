@@ -1,0 +1,110 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ESP PLANTS: Test shared protocol",
+      "type": "process",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "${workspaceFolder}\\tools\\test_shared.cmd"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build Waveshare",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}/firmware/waveshare-hub"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "ESP PLANTS: Upload Waveshare",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}/firmware/waveshare-hub",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP PLANTS: Monitor Waveshare",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}/firmware/waveshare-hub"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build H2",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}/firmware/m5-h2-zigbee"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "ESP PLANTS: Upload H2",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}/firmware/m5-h2-zigbee",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP PLANTS: Monitor H2",
+      "type": "process",
+      "command": "pio",
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}/firmware/m5-h2-zigbee"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build Waveshare + H2",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ESP PLANTS: Build Waveshare",
+        "ESP PLANTS: Build H2"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}

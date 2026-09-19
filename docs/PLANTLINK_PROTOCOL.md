@@ -3,26 +3,17 @@
 PlantLink is the private UART protocol between the Waveshare ESP32-S3
 application controller and the M5Stack ESP32-H2 Zigbee controller.
 
-It deliberately keeps Zigbee/Tuya details out of the Waveshare UI firmware.
-
 ## Transport
 
-Initial design:
-
-- full-duplex UART
-- binary packets
+- UART at 115200 8N1 for the initial hardware bring-up
+- binary frames
 - COBS encoding
-- one `0x00` frame delimiter
+- `0x00` frame delimiter
 - CRC-32 integrity check
-- sequence numbers for command/result correlation
-- maximum decoded payload: 512 bytes
-
-The initial baud rate will be selected after hardware/documentation review.
-Do not treat a baud value as fixed yet.
+- 16-bit sequence numbers
+- maximum payload: 256 bytes in the bring-up implementation
 
 ## Decoded frame
-
-Before COBS encoding, a frame contains:
 
 | Field | Size |
 | --- | ---: |
@@ -31,34 +22,20 @@ Before COBS encoding, a frame contains:
 | flags | 1 byte |
 | sequence | 2 bytes |
 | payload length | 2 bytes |
-| payload | 0-512 bytes |
+| payload | 0-256 bytes |
 | CRC-32 | 4 bytes |
 
-Multi-byte values are little-endian.
+Multi-byte integers are little-endian. CRC covers the frame from protocol
+version through the final payload byte.
 
-CRC-32 covers the frame from `protocol version` through the final payload byte;
-it does not include the CRC field itself or the COBS delimiter.
-
-## Startup handshake
-
-Both processors start with no assumption that the other side is running a
-compatible firmware.
-
-The Waveshare sends `Hello`. The H2 returns `HelloAck` containing its
-PlantLink protocol version and firmware/capability information. Incompatible
-versions must produce an explicit UI/diagnostic state instead of silently
-mis-parsing data.
-
-## Core message types
-
-The initial reserved message set is defined in
-`shared/plantlink_protocol.h`:
+## Bring-up messages
 
 - `Hello` / `HelloAck`
 - `Heartbeat`
 - `NetworkStatus`
 - `PermitJoin`
-- `DeviceJoined` / `DeviceLeft`
+- `DeviceJoined`
+- `DeviceLeft`
 - `RemoveDevice`
 - `SensorReport`
 - `SetSensorOption`
@@ -66,23 +43,27 @@ The initial reserved message set is defined in
 - `RawZigbeeEvent`
 - `FactoryResetNetwork`
 
-Payload schemas will be added deliberately as each behavior is implemented.
-Do not reuse a message ID with incompatible semantics.
+`FactoryResetNetwork` is reserved but the first H2 firmware deliberately ignores
+it. Destructive reset will require an explicit confirmation token before it is
+implemented.
 
-## Sensor identity
+## SensorReport v1
 
-Every sensor-facing message that identifies a Zigbee device uses its 64-bit
-IEEE address as the stable identity. A 16-bit Zigbee short/network address may
-be included for diagnostics but is never authoritative.
+The current fixed payload is 21 bytes:
 
-## Unknown ZG-303Z data
+```text
+ieee[8]
+short_addr u16
+field_flags u16
+temperature_centi_c i16
+humidity_centi_pct u16
+soil_moisture_pct u8
+battery_pct u8
+water_warning u8
+lqi u8
+rssi_dbm i8
+```
 
-The H2 decoder should preserve observability. Unknown Tuya datapoints or
-unexpected Zigbee reports should be available through debug logging and, when
-useful, `RawZigbeeEvent` rather than discarded.
-
-## Reset safety
-
-`FactoryResetNetwork` is destructive and must never be triggered as a side
-effect of ordinary firmware update, reboot, UART reconnect, or protocol-version
-mismatch.
+Only fields whose validity bits are set in `field_flags` are authoritative.
+This lets standard Zigbee clusters and Tuya datapoints arrive at different
+times while the H2 maintains one normalized sensor state.
