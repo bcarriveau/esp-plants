@@ -9,6 +9,8 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 #### Added
 
+- Fixed ESP32-H2 APS capture compatibility with the Arduino-ESP32 3.3.7 Zigbee API, which exposes LQI but not an APS RSSI member; unavailable RSSI is now carried as -128 instead of referencing a nonexistent field.
+
 - Waveshare PlatformIO project based on the hardware-proven ESP Aircraft Radar
   display/touch stack rather than introducing a new LCD framework generation.
 - Native USB CDC debug on the Waveshare while dedicating UART0 GPIO43/44 to

@@ -4,8 +4,9 @@
     {
       "label": "ESP PLANTS: Test shared protocol",
       "type": "process",
-      "command": "cmd",
+      "command": "cmd.exe",
       "args": [
+        "/d",
         "/c",
         "${workspaceFolder}\\tools\\test_shared.cmd"
       ],
@@ -15,10 +16,13 @@
       "label": "ESP PLANTS: Build Waveshare",
       "type": "process",
       "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
       "args": [
         "run",
         "-d",
-        "${workspaceFolder}/firmware/waveshare-hub"
+        "${workspaceFolder}\\firmware\\waveshare-hub"
       ],
       "problemMatcher": [
         "$gcc"
@@ -26,13 +30,32 @@
       "group": "build"
     },
     {
-      "label": "ESP PLANTS: Upload Waveshare",
+      "label": "ESP PLANTS: Clean Waveshare",
       "type": "process",
       "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
       "args": [
         "run",
         "-d",
-        "${workspaceFolder}/firmware/waveshare-hub",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
+        "-t",
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Upload Waveshare",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
         "-t",
         "upload"
       ],
@@ -44,11 +67,14 @@
       "label": "ESP PLANTS: Monitor Waveshare",
       "type": "process",
       "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
       "args": [
         "device",
         "monitor",
         "--project-dir",
-        "${workspaceFolder}/firmware/waveshare-hub"
+        "${workspaceFolder}\\firmware\\waveshare-hub"
       ],
       "problemMatcher": []
     },
@@ -56,10 +82,13 @@
       "label": "ESP PLANTS: Build H2",
       "type": "process",
       "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
       "args": [
         "run",
         "-d",
-        "${workspaceFolder}/firmware/m5-h2-zigbee"
+        "${workspaceFolder}\\firmware\\m5-h2-zigbee"
       ],
       "problemMatcher": [
         "$gcc"
@@ -67,13 +96,32 @@
       "group": "build"
     },
     {
-      "label": "ESP PLANTS: Upload H2",
+      "label": "ESP PLANTS: Clean H2",
       "type": "process",
       "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
       "args": [
         "run",
         "-d",
-        "${workspaceFolder}/firmware/m5-h2-zigbee",
+        "${workspaceFolder}\\firmware\\m5-h2-zigbee",
+        "-t",
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Upload H2",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\m5-h2-zigbee",
         "-t",
         "upload"
       ],
@@ -85,11 +133,146 @@
       "label": "ESP PLANTS: Monitor H2",
       "type": "process",
       "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
       "args": [
         "device",
         "monitor",
         "--project-dir",
-        "${workspaceFolder}/firmware/m5-h2-zigbee"
+        "${workspaceFolder}\\firmware\\m5-h2-zigbee"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build T5",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\t5-hub"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "ESP PLANTS: Clean T5",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\t5-hub",
+        "-t",
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Upload T5",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\t5-hub",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP PLANTS: Monitor T5",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}\\firmware\\t5-hub"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build XIAO",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\xiao-soil-sensor"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "ESP PLANTS: Clean XIAO",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\xiao-soil-sensor",
+        "-t",
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Upload XIAO",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\xiao-soil-sensor",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP PLANTS: Monitor XIAO",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}\\firmware\\xiao-soil-sensor"
       ],
       "problemMatcher": []
     },
@@ -105,6 +288,37 @@
         "kind": "build",
         "isDefault": true
       }
+    },
+    {
+      "label": "ESP PLANTS: Clean Waveshare + H2",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ESP PLANTS: Clean Waveshare",
+        "ESP PLANTS: Clean H2"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build ALL",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ESP PLANTS: Build Waveshare",
+        "ESP PLANTS: Build H2",
+        "ESP PLANTS: Build T5",
+        "ESP PLANTS: Build XIAO"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Clean ALL",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ESP PLANTS: Clean Waveshare",
+        "ESP PLANTS: Clean H2",
+        "ESP PLANTS: Clean T5",
+        "ESP PLANTS: Clean XIAO"
+      ],
+      "problemMatcher": []
     }
   ]
 }

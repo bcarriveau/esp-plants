@@ -41,7 +41,7 @@ struct ApsEvent {
   uint16_t clusterId = 0;
   uint16_t profileId = 0;
   uint8_t lqi = 0;
-  int8_t rssi = 0;
+  int8_t rssi = plantlink::kRssiUnavailableDbm;
   uint16_t originalLength = 0;
   uint8_t capturedLength = 0;
   uint8_t data[kCapturedApsBytes]{};
@@ -60,7 +60,7 @@ struct SensorState {
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
   uint8_t lqi = 0;
-  int8_t rssi = 0;
+  int8_t rssi = plantlink::kRssiUnavailableDbm;
   uint32_t lastSeenMs = 0;
 };
 
@@ -305,7 +305,9 @@ bool apsDataHandler(esp_zb_apsde_data_ind_t ind) {
   event.clusterId = ind.cluster_id;
   event.profileId = ind.profile_id;
   event.lqi = ind.lqi;
-  event.rssi = ind.rssi;
+  // Arduino-ESP32 3.3.7's APS indication exposes LQI but no RSSI field.
+  // Do not derive fake dBm from LQI; -128 means RSSI unavailable on PlantLink.
+  event.rssi = plantlink::kRssiUnavailableDbm;
   event.originalLength = ind.asdu_length;
   event.capturedLength = ind.asdu_length > kCapturedApsBytes
                              ? static_cast<uint8_t>(kCapturedApsBytes)

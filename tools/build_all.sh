@@ -5,13 +5,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 python3 "$ROOT/tools/check_protocol_sync.py"
 
-echo
-echo "Building T5 hub..."
-pio run -d "$ROOT/firmware/t5-hub"
+projects=(
+  "firmware/waveshare-hub"
+  "firmware/m5-h2-zigbee"
+  "firmware/t5-hub"
+  "firmware/xiao-soil-sensor"
+)
+
+for project in "${projects[@]}"; do
+  echo
+  echo "Building $project..."
+  pio run -d "$ROOT/$project"
+done
 
 echo
-echo "Building XIAO sensor..."
-pio run -d "$ROOT/firmware/xiao-soil-sensor"
-
-echo
-echo "Both PlatformIO builds completed."
+echo "All ESP PLANTS PlatformIO builds completed."

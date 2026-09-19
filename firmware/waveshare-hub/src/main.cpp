@@ -179,7 +179,11 @@ void handleSensorReport(const plantlink::Frame &frame) {
     snprintf(text + used, sizeof(text) - used, "  BAT %u%%", report.batteryPct);
   }
   uiSetText(eventValue, text);
-  Serial.printf("[sensor] %s  lqi=%u rssi=%d\n", text, report.lqi, report.rssiDbm);
+  if (report.rssiDbm == plantlink::kRssiUnavailableDbm) {
+    Serial.printf("[sensor] %s  lqi=%u rssi=n/a\n", text, report.lqi);
+  } else {
+    Serial.printf("[sensor] %s  lqi=%u rssi=%d\n", text, report.lqi, report.rssiDbm);
+  }
 }
 
 void handleFrame(const plantlink::Frame &frame) {

@@ -3,7 +3,7 @@
 **/.pio-packages/
 
 # VS Code / PlatformIO local workspace state
-# Keep only the root shared tasks in Git; ignore per-project/editor state.
+# Keep the shared root tasks; ignore machine-specific editor state.
 **/.vscode/*
 !.vscode/tasks.json
 *.code-workspace
@@ -32,5 +32,3 @@ secrets.*
 # Serial/build logs
 *.log
 logs/
-
-*.ps1

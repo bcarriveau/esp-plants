@@ -68,6 +68,7 @@ struct Frame {
 // humidity_centi_pct[2], soil_pct[1], battery_pct[1], water_warning[1],
 // lqi[1], rssi_dbm[1]
 constexpr size_t kSensorReportPayloadBytes = 21;
+constexpr int8_t kRssiUnavailableDbm = static_cast<int8_t>(-128);
 
 struct SensorReportData {
   uint8_t ieee[8]{};
@@ -79,7 +80,7 @@ struct SensorReportData {
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
   uint8_t lqi = 0;
-  int8_t rssiDbm = 0;
+  int8_t rssiDbm = kRssiUnavailableDbm;
 };
 
 inline void putU16LE(uint8_t *p, uint16_t value) {
