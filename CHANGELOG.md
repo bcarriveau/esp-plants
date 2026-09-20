@@ -5,6 +5,21 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Waveshare current-data and all-sensors UX
+
+#### Added
+
+- Added a persistent Settings control to rename the default `ESP PLANTS` display title.
+- Added a dedicated `ALL SENSORS` page that scales to the full 16-sensor registry and shows moisture, battery, and report state together.
+- Added reporting/waiting counts so sleepy sensors that have not reported since reboot are obvious.
+
+#### Changed
+
+- `WHO NEEDS WATER?` now automatically features the driest plant that has delivered a fresh moisture report since the current Waveshare boot.
+- Tapping a plant on HOME temporarily overrides the featured plant for 30 seconds, then HOME automatically returns to the driest current plant.
+- HOME and ALL SENSORS are sorted driest-to-wettest for fresh reports, with waiting/not-yet-reported sensors at the bottom.
+- A Zigbee `DeviceJoined` event no longer marks a sensor as current; only an actual normalized `SensorReport` makes its readings current after reboot.
+
 ### Waveshare / H2 executable bring-up scaffold
 
 #### Added

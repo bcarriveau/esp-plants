@@ -13,12 +13,15 @@ constexpr int kPlantLinkTxPin = 43;
 constexpr uint32_t kHelloIntervalMs = 1500;
 constexpr uint32_t kLinkTimeoutMs = 7000;
 constexpr uint32_t kUiRefreshIntervalMs = 1000;
+constexpr uint32_t kHomeManualSelectionMs = 30 * 1000;
 constexpr size_t kMaxSensors = 16;
 constexpr size_t kPlantNameBytes = 24;
+constexpr size_t kDeviceNameBytes = 24;
 constexpr uint32_t kPlantRecordMagic = 0x504C4E54u;  // PLNT
 constexpr uint8_t kPlantRecordVersion = 1;
 
-enum class Page : uint8_t { Home = 0, Plant = 1, Settings = 2 };
+enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3 };
+enum class RenameTarget : uint8_t { Plant = 0, Device = 1 };
 
 struct PersistedPlant {
   uint32_t magic = kPlantRecordMagic;
@@ -51,10 +54,19 @@ struct PlantListRow {
   lv_obj_t *bar = nullptr;
 };
 
+struct AllSensorRow {
+  lv_obj_t *box = nullptr;
+  lv_obj_t *name = nullptr;
+  lv_obj_t *moisture = nullptr;
+  lv_obj_t *battery = nullptr;
+  lv_obj_t *updated = nullptr;
+};
+
 plantlink::Decoder decoder;
 Preferences preferences;
 PlantSensor sensors[kMaxSensors];
 PlantListRow rows[kMaxSensors];
+AllSensorRow allRows[kMaxSensors];
 
 uint16_t nextSequence = 1;
 uint32_t lastHelloMs = 0;
@@ -68,13 +80,19 @@ uint8_t zigbeeChannel = 0;
 uint8_t h2SensorCount = 0;
 uint8_t permitJoinRemaining = 0;
 int selectedSensor = -1;
+int manualHomeSensor = -1;
+uint32_t manualHomeUntilMs = 0;
+char deviceName[kDeviceNameBytes] = "ESP PLANTS";
 Page currentPage = Page::Home;
 
 lv_obj_t *homePage = nullptr;
+lv_obj_t *allPage = nullptr;
 lv_obj_t *plantPage = nullptr;
 lv_obj_t *settingsPage = nullptr;
+lv_obj_t *headerTitle = nullptr;
 lv_obj_t *headerCount = nullptr;
 lv_obj_t *navHome = nullptr;
+lv_obj_t *navAll = nullptr;
 lv_obj_t *navPlant = nullptr;
 lv_obj_t *navSettings = nullptr;
 
@@ -85,6 +103,9 @@ lv_obj_t *homeTemp = nullptr;
 lv_obj_t *homeHumidity = nullptr;
 lv_obj_t *homeBar = nullptr;
 lv_obj_t *homeWarning = nullptr;
+lv_obj_t *homeSummary = nullptr;
+
+lv_obj_t *allSummary = nullptr;
 
 lv_obj_t *detailSlot = nullptr;
 lv_obj_t *detailName = nullptr;
@@ -105,12 +126,15 @@ lv_obj_t *settingsZigbee = nullptr;
 lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
 lv_obj_t *settingsPair = nullptr;
+lv_obj_t *settingsDeviceName = nullptr;
 
 lv_obj_t *renameModal = nullptr;
 lv_obj_t *renameTitle = nullptr;
+lv_obj_t *renameHint = nullptr;
 lv_obj_t *renameInput = nullptr;
 lv_obj_t *renameKeyboard = nullptr;
 bool renameUppercase = true;
+RenameTarget renameTarget = RenameTarget::Plant;
 
 bool ieeeEqual(const uint8_t a[8], const uint8_t b[8]) { return memcmp(a, b, 8) == 0; }
 
@@ -135,6 +159,85 @@ size_t registeredCount() {
   size_t count = 0;
   for (const auto &sensor : sensors) if (sensor.used) ++count;
   return count;
+}
+
+size_t reportedCount() {
+  size_t count = 0;
+  for (const auto &sensor : sensors) if (sensor.used && sensor.seenThisBoot) ++count;
+  return count;
+}
+
+bool hasFreshMoisture(const PlantSensor &sensor) {
+  return sensor.used && sensor.seenThisBoot &&
+         (sensor.fieldFlags & plantlink::SensorHasSoilMoisture);
+}
+
+int sensorSortRank(const PlantSensor &sensor) {
+  if (hasFreshMoisture(sensor)) return 0;
+  if (sensor.used && sensor.seenThisBoot) return 1;
+  return 2;
+}
+
+size_t buildSortedSlots(size_t out[kMaxSensors]) {
+  size_t count = 0;
+  for (size_t slot = 0; slot < kMaxSensors; ++slot) {
+    if (sensors[slot].used) out[count++] = slot;
+  }
+
+  for (size_t i = 1; i < count; ++i) {
+    const size_t value = out[i];
+    size_t j = i;
+    while (j > 0) {
+      const size_t previous = out[j - 1];
+      const int valueRank = sensorSortRank(sensors[value]);
+      const int previousRank = sensorSortRank(sensors[previous]);
+      bool before = valueRank < previousRank;
+
+      if (valueRank == previousRank && valueRank == 0) {
+        if (sensors[value].soilMoisturePct != sensors[previous].soilMoisturePct) {
+          before = sensors[value].soilMoisturePct < sensors[previous].soilMoisturePct;
+        } else {
+          before = value < previous;
+        }
+      } else if (valueRank == previousRank) {
+        before = value < previous;
+      }
+
+      if (!before) break;
+      out[j] = previous;
+      --j;
+    }
+    out[j] = value;
+  }
+  return count;
+}
+
+int driestReportedSensor() {
+  size_t sorted[kMaxSensors]{};
+  const size_t count = buildSortedSlots(sorted);
+  if (!count || !hasFreshMoisture(sensors[sorted[0]])) return -1;
+  return static_cast<int>(sorted[0]);
+}
+
+int featuredHomeSensor() {
+  if (manualHomeSensor >= 0 &&
+      manualHomeSensor < static_cast<int>(kMaxSensors) &&
+      sensors[manualHomeSensor].used &&
+      static_cast<int32_t>(manualHomeUntilMs - millis()) > 0) {
+    return manualHomeSensor;
+  }
+  return driestReportedSensor();
+}
+
+void formatLastReport(const PlantSensor &sensor, char *out, size_t size) {
+  if (!sensor.seenThisBoot || !sensor.lastSeenMs) {
+    snprintf(out, size, "WAITING");
+    return;
+  }
+  const uint32_t age = (millis() - sensor.lastSeenMs) / 1000u;
+  if (age < 2) snprintf(out, size, "NOW");
+  else if (age < 60) snprintf(out, size, "%lus", static_cast<unsigned long>(age));
+  else snprintf(out, size, "%lum", static_cast<unsigned long>(age / 60u));
 }
 
 void saveSlot(size_t slot) {
@@ -281,6 +384,8 @@ void showPage(Page page) {
   currentPage = page;
   if (homePage) (page == Page::Home) ? lv_obj_clear_flag(homePage, LV_OBJ_FLAG_HIDDEN)
                                      : lv_obj_add_flag(homePage, LV_OBJ_FLAG_HIDDEN);
+  if (allPage) (page == Page::All) ? lv_obj_clear_flag(allPage, LV_OBJ_FLAG_HIDDEN)
+                                   : lv_obj_add_flag(allPage, LV_OBJ_FLAG_HIDDEN);
   if (plantPage) (page == Page::Plant) ? lv_obj_clear_flag(plantPage, LV_OBJ_FLAG_HIDDEN)
                                        : lv_obj_add_flag(plantPage, LV_OBJ_FLAG_HIDDEN);
   if (settingsPage) (page == Page::Settings) ? lv_obj_clear_flag(settingsPage, LV_OBJ_FLAG_HIDDEN)
@@ -289,6 +394,7 @@ void showPage(Page page) {
   const lv_color_t active = lv_color_hex(0xDDECDD);
   const lv_color_t idle = lv_color_hex(0xFFFFFF);
   if (navHome) lv_obj_set_style_bg_color(navHome, page == Page::Home ? active : idle, 0);
+  if (navAll) lv_obj_set_style_bg_color(navAll, page == Page::All ? active : idle, 0);
   if (navPlant) lv_obj_set_style_bg_color(navPlant, page == Page::Plant ? active : idle, 0);
   if (navSettings) lv_obj_set_style_bg_color(navSettings, page == Page::Settings ? active : idle, 0);
   uiDirty = true;
@@ -303,14 +409,27 @@ void rowEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
   if (slot < 0 || slot >= static_cast<intptr_t>(kMaxSensors) || !sensors[slot].used) return;
+  manualHomeSensor = static_cast<int>(slot);
+  manualHomeUntilMs = millis() + kHomeManualSelectionMs;
   selectedSensor = static_cast<int>(slot);
   uiDirty = true;
 }
 
+void allRowEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
+  if (slot < 0 || slot >= static_cast<intptr_t>(kMaxSensors) || !sensors[slot].used) return;
+  selectedSensor = static_cast<int>(slot);
+  showPage(Page::Plant);
+}
+
 void featuredEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  if (selectedSensor >= 0 && selectedSensor < static_cast<int>(kMaxSensors) && sensors[selectedSensor].used)
+  const int slot = featuredHomeSensor();
+  if (slot >= 0 && slot < static_cast<int>(kMaxSensors) && sensors[slot].used) {
+    selectedSensor = slot;
     showPage(Page::Plant);
+  }
 }
 
 void unitEvent(lv_event_t *event) {
@@ -330,22 +449,37 @@ void closeRename() {
 }
 
 void saveRename() {
+  const char *text = lv_textarea_get_text(renameInput);
+  if (!text || !text[0]) {
+    closeRename();
+    return;
+  }
+
+  if (renameTarget == RenameTarget::Device) {
+    strncpy(deviceName, text, sizeof(deviceName) - 1);
+    deviceName[sizeof(deviceName) - 1] = '\0';
+    preferences.putString("device_name", deviceName);
+    label(headerTitle, deviceName);
+    label(settingsDeviceName, deviceName);
+    Serial.printf("[settings] device name=\"%s\"\n", deviceName);
+    uiDirty = true;
+    closeRename();
+    return;
+  }
+
   if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
       !sensors[selectedSensor].used) {
     closeRename();
     return;
   }
 
-  const char *text = lv_textarea_get_text(renameInput);
-  if (text && text[0]) {
-    PlantSensor &s = sensors[selectedSensor];
-    strncpy(s.name, text, sizeof(s.name) - 1);
-    s.name[sizeof(s.name) - 1] = '\0';
-    saveSlot(static_cast<size_t>(selectedSensor));
-    Serial.printf("[registry] renamed slot=%u name=\"%s\"\n",
-                  static_cast<unsigned>(selectedSensor + 1), s.name);
-    uiDirty = true;
-  }
+  PlantSensor &s = sensors[selectedSensor];
+  strncpy(s.name, text, sizeof(s.name) - 1);
+  s.name[sizeof(s.name) - 1] = '\0';
+  saveSlot(static_cast<size_t>(selectedSensor));
+  Serial.printf("[registry] renamed slot=%u name=\"%s\"\n",
+                static_cast<unsigned>(selectedSensor + 1), s.name);
+  uiDirty = true;
   closeRename();
 }
 
@@ -394,17 +528,30 @@ void renameEvent(lv_event_t *event) {
   if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
       !sensors[selectedSensor].used) return;
 
+  renameTarget = RenameTarget::Plant;
   char titleText[48]{};
   snprintf(titleText, sizeof(titleText), "RENAME PLANT %u",
            static_cast<unsigned>(selectedSensor + 1));
   label(renameTitle, titleText);
+  label(renameHint, "Name stays tied to this sensor.");
 
   lv_textarea_set_text(renameInput, sensors[selectedSensor].name);
   lv_textarea_set_cursor_pos(renameInput, LV_TEXTAREA_CURSOR_LAST);
-
   renameUppercase = true;
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
+  lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(renameModal);
+}
 
+void deviceNameEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  renameTarget = RenameTarget::Device;
+  label(renameTitle, "RENAME ESP PLANTS");
+  label(renameHint, "This name appears in the display header.");
+  lv_textarea_set_text(renameInput, deviceName);
+  lv_textarea_set_cursor_pos(renameInput, LV_TEXTAREA_CURSOR_LAST);
+  renameUppercase = true;
+  lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
   lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
 }
@@ -419,11 +566,13 @@ void buildHeader(lv_obj_t *screen) {
   lv_obj_set_style_pad_all(header, 0, 0);
   lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "ESP PLANTS");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_pos(title, 22, 9);
+  headerTitle = lv_label_create(header);
+  lv_label_set_text(headerTitle, deviceName);
+  lv_obj_set_style_text_font(headerTitle, &lv_font_montserrat_32, 0);
+  lv_obj_set_style_text_color(headerTitle, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_pos(headerTitle, 22, 9);
+  lv_obj_set_width(headerTitle, 500);
+  lv_label_set_long_mode(headerTitle, LV_LABEL_LONG_DOT);
 
   lv_obj_t *tag = lv_label_create(header);
   lv_label_set_text(tag, "keep 'em alive");
@@ -456,6 +605,12 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_text_color(section, lv_color_hex(0x66806D), 0);
   lv_obj_set_pos(section, 22, 14);
 
+  homeSummary = lv_label_create(featured);
+  lv_label_set_text(homeSummary, "0 REPORTING | 0 WAITING");
+  lv_obj_set_style_text_font(homeSummary, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(homeSummary, lv_color_hex(0x839087), 0);
+  lv_obj_align(homeSummary, LV_ALIGN_TOP_RIGHT, -18, 14);
+
   homeName = lv_label_create(featured);
   lv_label_set_text(homeName, "WAITING FOR SENSOR");
   lv_obj_set_style_text_font(homeName, &lv_font_montserrat_32, 0);
@@ -470,7 +625,7 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_text_color(homeMood, lv_color_hex(0x467252), 0);
   lv_obj_set_pos(homeMood, 24, 82);
   lv_obj_set_width(homeMood, 445);
-  lv_label_set_long_mode(homeMood, LV_LABEL_LONG_DOT);
+  lv_label_set_long_mode(homeMood, LV_LABEL_LONG_WRAP);
 
   metric(featured, "SOIL", 24, 126, &homeSoil, &lv_font_montserrat_32);
   metric(featured, "TEMP", 180, 126, &homeTemp);
@@ -547,6 +702,81 @@ void buildHome(lv_obj_t *screen) {
     lv_bar_set_range(rows[i].bar, 0, 100);
     lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0xDCE8DD), LV_PART_MAIN);
     lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0x62A86E), LV_PART_INDICATOR);
+  }
+}
+
+void buildAll(lv_obj_t *screen) {
+  allPage = lv_obj_create(screen);
+  lv_obj_set_pos(allPage, 0, 66);
+  lv_obj_set_size(allPage, 800, 356);
+  lv_obj_set_style_border_width(allPage, 0, 0);
+  lv_obj_set_style_bg_opa(allPage, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(allPage, 0, 0);
+  lv_obj_clear_flag(allPage, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *p = card(allPage, 14, 10, 772, 334);
+
+  lv_obj_t *title = lv_label_create(p);
+  lv_label_set_text(title, "ALL SENSORS");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_pos(title, 18, 14);
+
+  allSummary = lv_label_create(p);
+  lv_label_set_text(allSummary, "0 REPORTING | 0 WAITING");
+  lv_obj_set_style_text_font(allSummary, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(allSummary, lv_color_hex(0x687269), 0);
+  lv_obj_align(allSummary, LV_ALIGN_TOP_RIGHT, -18, 18);
+
+  lv_obj_t *head = lv_label_create(p);
+  lv_label_set_text(head, "PLANT                         SOIL       BATTERY       LAST REPORT");
+  lv_obj_set_style_text_font(head, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(head, lv_color_hex(0x839087), 0);
+  lv_obj_set_pos(head, 18, 50);
+
+  lv_obj_t *list = lv_obj_create(p);
+  lv_obj_set_pos(list, 10, 70);
+  lv_obj_set_size(list, 752, 250);
+  lv_obj_set_style_border_width(list, 0, 0);
+  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(list, 0, 0);
+  lv_obj_set_style_pad_row(list, 6, 0);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+
+  for (size_t i = 0; i < kMaxSensors; ++i) {
+    allRows[i].box = lv_obj_create(list);
+    lv_obj_set_size(allRows[i].box, 742, 54);
+    lv_obj_set_style_radius(allRows[i].box, 10, 0);
+    lv_obj_set_style_border_width(allRows[i].box, 0, 0);
+    lv_obj_set_style_bg_color(allRows[i].box, lv_color_hex(0xF2F6F1), 0);
+    lv_obj_set_style_pad_all(allRows[i].box, 8, 0);
+    lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(allRows[i].box, allRowEvent, LV_EVENT_CLICKED,
+                        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+
+    allRows[i].name = lv_label_create(allRows[i].box);
+    lv_obj_set_style_text_font(allRows[i].name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(allRows[i].name, lv_color_hex(0x173E2A), 0);
+    lv_obj_set_pos(allRows[i].name, 2, 8);
+    lv_obj_set_width(allRows[i].name, 270);
+    lv_label_set_long_mode(allRows[i].name, LV_LABEL_LONG_DOT);
+
+    allRows[i].moisture = lv_label_create(allRows[i].box);
+    lv_obj_set_style_text_font(allRows[i].moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_pos(allRows[i].moisture, 300, 7);
+
+    allRows[i].battery = lv_label_create(allRows[i].box);
+    lv_obj_set_style_text_font(allRows[i].battery, &lv_font_montserrat_16, 0);
+    lv_obj_set_pos(allRows[i].battery, 420, 8);
+
+    allRows[i].updated = lv_label_create(allRows[i].box);
+    lv_obj_set_style_text_font(allRows[i].updated, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(allRows[i].updated, lv_color_hex(0x687269), 0);
+    lv_obj_set_pos(allRows[i].updated, 540, 9);
+    lv_obj_set_width(allRows[i].updated, 180);
+    lv_label_set_long_mode(allRows[i].updated, LV_LABEL_LONG_DOT);
   }
 }
 
@@ -639,26 +869,33 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_set_style_text_color(title, lv_color_hex(0x173E2A), 0);
   lv_obj_set_pos(title, 22, 18);
 
-  lv_obj_t *sub = lv_label_create(system);
-  lv_label_set_text(sub, "The nerdy stuff lives here.");
-  lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(sub, lv_color_hex(0x839087), 0);
-  lv_obj_set_pos(sub, 22, 51);
-
   lv_obj_t *cap = lv_label_create(system);
-  lv_label_set_text(cap, "H2 LINK"); lv_obj_set_pos(cap, 22, 92);
-  settingsH2 = lv_label_create(system); lv_obj_set_pos(settingsH2, 22, 113);
-  lv_obj_set_style_text_font(settingsH2, &lv_font_montserrat_20, 0);
+  lv_label_set_text(cap, "DEVICE NAME"); lv_obj_set_pos(cap, 22, 62);
+  lv_obj_t *deviceButton = lv_btn_create(system);
+  lv_obj_set_size(deviceButton, 330, 46); lv_obj_set_pos(deviceButton, 22, 82);
+  lv_obj_set_style_radius(deviceButton, 12, 0);
+  lv_obj_set_style_bg_color(deviceButton, lv_color_hex(0x2E6144), 0);
+  lv_obj_add_event_cb(deviceButton, deviceNameEvent, LV_EVENT_CLICKED, nullptr);
+  settingsDeviceName = lv_label_create(deviceButton);
+  lv_obj_set_style_text_font(settingsDeviceName, &lv_font_montserrat_16, 0);
+  lv_obj_set_width(settingsDeviceName, 292);
+  lv_label_set_long_mode(settingsDeviceName, LV_LABEL_LONG_DOT);
+  lv_obj_center(settingsDeviceName);
 
   cap = lv_label_create(system);
-  lv_label_set_text(cap, "ZIGBEE"); lv_obj_set_pos(cap, 22, 158);
-  settingsZigbee = lv_label_create(system); lv_obj_set_pos(settingsZigbee, 22, 179);
-  lv_obj_set_style_text_font(settingsZigbee, &lv_font_montserrat_20, 0);
+  lv_label_set_text(cap, "H2 LINK"); lv_obj_set_pos(cap, 22, 146);
+  settingsH2 = lv_label_create(system); lv_obj_set_pos(settingsH2, 22, 165);
+  lv_obj_set_style_text_font(settingsH2, &lv_font_montserrat_18, 0);
 
   cap = lv_label_create(system);
-  lv_label_set_text(cap, "REGISTERED PLANTS"); lv_obj_set_pos(cap, 22, 224);
-  settingsPlants = lv_label_create(system); lv_obj_set_pos(settingsPlants, 22, 245);
-  lv_obj_set_style_text_font(settingsPlants, &lv_font_montserrat_20, 0);
+  lv_label_set_text(cap, "ZIGBEE"); lv_obj_set_pos(cap, 22, 205);
+  settingsZigbee = lv_label_create(system); lv_obj_set_pos(settingsZigbee, 22, 224);
+  lv_obj_set_style_text_font(settingsZigbee, &lv_font_montserrat_18, 0);
+
+  cap = lv_label_create(system);
+  lv_label_set_text(cap, "REGISTERED PLANTS"); lv_obj_set_pos(cap, 22, 264);
+  settingsPlants = lv_label_create(system); lv_obj_set_pos(settingsPlants, 22, 283);
+  lv_obj_set_style_text_font(settingsPlants, &lv_font_montserrat_18, 0);
 
   lv_obj_t *setup = card(settingsPage, 408, 10, 378, 334);
   title = lv_label_create(setup);
@@ -696,7 +933,6 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_set_style_text_color(note, lv_color_hex(0x687269), 0);
   lv_obj_set_pos(note, 22, 280);
 }
-
 void buildNav(lv_obj_t *screen) {
   lv_obj_t *bar = lv_obj_create(screen);
   lv_obj_set_pos(bar, 0, 422);
@@ -709,7 +945,7 @@ void buildNav(lv_obj_t *screen) {
 
   auto add = [&](int x, const char *text, Page page, lv_obj_t **button) {
     *button = lv_btn_create(bar);
-    lv_obj_set_size(*button, 246, 44);
+    lv_obj_set_size(*button, 184, 44);
     lv_obj_set_pos(*button, x, 7);
     lv_obj_set_style_radius(*button, 12, 0);
     lv_obj_set_style_shadow_width(*button, 0, 0);
@@ -724,10 +960,10 @@ void buildNav(lv_obj_t *screen) {
     lv_obj_center(l);
   };
   add(14, "HOME", Page::Home, &navHome);
-  add(277, "PLANT", Page::Plant, &navPlant);
-  add(540, "SETTINGS", Page::Settings, &navSettings);
+  add(210, "ALL SENSORS", Page::All, &navAll);
+  add(406, "PLANT", Page::Plant, &navPlant);
+  add(602, "SETTINGS", Page::Settings, &navSettings);
 }
-
 void buildRename(lv_obj_t *screen) {
   renameModal = lv_obj_create(screen);
   lv_obj_set_pos(renameModal, 0, 0);
@@ -751,11 +987,11 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_set_style_text_color(renameTitle, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_pos(renameTitle, 18, 8);
 
-  lv_obj_t *hint = lv_label_create(topBar);
-  lv_label_set_text(hint, "Name stays tied to this sensor.");
-  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(hint, lv_color_hex(0xCDE0D2), 0);
-  lv_obj_set_pos(hint, 20, 36);
+  renameHint = lv_label_create(topBar);
+  lv_label_set_text(renameHint, "Name stays tied to this sensor.");
+  lv_obj_set_style_text_font(renameHint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(renameHint, lv_color_hex(0xCDE0D2), 0);
+  lv_obj_set_pos(renameHint, 20, 36);
 
   renameInput = lv_textarea_create(renameModal);
   lv_obj_set_pos(renameInput, 18, 82);
@@ -796,6 +1032,7 @@ void buildUi() {
   lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
   buildHeader(screen);
   buildHome(screen);
+  buildAll(screen);
   buildPlant(screen);
   buildSettings(screen);
   buildNav(screen);
@@ -831,17 +1068,36 @@ void refreshUi() {
 
   char text[128]{};
   const size_t count = registeredCount();
+  const size_t reporting = reportedCount();
+  const size_t waiting = count >= reporting ? count - reporting : 0;
+  const int homeSensor = featuredHomeSensor();
+
   snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count), count == 1 ? "PLANT" : "PLANTS");
   label(headerCount, text);
+  snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
+           static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
+  label(homeSummary, text);
+  label(allSummary, text);
+
+  size_t sorted[kMaxSensors]{};
+  const size_t sortedCount = buildSortedSlots(sorted);
+
+  for (size_t order = 0; order < sortedCount; ++order) {
+    const size_t i = sorted[order];
+    lv_obj_move_to_index(rows[i].box, static_cast<int32_t>(order));
+    lv_obj_move_to_index(allRows[i].box, static_cast<int32_t>(order));
+  }
 
   for (size_t i = 0; i < kMaxSensors; ++i) {
     if (!sensors[i].used) {
       lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
       continue;
     }
+
     lv_obj_clear_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
     label(rows[i].name, sensors[i].name);
-    if (sensors[i].seenThisBoot && (sensors[i].fieldFlags & plantlink::SensorHasSoilMoisture)) {
+    if (hasFreshMoisture(sensors[i])) {
       snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
       lv_bar_set_value(rows[i].bar, sensors[i].soilMoisturePct, LV_ANIM_OFF);
     } else {
@@ -850,59 +1106,121 @@ void refreshUi() {
     }
     label(rows[i].moisture, text);
     lv_obj_set_style_bg_color(rows[i].box,
-                              lv_color_hex(selectedSensor == static_cast<int>(i) ? 0xDDECDD : 0xF2F6F1), 0);
+                              lv_color_hex(homeSensor == static_cast<int>(i) ? 0xDDECDD : 0xF2F6F1), 0);
+
+    lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
+    label(allRows[i].name, sensors[i].name);
+    if (hasFreshMoisture(sensors[i])) snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
+    else snprintf(text, sizeof(text), "--%%");
+    label(allRows[i].moisture, text);
+
+    if (sensors[i].seenThisBoot && (sensors[i].fieldFlags & plantlink::SensorHasBattery))
+      snprintf(text, sizeof(text), "%u%%", sensors[i].batteryPct);
+    else
+      snprintf(text, sizeof(text), "--%%");
+    label(allRows[i].battery, text);
+
+    formatLastReport(sensors[i], text, sizeof(text));
+    label(allRows[i].updated, text);
+
+    const bool thirsty = sensors[i].seenThisBoot &&
+                         ((sensors[i].fieldFlags & plantlink::SensorHasWaterWarning) &&
+                          sensors[i].waterWarning);
+    lv_obj_set_style_bg_color(allRows[i].box,
+                              lv_color_hex(thirsty ? 0xF7E0DB : 0xF2F6F1), 0);
   }
 
-  const bool valid = selectedSensor >= 0 && selectedSensor < static_cast<int>(kMaxSensors) && sensors[selectedSensor].used;
+  if (homeSensor < 0 || homeSensor >= static_cast<int>(kMaxSensors) || !sensors[homeSensor].used) {
+    label(homeName, count ? "WAITING FOR REPORTS" : "WAITING FOR SENSOR");
+    if (count) {
+      snprintf(text, sizeof(text), "%u %s waiting to report",
+               static_cast<unsigned>(waiting), waiting == 1 ? "sensor" : "sensors");
+      label(homeMood, text);
+    } else {
+      label(homeMood, "Pair a sensor and I'll keep an eye on it");
+    }
+    label(homeSoil, "--%");
+    label(homeTemp, useFahrenheit ? "--.- F" : "--.- C");
+    label(homeHumidity, "--%");
+    lv_bar_set_value(homeBar, 0, LV_ANIM_OFF);
+    lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    PlantSensor &home = sensors[homeSensor];
+    label(homeName, home.name);
+    label(homeMood, mood(home));
+    formatSoil(home, text, sizeof(text)); label(homeSoil, text);
+    lv_bar_set_value(homeBar, hasFreshMoisture(home) ? home.soilMoisturePct : 0, LV_ANIM_OFF);
+    formatTemp(home, text, sizeof(text)); label(homeTemp, text);
+    formatHumidity(home, text, sizeof(text)); label(homeHumidity, text);
+    if (home.seenThisBoot && (home.fieldFlags & plantlink::SensorHasWaterWarning) && home.waterWarning)
+      lv_obj_clear_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+    else
+      lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  const bool valid = selectedSensor >= 0 &&
+                     selectedSensor < static_cast<int>(kMaxSensors) &&
+                     sensors[selectedSensor].used;
   if (!valid) {
-    label(homeName, "WAITING FOR SENSOR");
-    label(homeMood, "Pair a sensor and I'll keep an eye on it");
-    label(homeSoil, "--%"); label(homeTemp, useFahrenheit ? "--.- F" : "--.- C"); label(homeHumidity, "--%");
-    lv_bar_set_value(homeBar, 0, LV_ANIM_OFF); lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
-    label(detailSlot, "PLANT --"); label(detailName, "NO PLANT SELECTED"); label(detailMood, "--");
-    label(detailIeee, "--"); label(detailSoil, "--%"); label(detailTemp, useFahrenheit ? "--.- F" : "--.- C");
-    label(detailHumidity, "--%"); label(detailBattery, "--%"); label(detailSignal, "LQI --");
-    label(detailUpdated, "No sensor data yet"); lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
-    lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN); lv_obj_add_state(renameButton, LV_STATE_DISABLED);
+    label(detailSlot, "PLANT --");
+    label(detailName, "NO PLANT SELECTED");
+    label(detailMood, "--");
+    label(detailIeee, "--");
+    label(detailSoil, "--%");
+    label(detailTemp, useFahrenheit ? "--.- F" : "--.- C");
+    label(detailHumidity, "--%");
+    label(detailBattery, "--%");
+    label(detailSignal, "LQI --");
+    label(detailUpdated, "No sensor data yet");
+    lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
+    lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_state(renameButton, LV_STATE_DISABLED);
   } else {
     PlantSensor &s = sensors[selectedSensor];
-    label(homeName, s.name); label(homeMood, mood(s));
-    formatSoil(s, text, sizeof(text)); label(homeSoil, text);
-    lv_bar_set_value(homeBar, s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasSoilMoisture) ? s.soilMoisturePct : 0, LV_ANIM_OFF);
-    formatTemp(s, text, sizeof(text)); label(homeTemp, text);
-    formatHumidity(s, text, sizeof(text)); label(homeHumidity, text);
-    if (s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasWaterWarning) && s.waterWarning)
-      lv_obj_clear_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+    snprintf(text, sizeof(text), "PLANT %u", static_cast<unsigned>(selectedSensor + 1));
+    label(detailSlot, text);
+    label(detailName, s.name);
+    label(detailMood, mood(s));
 
-    snprintf(text, sizeof(text), "PLANT %u", static_cast<unsigned>(selectedSensor + 1)); label(detailSlot, text);
-    label(detailName, s.name); label(detailMood, mood(s));
-    char ieee[24]{}; plantlink::formatIeee(s.ieee, ieee, sizeof(ieee));
+    char ieee[24]{};
+    plantlink::formatIeee(s.ieee, ieee, sizeof(ieee));
     if (s.seenThisBoot) snprintf(text, sizeof(text), "%s   short 0x%04X", ieee, s.shortAddress);
     else snprintf(text, sizeof(text), "%s   waiting for check-in", ieee);
     label(detailIeee, text);
+
     formatSoil(s, text, sizeof(text)); label(detailSoil, text);
-    lv_bar_set_value(detailBar, s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasSoilMoisture) ? s.soilMoisturePct : 0, LV_ANIM_OFF);
+    lv_bar_set_value(detailBar, hasFreshMoisture(s) ? s.soilMoisturePct : 0, LV_ANIM_OFF);
     formatTemp(s, text, sizeof(text)); label(detailTemp, text);
     formatHumidity(s, text, sizeof(text)); label(detailHumidity, text);
-    if (s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasBattery)) snprintf(text, sizeof(text), "%u%%", s.batteryPct);
-    else snprintf(text, sizeof(text), "--%%"); label(detailBattery, text);
-    if (s.seenThisBoot) snprintf(text, sizeof(text), "LQI %u", s.lqi); else snprintf(text, sizeof(text), "LQI --");
+
+    if (s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasBattery))
+      snprintf(text, sizeof(text), "%u%%", s.batteryPct);
+    else
+      snprintf(text, sizeof(text), "--%%");
+    label(detailBattery, text);
+
+    if (s.seenThisBoot) snprintf(text, sizeof(text), "LQI %u", s.lqi);
+    else snprintf(text, sizeof(text), "LQI --");
     label(detailSignal, text);
-    if (!s.seenThisBoot || !s.lastSeenMs) snprintf(text, sizeof(text), "Waiting for this plant to check in");
-    else {
+
+    if (!s.seenThisBoot || !s.lastSeenMs) {
+      snprintf(text, sizeof(text), "Waiting for this plant to check in");
+    } else {
       const uint32_t age = (millis() - s.lastSeenMs) / 1000u;
       if (age < 2) snprintf(text, sizeof(text), "Updated now");
       else if (age < 60) snprintf(text, sizeof(text), "Updated %lus ago", static_cast<unsigned long>(age));
       else snprintf(text, sizeof(text), "Updated %lum ago", static_cast<unsigned long>(age / 60u));
     }
     label(detailUpdated, text);
+
     if (s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasWaterWarning) && s.waterWarning)
       lv_obj_clear_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+    else
+      lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_state(renameButton, LV_STATE_DISABLED);
   }
 
+  label(settingsDeviceName, deviceName);
   label(settingsH2, h2Online ? "ONLINE" : "OFFLINE");
   if (networkReady) snprintf(text, sizeof(text), "READY  CH %u  |  H2 SEES %u", zigbeeChannel, h2SensorCount);
   else if (h2Online) snprintf(text, sizeof(text), "STARTING");
@@ -916,7 +1234,6 @@ void refreshUi() {
 
   lvgl_port_unlock();
 }
-
 void handleNetworkStatus(const plantlink::Frame &frame) {
   if (frame.payloadLength < 4) return;
   networkReady = frame.payload[0] != 0;
@@ -933,7 +1250,10 @@ void handleDeviceJoined(const plantlink::Frame &frame) {
   char ieee[24]{}; plantlink::formatIeee(frame.payload, ieee, sizeof(ieee));
   Serial.printf("[zigbee] device seen: %s short=0x%04X slot=%u\n", ieee,
                 plantlink::getU16LE(frame.payload + 8), s ? static_cast<unsigned>(slot + 1) : 0u);
-  if (s) { s->seenThisBoot = true; s->lastSeenMs = millis(); uiDirty = true; }
+  if (s) {
+    s->shortAddress = plantlink::getU16LE(frame.payload + 8);
+    uiDirty = true;
+  }
 }
 
 void handleSensorReport(const plantlink::Frame &frame) {
@@ -1011,7 +1331,10 @@ void setup() {
 
   preferences.begin("espplants", false);
   useFahrenheit = preferences.getBool("fahrenheit", true);
+  String savedDeviceName = preferences.getString("device_name", "ESP PLANTS");
+  savedDeviceName.toCharArray(deviceName, sizeof(deviceName));
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
+  Serial.printf("[settings] device name=\"%s\"\n", deviceName);
   loadRegistry();
 
   Serial0.begin(kPlantLinkBaud, SERIAL_8N1, kPlantLinkRxPin, kPlantLinkTxPin);
