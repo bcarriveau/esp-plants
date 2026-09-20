@@ -80,6 +80,7 @@ struct SensorState {
   uint8_t soilMoisturePct = 0;
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
+  bool legacyHobeianMappingSeen = false;
   uint8_t lqi = 0;
   int8_t rssi = plantlink::kRssiUnavailableDbm;
   uint32_t lastSeenMs = 0;
@@ -297,6 +298,22 @@ void processApsEvent(const ApsEvent &event) {
           if (dp.numericValid) Serial.printf(" value=%ld", static_cast<long>(dp.numeric));
           if (dp.metric == zg303z::Metric::Unknown) Serial.print(" UNKNOWN");
           Serial.println();
+
+          if (!sensor) return;
+
+          // Hardware-verified HOBEIAN ZG-303Z legacy map:
+          //   DP3 soil, DP5 temperature, DP15 battery, DP109 air RH.
+          // On this map DP106 is the dry/water-shortage warning, not the
+          // user-facing C/F preference. Alternate ZG-303Z maps are left alone.
+          if (dp.id == 3 || dp.id == 5 || dp.id == 15) {
+            sensor->legacyHobeianMappingSeen = true;
+          }
+          if (dp.id == 106 && dp.numericValid && sensor->legacyHobeianMappingSeen) {
+            normalized.hasWaterWarning = true;
+            normalized.waterWarning = (dp.numeric != 0);
+            Serial.printf("[tuya] legacy DP106 water warning=%s\n",
+                          normalized.waterWarning ? "ON" : "OFF");
+          }
         });
   } else if (event.clusterId == zg303z::kTemperatureClusterId ||
              event.clusterId == zg303z::kPowerConfigClusterId) {
@@ -448,6 +465,9 @@ void printUsbConsoleStatus() {
     }
     if (sensor.fieldFlags & plantlink::SensorHasBattery) {
       Serial.printf(" batt=%u%%", sensor.batteryPct);
+    }
+    if (sensor.fieldFlags & plantlink::SensorHasWaterWarning) {
+      Serial.printf(" water_warning=%s", sensor.waterWarning ? "ON" : "OFF");
     }
     Serial.println();
   }

@@ -72,6 +72,12 @@ The sensor battery report was cross-checked against physical battery voltage:
 with a low pair it reported about 2.5 V / 5%, and with a fresh pair it reported
 3.0 V / 100%. Battery decoding should not be rescaled in the H2.
 
-DP106 was observed as a boolean on this physical unit, so ESP PLANTS does not
-use it as the user-facing C/F preference. Display units remain a Waveshare UI
-setting while PlantLink keeps normalized temperature in centi-degrees C.
+DP106 was hardware-observed as a boolean on this legacy HOBEIAN mapping and
+correlates with the dry/water-shortage state: it was 1 with dry soil and 0 after
+the probe was returned to wet soil. Independent HOBEIAN ZG-303Z community
+mapping also identifies legacy DP106 as water shortage. ESP PLANTS therefore
+uses DP106 as water warning only after legacy DP3/5/15 mapping evidence has
+been seen; alternate ZG-303Z mappings are not forced to that meaning.
+
+The user-facing C/F preference remains a Waveshare UI setting while PlantLink
+keeps normalized temperature in centi-degrees C.
