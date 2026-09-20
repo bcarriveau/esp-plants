@@ -9,6 +9,8 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 #### Added
 
+- Added a development USB serial console on the H2: p opens Zigbee joining for 120 seconds, c closes joining, s prints coordinator/sensor status, and h/? prints help. This allows H2 + ZG-303Z testing before the Waveshare hub is connected.
+
 - Fixed ESP32-H2 APS capture compatibility with the Arduino-ESP32 3.3.7 Zigbee API, which exposes LQI but not an APS RSSI member; unavailable RSSI is now carried as -128 instead of referencing a nonexistent field.
 
 - Waveshare PlatformIO project based on the hardware-proven ESP Aircraft Radar

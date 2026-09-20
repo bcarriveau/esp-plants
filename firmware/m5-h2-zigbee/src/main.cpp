@@ -377,6 +377,104 @@ void servicePlantLink() {
   }
 }
 
+void printUsbConsoleHelp() {
+  Serial.println("[console] commands:");
+  Serial.println("  p = open Zigbee pairing for 120 seconds");
+  Serial.println("  c = close Zigbee pairing");
+  Serial.println("  s = print Zigbee/network/sensor status");
+  Serial.println("  h or ? = show this help");
+}
+
+void printUsbConsoleStatus() {
+  zigbeeReady = Zigbee.connected();
+  Serial.printf("[console] zigbee=%s channel=%u sensors=%u permit_join=%us\n",
+                zigbeeReady ? "online" : "not-ready", currentChannel(), sensorCount,
+                permitJoinRemaining());
+
+  if (sensorCount == 0) {
+    Serial.println("[console] no Zigbee sensors seen yet");
+    return;
+  }
+
+  for (const auto &sensor : sensors) {
+    if (!sensor.used) continue;
+
+    char ieeeText[24]{};
+    plantlink::formatIeee(sensor.ieee, ieeeText, sizeof(ieeeText));
+
+    Serial.printf("[console] sensor ieee=%s short=0x%04X lqi=%u",
+                  ieeeText, sensor.shortAddress, sensor.lqi);
+
+    if (sensor.rssi == plantlink::kRssiUnavailableDbm) {
+      Serial.print(" rssi=n/a");
+    } else {
+      Serial.printf(" rssi=%d", sensor.rssi);
+    }
+
+    if (sensor.fieldFlags & plantlink::SensorHasSoilMoisture) {
+      Serial.printf(" soil=%u%%", sensor.soilMoisturePct);
+    }
+    if (sensor.fieldFlags & plantlink::SensorHasTemperature) {
+      Serial.printf(" temp=%.1fC", sensor.temperatureCentiC / 100.0f);
+    }
+    if (sensor.fieldFlags & plantlink::SensorHasHumidity) {
+      Serial.printf(" rh=%.1f%%", sensor.humidityCentiPct / 100.0f);
+    }
+    if (sensor.fieldFlags & plantlink::SensorHasBattery) {
+      Serial.printf(" batt=%u%%", sensor.batteryPct);
+    }
+    Serial.println();
+  }
+}
+
+void handleUsbConsoleCommand(char command) {
+  if (command >= 'A' && command <= 'Z') {
+    command = static_cast<char>(command - 'A' + 'a');
+  }
+
+  switch (command) {
+    case 'p':
+      Zigbee.openNetwork(120);
+      permitJoinUntilMs = millis() + 120000u;
+      Serial.println("[console] Zigbee pairing OPEN for 120 seconds");
+      sendNetworkStatus();
+      break;
+
+    case 'c':
+      Zigbee.closeNetwork();
+      permitJoinUntilMs = 0;
+      Serial.println("[console] Zigbee pairing CLOSED");
+      sendNetworkStatus();
+      break;
+
+    case 's':
+      printUsbConsoleStatus();
+      break;
+
+    case 'h':
+    case '?':
+      printUsbConsoleHelp();
+      break;
+
+    default:
+      Serial.printf("[console] unknown command '%c' - press h for help\n", command);
+      break;
+  }
+}
+
+void serviceUsbConsole() {
+  while (Serial.available()) {
+    const int raw = Serial.read();
+    if (raw < 0) break;
+
+    const char command = static_cast<char>(raw);
+    if (command == '\r' || command == '\n' || command == ' ' || command == '\t') {
+      continue;
+    }
+
+    handleUsbConsoleCommand(command);
+  }
+}
 bool startZigbee() {
   Serial.println("[zigbee] configuring ESP32-H2 as native coordinator");
   zbGateway.setManufacturerAndModel("ESP PLANTS", "PlantGateway-H2");
@@ -420,9 +518,11 @@ void setup() {
 
   startZigbee();
   sendNetworkStatus();
+  printUsbConsoleHelp();
 }
 
 void loop() {
+  serviceUsbConsole();
   servicePlantLink();
 
   ApsEvent event;
