@@ -37,7 +37,7 @@ The H2 also watches normal Zigbee attribute reports so the product does not
 depend only on Tuya 0xEF00:
 
 - 0x0402 measured temperature
-- 0x0405 measured humidity
+- 0x0405 measured-value frame (legacy HOBEIAN firmware mirrors soil moisture here)
 - 0x0001 battery percentage remaining
 
 Soil moisture is expected to require the vendor/Tuya path on stock ZG-303Z.
@@ -61,11 +61,12 @@ Physical testing on the ESP32-H2 coordinator confirmed this stock sensor family
 uses Tuya EF00 DP 5 for temperature (tenths C), DP 3 for soil moisture, DP 15
 for battery percentage, and DP 109 for air humidity.
 
-The same device also emits standard Zigbee temperature, humidity, and battery
-reports. Its standard 0x0405 humidity measured value was observed reporting
-zero while DP109 carried the real RH value. After a valid DP109 has been seen,
-the H2 therefore treats Tuya humidity as authoritative and uses standard 0x0405
-only as a startup fallback.
+The same device also emits standard Zigbee temperature and battery reports.
+Although it uses the standard 0x0405 Relative Humidity cluster format, physical
+captures proved that this HOBEIAN firmware mirrors soil moisture there: DP3=0
+was followed by 0x0405=0, and DP3=98 was followed by 0x0405=9800. Actual air
+humidity is DP109. The H2 therefore treats 0x0405 as a soil-moisture fallback
+for this ZG-303Z path and never uses it as air RH.
 
 The sensor battery report was cross-checked against physical battery voltage:
 with a low pair it reported about 2.5 V / 5%, and with a fresh pair it reported

@@ -268,4 +268,27 @@ inline bool decodeStandardReport(uint16_t clusterId, const uint8_t *frame, size_
   return changed;
 }
 
+
+// HOBEIAN ZG-303Z legacy stock firmware uses standard cluster 0x0405 as a
+// second copy of soil moisture rather than air RH. The encoded value still
+// follows the standard RelativeHumidity measured-value scale (hundredths of a
+// percent), so 9800 means 98% soil moisture. Real air humidity is Tuya DP109.
+//
+// Keep this model quirk separate from decodeStandardReport() so the generic
+// standard-cluster decoder remains standards-correct.
+inline bool decodeZg303zSoilMirrorReport(const uint8_t *frame, size_t length,
+                                         NormalizedUpdate &out) {
+  NormalizedUpdate standard;
+  if (!decodeStandardReport(kHumidityClusterId, frame, length, standard) ||
+      !standard.hasHumidity) {
+    return false;
+  }
+
+  const uint32_t roundedPct =
+      (static_cast<uint32_t>(standard.humidityCentiPct) + 50u) / 100u;
+  out.hasSoilMoisture = true;
+  out.soilMoisturePct =
+      roundedPct > 100u ? 100u : static_cast<uint8_t>(roundedPct);
+  return true;
+}
 }  // namespace zg303z

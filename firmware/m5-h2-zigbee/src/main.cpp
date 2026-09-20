@@ -80,7 +80,6 @@ struct SensorState {
   uint8_t soilMoisturePct = 0;
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
-  bool tuyaHumiditySeen = false;
   uint8_t lqi = 0;
   int8_t rssi = plantlink::kRssiUnavailableDbm;
   uint32_t lastSeenMs = 0;
@@ -300,26 +299,18 @@ void processApsEvent(const ApsEvent &event) {
           Serial.println();
         });
   } else if (event.clusterId == zg303z::kTemperatureClusterId ||
-             event.clusterId == zg303z::kHumidityClusterId ||
              event.clusterId == zg303z::kPowerConfigClusterId) {
     decoded = zg303z::decodeStandardReport(event.clusterId, event.data,
                                             event.capturedLength, normalized);
+  } else if (event.clusterId == zg303z::kHumidityClusterId) {
+    // Hardware-verified HOBEIAN ZG-303Z quirk: standard cluster 0x0405
+    // mirrors soil moisture (e.g. DP3=98 and 0x0405=9800), while actual
+    // air humidity arrives on Tuya DP109.
+    decoded = zg303z::decodeZg303zSoilMirrorReport(
+        event.data, event.capturedLength, normalized);
   }
 
   if (sensor && decoded) {
-    if (event.clusterId == zg303z::kTuyaClusterId && normalized.hasHumidity) {
-      sensor->tuyaHumiditySeen = true;
-    }
-
-    // Stock ZG-303Z firmware observed on hardware reports real RH on Tuya
-    // DP109 but also emits a bogus standard 0x0405 measured value of zero.
-    // Keep the standard cluster as startup fallback, but never let it replace
-    // a real Tuya humidity value after DP109 has been observed.
-    if (event.clusterId == zg303z::kHumidityClusterId &&
-        sensor->tuyaHumiditySeen && normalized.hasHumidity) {
-      normalized.hasHumidity = false;
-    }
-
     applyNormalized(*sensor, normalized);
     sendSensorReport(*sensor);
   }
