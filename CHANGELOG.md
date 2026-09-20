@@ -9,6 +9,16 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 #### Added
 
+- Fixed LVGL 8.3 button-matrix keyboard map declarations so the custom Waveshare plant-name keyboard compiles with lv_btnmatrix_set_map().
+
+- Reworked the on-device plant-name editor with a purpose-built touch keyboard: explicit SPACE, SAVE, CANCEL, DEL, and ABC/abc controls with larger buttons and a stronger full-screen layout.
+
+- Added persistent Waveshare plant slots keyed by each Zigbee sensor's IEEE-64 address. Plant numbering and user names now survive reboots and normal firmware updates instead of depending on report order after boot.
+- Added a three-page Waveshare touch UI with HOME, PLANT, and SETTINGS navigation. The HA-inspired overview stays moisture-focused while detailed radio/system information moves off the main screen.
+- Added on-device plant renaming with the LVGL touch keyboard. Names are stored in Waveshare NVS and remain bound to the same IEEE sensor identity.
+- Known plants now appear immediately after reboot while waiting for their sleepy Zigbee sensors to check in; live values fill back in as reports arrive.
+- Moved Zigbee pairing, H2/Zigbee diagnostics, registered-plant count, and the persistent F/C control to the SETTINGS page.
+
 - Replaced the temporary Waveshare engineering table with an HA-inspired 800x480 plant dashboard: playful plant status text, a large selected-plant card, soil bar, temperature, air RH, battery, signal/last-update details, water-warning badge, and a scrollable all-plants list.
 - Added a persistent F/C display toggle on the Waveshare; PlantLink continues to transport normalized centi-degrees C internally.
 - Fixed Waveshare native USB Serial routing by explicitly enabling ARDUINO_USB_MODE=1 and ARDUINO_USB_CDC_ON_BOOT=1, matching the proven ESP32-S3 native USB console pattern while leaving UART0 GPIO43/44 dedicated to PlantLink.
