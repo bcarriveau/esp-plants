@@ -9,6 +9,12 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 #### Added
 
+- Registered Tuya `0xEF00` as a custom client cluster on the H2 gateway endpoint so stock ZG-303Z Tuya commands are accepted by the Zigbee stack instead of producing repeated missing-client-cluster errors.
+- Made ZG-303Z Tuya DP109 humidity authoritative after first observation because physical hardware emits a bogus standard `0x0405` humidity value of zero that can otherwise overwrite the valid RH reading.
+- Documented physical ZG-303Z captures: DP5 temperature, DP3 soil moisture, DP15 battery, DP109 humidity, standard temperature/battery cross-checks, and the observed DP106 boolean behavior.
+
+- Fixed H2 USB console routing by explicitly mapping Arduino Serial to the ESP32-H2 hardware USB Serial/JTAG interface (ARDUINO_USB_MODE=1, ARDUINO_USB_CDC_ON_BOOT=1); enabled monitor echo for interactive console testing.
+
 - Added a development USB serial console on the H2: p opens Zigbee joining for 120 seconds, c closes joining, s prints coordinator/sensor status, and h/? prints help. This allows H2 + ZG-303Z testing before the Waveshare hub is connected.
 
 - Fixed ESP32-H2 APS capture compatibility with the Arduino-ESP32 3.3.7 Zigbee API, which exposes LQI but not an APS RSSI member; unavailable RSSI is now carried as -128 instead of referencing a nonexistent field.

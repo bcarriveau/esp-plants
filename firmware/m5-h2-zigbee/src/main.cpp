@@ -27,7 +27,28 @@ constexpr size_t kCapturedApsBytes = 128;
 constexpr uint32_t kStatusIntervalMs = 1500;
 
 HardwareSerial PlantUart(1);
-ZigbeeGateway zbGateway(kGatewayEndpoint);
+
+class PlantZigbeeGateway : public ZigbeeGateway {
+ public:
+  explicit PlantZigbeeGateway(uint8_t endpoint) : ZigbeeGateway(endpoint) {
+    // ZG-303Z sends Tuya EF00 commands TO the coordinator's client side.
+    // Register an empty custom client cluster so the Zigbee stack accepts
+    // those commands normally while our raw APS observer decodes the payload.
+    esp_zb_attribute_list_t *tuyaClient =
+        esp_zb_zcl_attr_list_create(zg303z::kTuyaClusterId);
+    if (tuyaClient) {
+      tuyaClientStatus_ = esp_zb_cluster_list_add_custom_cluster(
+          _cluster_list, tuyaClient, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
+    }
+  }
+
+  bool tuyaClientReady() const { return tuyaClientStatus_ == ESP_OK; }
+
+ private:
+  esp_err_t tuyaClientStatus_ = ESP_FAIL;
+};
+
+PlantZigbeeGateway zbGateway(kGatewayEndpoint);
 plantlink::Decoder plantDecoder;
 uint16_t nextSequence = 1;
 uint32_t lastStatusMs = 0;
@@ -59,6 +80,7 @@ struct SensorState {
   uint8_t soilMoisturePct = 0;
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
+  bool tuyaHumiditySeen = false;
   uint8_t lqi = 0;
   int8_t rssi = plantlink::kRssiUnavailableDbm;
   uint32_t lastSeenMs = 0;
@@ -285,6 +307,19 @@ void processApsEvent(const ApsEvent &event) {
   }
 
   if (sensor && decoded) {
+    if (event.clusterId == zg303z::kTuyaClusterId && normalized.hasHumidity) {
+      sensor->tuyaHumiditySeen = true;
+    }
+
+    // Stock ZG-303Z firmware observed on hardware reports real RH on Tuya
+    // DP109 but also emits a bogus standard 0x0405 measured value of zero.
+    // Keep the standard cluster as startup fallback, but never let it replace
+    // a real Tuya humidity value after DP109 has been observed.
+    if (event.clusterId == zg303z::kHumidityClusterId &&
+        sensor->tuyaHumiditySeen && normalized.hasHumidity) {
+      normalized.hasHumidity = false;
+    }
+
     applyNormalized(*sensor, normalized);
     sendSensorReport(*sensor);
   }
@@ -477,6 +512,8 @@ void serviceUsbConsole() {
 }
 bool startZigbee() {
   Serial.println("[zigbee] configuring ESP32-H2 as native coordinator");
+  Serial.printf("[zigbee] Tuya EF00 client cluster: %s\n",
+                zbGateway.tuyaClientReady() ? "registered" : "FAILED");
   zbGateway.setManufacturerAndModel("ESP PLANTS", "PlantGateway-H2");
   Zigbee.addEndpoint(&zbGateway);
   Zigbee.setDebugMode(true);

@@ -55,3 +55,22 @@ writes (sample interval, calibration, warning threshold) therefore need a
 pending-command queue and should be applied when that sensor next wakes.
 That command queue is intentionally a later layer; first bring-up proves receive
 traffic and stable IEEE identity before writing settings back to sensors.
+## Hardware observation: HOBEIAN ZG-303Z
+
+Physical testing on the ESP32-H2 coordinator confirmed this stock sensor family
+uses Tuya EF00 DP 5 for temperature (tenths C), DP 3 for soil moisture, DP 15
+for battery percentage, and DP 109 for air humidity.
+
+The same device also emits standard Zigbee temperature, humidity, and battery
+reports. Its standard 0x0405 humidity measured value was observed reporting
+zero while DP109 carried the real RH value. After a valid DP109 has been seen,
+the H2 therefore treats Tuya humidity as authoritative and uses standard 0x0405
+only as a startup fallback.
+
+The sensor battery report was cross-checked against physical battery voltage:
+with a low pair it reported about 2.5 V / 5%, and with a fresh pair it reported
+3.0 V / 100%. Battery decoding should not be rescaled in the H2.
+
+DP106 was observed as a boolean on this physical unit, so ESP PLANTS does not
+use it as the user-facing C/F preference. Display units remain a Waveshare UI
+setting while PlantLink keeps normalized temperature in centi-degrees C.
