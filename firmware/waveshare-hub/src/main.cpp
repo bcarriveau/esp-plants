@@ -304,7 +304,7 @@ void rowEvent(lv_event_t *event) {
   const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
   if (slot < 0 || slot >= static_cast<intptr_t>(kMaxSensors) || !sensors[slot].used) return;
   selectedSensor = static_cast<int>(slot);
-  showPage(Page::Plant);
+  uiDirty = true;
 }
 
 void featuredEvent(lv_event_t *event) {

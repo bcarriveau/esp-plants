@@ -118,6 +118,8 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 #### Changed
 
+- Changed the HOME right-side plant list into an in-place selector: tapping a plant updates the large HOME card without navigating away; tapping the large card or the PLANT tab still opens full plant details.
+
 - Manual XIAO service wake keeps GREEN on while Wi-Fi and T5 identity
   confirmation complete, briefly shows the confirmed RED sensor number, then
   returns to solid GREEN service state.
