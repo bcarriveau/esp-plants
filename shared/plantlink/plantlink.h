@@ -23,6 +23,7 @@ enum class MessageType : uint8_t {
   DeviceJoined = 0x12,
   DeviceLeft = 0x13,
   RemoveDevice = 0x14,
+  InfrastructureReport = 0x15,
 
   SensorReport = 0x20,
   SetSensorOption = 0x21,
@@ -44,6 +45,7 @@ enum CapabilityFlags : uint32_t {
   CapabilityZigbeeCoordinator = 1u << 0,
   CapabilityZg303zDecoder = 1u << 1,
   CapabilityRawZigbeeLog = 1u << 2,
+  CapabilityInfrastructureRegistry = 1u << 3,
 };
 
 enum SensorFieldFlags : uint16_t {
@@ -52,6 +54,11 @@ enum SensorFieldFlags : uint16_t {
   SensorHasSoilMoisture = 1u << 2,
   SensorHasBattery = 1u << 3,
   SensorHasWaterWarning = 1u << 4,
+};
+
+enum InfrastructureFlags : uint8_t {
+  InfrastructureOnline = 1u << 0,
+  InfrastructureDirectNeighbor = 1u << 1,
 };
 
 struct Frame {
@@ -79,6 +86,19 @@ struct SensorReportData {
   uint8_t soilMoisturePct = 0;
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
+  uint8_t lqi = 0;
+  int8_t rssiDbm = kRssiUnavailableDbm;
+};
+
+// InfrastructureReport payload:
+// ieee[8], short_addr[2], flags[1], device_type[1], lqi[1], rssi_dbm[1]
+constexpr size_t kInfrastructureReportPayloadBytes = 14;
+
+struct InfrastructureReportData {
+  uint8_t ieee[8]{};
+  uint16_t shortAddress = 0xffff;
+  uint8_t flags = 0;
+  uint8_t deviceType = 0;
   uint8_t lqi = 0;
   int8_t rssiDbm = kRssiUnavailableDbm;
 };
@@ -186,9 +206,7 @@ inline size_t encodeFrame(MessageType type, uint8_t flags, uint16_t sequence,
   decoded[2] = flags;
   putU16LE(decoded + 3, sequence);
   putU16LE(decoded + 5, payloadLength);
-  if (payloadLength && payload) {
-    memcpy(decoded + kHeaderBytes, payload, payloadLength);
-  }
+  if (payloadLength && payload) memcpy(decoded + kHeaderBytes, payload, payloadLength);
 
   const size_t crcOffset = kHeaderBytes + payloadLength;
   putU32LE(decoded + crcOffset, crc32(decoded, crcOffset));
@@ -280,6 +298,30 @@ inline bool parseSensorReport(const uint8_t *payload, size_t length, SensorRepor
   out.waterWarning = payload[18];
   out.lqi = payload[19];
   out.rssiDbm = static_cast<int8_t>(payload[20]);
+  return true;
+}
+
+inline size_t serializeInfrastructureReport(const InfrastructureReportData &in,
+                                            uint8_t *out, size_t capacity) {
+  if (capacity < kInfrastructureReportPayloadBytes) return 0;
+  memcpy(out, in.ieee, 8);
+  putU16LE(out + 8, in.shortAddress);
+  out[10] = in.flags;
+  out[11] = in.deviceType;
+  out[12] = in.lqi;
+  out[13] = static_cast<uint8_t>(in.rssiDbm);
+  return kInfrastructureReportPayloadBytes;
+}
+
+inline bool parseInfrastructureReport(const uint8_t *payload, size_t length,
+                                      InfrastructureReportData &out) {
+  if (!payload || length != kInfrastructureReportPayloadBytes) return false;
+  memcpy(out.ieee, payload, 8);
+  out.shortAddress = getU16LE(payload + 8);
+  out.flags = payload[10];
+  out.deviceType = payload[11];
+  out.lqi = payload[12];
+  out.rssiDbm = static_cast<int8_t>(payload[13]);
   return true;
 }
 

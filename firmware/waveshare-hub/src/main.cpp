@@ -14,14 +14,18 @@ constexpr uint32_t kHelloIntervalMs = 1500;
 constexpr uint32_t kLinkTimeoutMs = 7000;
 constexpr uint32_t kUiRefreshIntervalMs = 1000;
 constexpr uint32_t kHomeManualSelectionMs = 30 * 1000;
-constexpr size_t kMaxSensors = 16;
+constexpr size_t kMaxSensors = 32;
+constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kPlantNameBytes = 24;
+constexpr size_t kInfrastructureNameBytes = 24;
 constexpr size_t kDeviceNameBytes = 24;
 constexpr uint32_t kPlantRecordMagic = 0x504C4E54u;  // PLNT
 constexpr uint8_t kPlantRecordVersion = 1;
+constexpr uint32_t kInfrastructureRecordMagic = 0x52505452u;  // RPTR
+constexpr uint8_t kInfrastructureRecordVersion = 1;
 
-enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3 };
-enum class RenameTarget : uint8_t { Plant = 0, Device = 1 };
+enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3, Advanced = 4 };
+enum class RenameTarget : uint8_t { Plant = 0, Device = 1, Infrastructure = 2 };
 enum class PairDialogState : uint8_t {
   Hidden = 0,
   Pairing = 1,
@@ -35,6 +39,13 @@ struct PersistedPlant {
   uint8_t version = kPlantRecordVersion;
   uint8_t ieee[8]{};
   char name[kPlantNameBytes]{};
+};
+
+struct PersistedInfrastructure {
+  uint32_t magic = kInfrastructureRecordMagic;
+  uint8_t version = kInfrastructureRecordVersion;
+  uint8_t ieee[8]{};
+  char name[kInfrastructureNameBytes]{};
 };
 
 struct PlantSensor {
@@ -69,11 +80,33 @@ struct AllSensorRow {
   lv_obj_t *updated = nullptr;
 };
 
+struct InfrastructureNode {
+  bool used = false;
+  bool online = false;
+  uint8_t ieee[8]{};
+  uint16_t shortAddress = 0xffff;
+  uint8_t flags = 0;
+  uint8_t deviceType = 0;
+  uint8_t lqi = 0;
+  int8_t rssi = plantlink::kRssiUnavailableDbm;
+  uint32_t lastSeenMs = 0;
+  char name[kInfrastructureNameBytes]{};
+};
+
+struct InfrastructureRow {
+  lv_obj_t *box = nullptr;
+  lv_obj_t *name = nullptr;
+  lv_obj_t *status = nullptr;
+  lv_obj_t *signal = nullptr;
+};
+
 plantlink::Decoder decoder;
 Preferences preferences;
 PlantSensor sensors[kMaxSensors];
 PlantListRow rows[kMaxSensors];
 AllSensorRow allRows[kMaxSensors];
+InfrastructureNode infrastructure[kMaxInfrastructure];
+InfrastructureRow infrastructureRows[kMaxInfrastructure];
 
 uint16_t nextSequence = 1;
 uint32_t lastHelloMs = 0;
@@ -85,6 +118,7 @@ bool useFahrenheit = true;
 bool uiDirty = true;
 uint8_t zigbeeChannel = 0;
 uint8_t h2SensorCount = 0;
+uint8_t h2InfrastructureCount = 0;
 uint8_t permitJoinRemaining = 0;
 int selectedSensor = -1;
 int manualHomeSensor = -1;
@@ -92,6 +126,10 @@ uint32_t manualHomeUntilMs = 0;
 char deviceName[kDeviceNameBytes] = "ESP PLANTS";
 Page currentPage = Page::Home;
 PairDialogState pairDialogState = PairDialogState::Hidden;
+bool pairInfrastructure = false;
+bool pairRemovingInfrastructure = false;
+int pairFoundInfrastructure = -1;
+int selectedInfrastructure = -1;
 bool pairReplacing = false;
 int pairTargetSlot = -1;
 int pairFoundSlot = -1;
@@ -101,6 +139,7 @@ lv_obj_t *homePage = nullptr;
 lv_obj_t *allPage = nullptr;
 lv_obj_t *plantPage = nullptr;
 lv_obj_t *settingsPage = nullptr;
+lv_obj_t *advancedPage = nullptr;
 lv_obj_t *headerTitle = nullptr;
 lv_obj_t *headerCount = nullptr;
 lv_obj_t *navHome = nullptr;
@@ -141,6 +180,11 @@ lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
 lv_obj_t *settingsPair = nullptr;
 lv_obj_t *settingsDeviceName = nullptr;
+lv_obj_t *advancedSummary = nullptr;
+lv_obj_t *advancedDetail = nullptr;
+lv_obj_t *advancedRenameButton = nullptr;
+lv_obj_t *advancedRemoveButton = nullptr;
+lv_obj_t *advancedAddButton = nullptr;
 
 lv_obj_t *renameModal = nullptr;
 lv_obj_t *renameTitle = nullptr;
@@ -176,6 +220,132 @@ void slotKey(size_t slot, char out[12]) {
 
 void defaultName(size_t slot, char *out, size_t size) {
   snprintf(out, size, "PLANT %u", static_cast<unsigned>(slot + 1));
+}
+
+void infrastructureKey(size_t slot, char out[12]) {
+  snprintf(out, 12, "rptr%02u", static_cast<unsigned>(slot));
+}
+
+void defaultInfrastructureName(size_t slot, char *out, size_t size) {
+  snprintf(out, size, "REPEATER %u", static_cast<unsigned>(slot + 1));
+}
+
+size_t infrastructureCount() {
+  size_t count = 0;
+  for (const auto &node : infrastructure) if (node.used) ++count;
+  return count;
+}
+
+size_t onlineInfrastructureCount() {
+  size_t count = 0;
+  for (const auto &node : infrastructure) if (node.used && node.online) ++count;
+  return count;
+}
+
+void saveInfrastructureSlot(size_t slot) {
+  if (slot >= kMaxInfrastructure || !infrastructure[slot].used) return;
+  PersistedInfrastructure p{};
+  memcpy(p.ieee, infrastructure[slot].ieee, sizeof(p.ieee));
+  strncpy(p.name, infrastructure[slot].name, sizeof(p.name) - 1);
+  char key[12]{};
+  infrastructureKey(slot, key);
+  preferences.putBytes(key, &p, sizeof(p));
+}
+
+void loadInfrastructureRegistry() {
+  for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
+    char key[12]{};
+    infrastructureKey(slot, key);
+    if (preferences.getBytesLength(key) != sizeof(PersistedInfrastructure)) continue;
+
+    PersistedInfrastructure p{};
+    if (preferences.getBytes(key, &p, sizeof(p)) != sizeof(p)) continue;
+    if (p.magic != kInfrastructureRecordMagic ||
+        p.version != kInfrastructureRecordVersion ||
+        ieeeZero(p.ieee)) continue;
+
+    InfrastructureNode &node = infrastructure[slot];
+    node.used = true;
+    memcpy(node.ieee, p.ieee, sizeof(node.ieee));
+    p.name[sizeof(p.name) - 1] = '\0';
+    if (p.name[0]) strncpy(node.name, p.name, sizeof(node.name) - 1);
+    else defaultInfrastructureName(slot, node.name, sizeof(node.name));
+
+    if (selectedInfrastructure < 0) selectedInfrastructure = static_cast<int>(slot);
+
+    char ieee[24]{};
+    plantlink::formatIeee(node.ieee, ieee, sizeof(ieee));
+    Serial.printf("[registry] repeater slot=%u name=\"%s\" ieee=%s\n",
+                  static_cast<unsigned>(slot + 1), node.name, ieee);
+  }
+  Serial.printf("[registry] loaded %u repeater(s)\n",
+                static_cast<unsigned>(infrastructureCount()));
+}
+
+InfrastructureNode *findInfrastructure(const uint8_t ieee[8], size_t *slotOut = nullptr) {
+  if (!ieee || ieeeZero(ieee)) return nullptr;
+  for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
+    if (infrastructure[slot].used && ieeeEqual(infrastructure[slot].ieee, ieee)) {
+      if (slotOut) *slotOut = slot;
+      return &infrastructure[slot];
+    }
+  }
+  return nullptr;
+}
+
+InfrastructureNode *findOrCreateInfrastructure(const plantlink::InfrastructureReportData &report,
+                                               size_t *slotOut = nullptr,
+                                               bool *createdOut = nullptr) {
+  size_t slot = 0;
+  InfrastructureNode *node = findInfrastructure(report.ieee, &slot);
+  bool created = false;
+
+  if (!node) {
+    for (slot = 0; slot < kMaxInfrastructure; ++slot) {
+      if (infrastructure[slot].used) continue;
+      node = &infrastructure[slot];
+      *node = InfrastructureNode{};
+      node->used = true;
+      memcpy(node->ieee, report.ieee, sizeof(node->ieee));
+      defaultInfrastructureName(slot, node->name, sizeof(node->name));
+      saveInfrastructureSlot(slot);
+      created = true;
+      if (selectedInfrastructure < 0) selectedInfrastructure = static_cast<int>(slot);
+      break;
+    }
+  }
+
+  if (!node) return nullptr;
+  node->shortAddress = report.shortAddress;
+  node->flags = report.flags;
+  node->deviceType = report.deviceType;
+  node->online = (report.flags & plantlink::InfrastructureOnline) != 0;
+  node->lqi = report.lqi;
+  node->rssi = report.rssiDbm;
+  if (node->online) node->lastSeenMs = millis();
+
+  if (slotOut) *slotOut = slot;
+  if (createdOut) *createdOut = created;
+  return node;
+}
+
+void clearInfrastructureSlot(size_t slot) {
+  if (slot >= kMaxInfrastructure || !infrastructure[slot].used) return;
+  char key[12]{};
+  infrastructureKey(slot, key);
+  preferences.remove(key);
+  infrastructure[slot] = InfrastructureNode{};
+
+  if (selectedInfrastructure == static_cast<int>(slot)) {
+    selectedInfrastructure = -1;
+    for (size_t i = 0; i < kMaxInfrastructure; ++i) {
+      if (infrastructure[i].used) {
+        selectedInfrastructure = static_cast<int>(i);
+        break;
+      }
+    }
+  }
+  uiDirty = true;
 }
 
 size_t registeredCount() {
@@ -477,6 +647,8 @@ void showPage(Page page) {
                                        : lv_obj_add_flag(plantPage, LV_OBJ_FLAG_HIDDEN);
   if (settingsPage) (page == Page::Settings) ? lv_obj_clear_flag(settingsPage, LV_OBJ_FLAG_HIDDEN)
                                              : lv_obj_add_flag(settingsPage, LV_OBJ_FLAG_HIDDEN);
+  if (advancedPage) (page == Page::Advanced) ? lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_HIDDEN)
+                                             : lv_obj_add_flag(advancedPage, LV_OBJ_FLAG_HIDDEN);
 
   const lv_color_t active = lv_color_hex(0x1E3529);
   const lv_color_t idle = lv_color_hex(0x151F1A);
@@ -528,11 +700,51 @@ void unitEvent(lv_event_t *event) {
 }
 
 void startPairing(bool replacing, int targetSlot);
+void startInfrastructurePairing();
 void showRemoveConfirm(int targetSlot);
+void showInfrastructureRemoveConfirm(int targetSlot);
+void openInfrastructureRename(int slot);
 
 void pairEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   startPairing(false, -1);
+}
+
+void advancedEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  showPage(Page::Advanced);
+}
+
+void advancedBackEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  showPage(Page::Settings);
+}
+
+void infrastructureAddEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  startInfrastructurePairing();
+}
+
+void infrastructureRowEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
+  if (slot < 0 || slot >= static_cast<intptr_t>(kMaxInfrastructure) ||
+      !infrastructure[slot].used) return;
+  selectedInfrastructure = static_cast<int>(slot);
+  uiDirty = true;
+}
+
+void infrastructureRenameEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  openInfrastructureRename(selectedInfrastructure);
+}
+
+void infrastructureRemoveEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (selectedInfrastructure < 0 ||
+      selectedInfrastructure >= static_cast<int>(kMaxInfrastructure) ||
+      !infrastructure[selectedInfrastructure].used) return;
+  showInfrastructureRemoveConfirm(selectedInfrastructure);
 }
 
 void replaceEvent(lv_event_t *event) {
@@ -567,6 +779,24 @@ void saveRename() {
     label(headerTitle, deviceName);
     label(settingsDeviceName, deviceName);
     Serial.printf("[settings] device name=\"%s\"\n", deviceName);
+    uiDirty = true;
+    closeRename();
+    return;
+  }
+
+  if (renameTarget == RenameTarget::Infrastructure) {
+    if (selectedInfrastructure < 0 ||
+        selectedInfrastructure >= static_cast<int>(kMaxInfrastructure) ||
+        !infrastructure[selectedInfrastructure].used) {
+      closeRename();
+      return;
+    }
+    InfrastructureNode &node = infrastructure[selectedInfrastructure];
+    strncpy(node.name, text, sizeof(node.name) - 1);
+    node.name[sizeof(node.name) - 1] = '\0';
+    saveInfrastructureSlot(static_cast<size_t>(selectedInfrastructure));
+    Serial.printf("[registry] renamed repeater slot=%u name=\"%s\"\n",
+                  static_cast<unsigned>(selectedInfrastructure + 1), node.name);
     uiDirty = true;
     closeRename();
     return;
@@ -652,6 +882,22 @@ void renameEvent(lv_event_t *event) {
   openPlantRename(selectedSensor);
 }
 
+void openInfrastructureRename(int slot) {
+  if (slot < 0 || slot >= static_cast<int>(kMaxInfrastructure) ||
+      !infrastructure[slot].used) return;
+  selectedInfrastructure = slot;
+  renameTarget = RenameTarget::Infrastructure;
+
+  label(renameTitle, "RENAME REPEATER");
+  label(renameHint, "Name stays tied to this Zigbee router.");
+  lv_textarea_set_text(renameInput, infrastructure[slot].name);
+  lv_textarea_set_cursor_pos(renameInput, LV_TEXTAREA_CURSOR_LAST);
+  renameUppercase = true;
+  lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
+  lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(renameModal);
+}
+
 void deviceNameEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   renameTarget = RenameTarget::Device;
@@ -669,11 +915,17 @@ void deviceNameEvent(lv_event_t *event) {
 void closePairDialog() {
   pairDialogState = PairDialogState::Hidden;
   pairFoundSlot = -1;
+  pairFoundInfrastructure = -1;
+  pairInfrastructure = false;
+  pairRemovingInfrastructure = false;
   if (pairModal) lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
   uiDirty = true;
 }
 
 void startPairing(bool replacing, int targetSlot) {
+  pairInfrastructure = false;
+  pairRemovingInfrastructure = false;
+  pairFoundInfrastructure = -1;
   if (replacing) {
     if (targetSlot < 0 || targetSlot >= static_cast<int>(kMaxSensors) ||
         !sensors[targetSlot].used) return;
@@ -701,12 +953,52 @@ void startPairing(bool replacing, int targetSlot) {
   uiDirty = true;
 }
 
+void startInfrastructurePairing() {
+  pairInfrastructure = true;
+  pairRemovingInfrastructure = false;
+  pairReplacing = false;
+  pairTargetSlot = -1;
+  pairFoundSlot = -1;
+  pairFoundInfrastructure = -1;
+  pairStartedMs = millis();
+
+  if (infrastructureCount() >= kMaxInfrastructure) {
+    pairDialogState = PairDialogState::TimedOut;
+    uiDirty = true;
+    return;
+  }
+
+  pairDialogState = PairDialogState::Pairing;
+  if (h2Online && networkReady) {
+    requestJoin(120);
+  } else {
+    permitJoinRemaining = 0;
+    pairDialogState = PairDialogState::TimedOut;
+  }
+  uiDirty = true;
+}
+
 void showRemoveConfirm(int targetSlot) {
   if (targetSlot < 0 || targetSlot >= static_cast<int>(kMaxSensors) ||
       !sensors[targetSlot].used) return;
+  pairInfrastructure = false;
+  pairRemovingInfrastructure = false;
   pairReplacing = false;
   pairTargetSlot = targetSlot;
   pairFoundSlot = -1;
+  pairDialogState = PairDialogState::RemoveConfirm;
+  uiDirty = true;
+}
+
+void showInfrastructureRemoveConfirm(int targetSlot) {
+  if (targetSlot < 0 || targetSlot >= static_cast<int>(kMaxInfrastructure) ||
+      !infrastructure[targetSlot].used) return;
+  pairInfrastructure = true;
+  pairRemovingInfrastructure = true;
+  pairReplacing = false;
+  pairTargetSlot = targetSlot;
+  pairFoundSlot = -1;
+  pairFoundInfrastructure = -1;
   pairDialogState = PairDialogState::RemoveConfirm;
   uiDirty = true;
 }
@@ -715,20 +1007,33 @@ void pairPrimaryEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
 
   if (pairDialogState == PairDialogState::Found) {
-    const int slot = pairFoundSlot;
+    const bool infra = pairInfrastructure;
+    const int plantSlot = pairFoundSlot;
+    const int infraSlot = pairFoundInfrastructure;
     closePairDialog();
-    openPlantRename(slot);
+    if (infra) openInfrastructureRename(infraSlot);
+    else openPlantRename(plantSlot);
     return;
   }
 
   if (pairDialogState == PairDialogState::TimedOut) {
-    startPairing(pairReplacing, pairTargetSlot);
+    if (pairInfrastructure) startInfrastructurePairing();
+    else startPairing(pairReplacing, pairTargetSlot);
     return;
   }
 
   if (pairDialogState == PairDialogState::RemoveConfirm) {
     const int slot = pairTargetSlot;
-    if (slot >= 0 && slot < static_cast<int>(kMaxSensors) && sensors[slot].used) {
+    if (pairRemovingInfrastructure) {
+      if (slot >= 0 && slot < static_cast<int>(kMaxInfrastructure) &&
+          infrastructure[slot].used) {
+        uint8_t oldIeee[8]{};
+        memcpy(oldIeee, infrastructure[slot].ieee, sizeof(oldIeee));
+        requestRemoveDevice(oldIeee);
+        clearInfrastructureSlot(static_cast<size_t>(slot));
+      }
+    } else if (slot >= 0 && slot < static_cast<int>(kMaxSensors) &&
+               sensors[slot].used) {
       uint8_t oldIeee[8]{};
       memcpy(oldIeee, sensors[slot].ieee, sizeof(oldIeee));
       requestRemoveDevice(oldIeee);
@@ -765,42 +1070,75 @@ void refreshPairDialog() {
   lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x3F7A4E), 0);
 
   if (pairDialogState == PairDialogState::Pairing) {
-    label(pairTitle, pairReplacing ? "REPLACE SENSOR" : "ADD SENSOR");
-    label(pairInstruction,
-          pairReplacing
-              ? "Hold the NEW sensor's water/drop button until its red LED begins flashing."
-              : "Hold the sensor's water/drop button until its red LED begins flashing.");
-    snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+    if (pairInfrastructure) {
+      label(pairTitle, "ADD REPEATER");
+      label(pairInstruction,
+            "Put the Zigbee repeater/router into its normal pairing mode.");
+      snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+    } else {
+      label(pairTitle, pairReplacing ? "REPLACE SENSOR" : "ADD SENSOR");
+      label(pairInstruction,
+            pairReplacing
+                ? "Hold the NEW sensor's water/drop button until its red LED begins flashing."
+                : "Hold the sensor's water/drop button until its red LED begins flashing.");
+      snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+    }
     label(pairStatus, text);
     lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
     label(pairSecondaryLabel, "CANCEL");
   } else if (pairDialogState == PairDialogState::Found) {
-    label(pairTitle, "SENSOR FOUND");
-    if (pairFoundSlot >= 0 && pairFoundSlot < static_cast<int>(kMaxSensors) &&
-        sensors[pairFoundSlot].used) {
-      if (pairReplacing) {
-        snprintf(text, sizeof(text), "%s now uses the new sensor.",
-                 sensors[pairFoundSlot].name);
+    if (pairInfrastructure) {
+      label(pairTitle, "REPEATER FOUND");
+      if (pairFoundInfrastructure >= 0 &&
+          pairFoundInfrastructure < static_cast<int>(kMaxInfrastructure) &&
+          infrastructure[pairFoundInfrastructure].used) {
+        snprintf(text, sizeof(text), "Added as %s.",
+                 infrastructure[pairFoundInfrastructure].name);
+        label(pairInstruction, text);
       } else {
-        snprintf(text, sizeof(text), "Added as %s.", sensors[pairFoundSlot].name);
+        label(pairInstruction, "The Zigbee repeater is connected.");
       }
-      label(pairInstruction, text);
+      label(pairStatus, "Name it now, or tap DONE.");
+      lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+      label(pairPrimaryLabel, "RENAME");
+      label(pairSecondaryLabel, "DONE");
     } else {
-      label(pairInstruction, "The new sensor is connected.");
+      label(pairTitle, "SENSOR FOUND");
+      if (pairFoundSlot >= 0 && pairFoundSlot < static_cast<int>(kMaxSensors) &&
+          sensors[pairFoundSlot].used) {
+        if (pairReplacing) {
+          snprintf(text, sizeof(text), "%s now uses the new sensor.",
+                   sensors[pairFoundSlot].name);
+        } else {
+          snprintf(text, sizeof(text), "Added as %s.", sensors[pairFoundSlot].name);
+        }
+        label(pairInstruction, text);
+      } else {
+        label(pairInstruction, "The new sensor is connected.");
+      }
+      label(pairStatus, "Name it now, or tap DONE.");
+      lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+      label(pairPrimaryLabel, "NAME PLANT");
+      label(pairSecondaryLabel, "DONE");
     }
-    label(pairStatus, "Name it now, or tap DONE.");
-    lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
-    label(pairPrimaryLabel, "NAME PLANT");
-    label(pairSecondaryLabel, "DONE");
   } else if (pairDialogState == PairDialogState::TimedOut) {
     if (!h2Online || !networkReady) {
       label(pairTitle, "ZIGBEE NOT READY");
       label(pairInstruction, "The H2 Zigbee gateway is not ready yet.");
       label(pairStatus, "Check the H2 link, then tap TRY AGAIN.");
-    } else if (!pairReplacing && registeredCount() >= kMaxSensors) {
+    } else if (pairInfrastructure && infrastructureCount() >= kMaxInfrastructure) {
+      label(pairTitle, "REPEATER LIST FULL");
+      label(pairInstruction, "ESP PLANTS already has 32 saved repeaters/routers.");
+      label(pairStatus, "Remove one first, then add another.");
+    } else if (!pairInfrastructure && !pairReplacing &&
+               registeredCount() >= kMaxSensors) {
       label(pairTitle, "NO FREE PLANT SLOTS");
-      label(pairInstruction, "ESP PLANTS already has 16 registered plants.");
+      label(pairInstruction, "ESP PLANTS already has 32 registered plants.");
       label(pairStatus, "Remove a plant first, then add the new sensor.");
+    } else if (pairInfrastructure) {
+      label(pairTitle, "NO REPEATER FOUND");
+      label(pairInstruction, "No new Zigbee router appeared before pairing closed.");
+      label(pairStatus, "Put the repeater in pairing mode and try again.");
     } else {
       label(pairTitle, "NO SENSOR FOUND");
       label(pairInstruction, "No new sensor reported before the pairing window closed.");
@@ -810,16 +1148,30 @@ void refreshPairDialog() {
     label(pairPrimaryLabel, "TRY AGAIN");
     label(pairSecondaryLabel, "CLOSE");
   } else if (pairDialogState == PairDialogState::RemoveConfirm) {
-    label(pairTitle, "REMOVE SENSOR?");
-    if (pairTargetSlot >= 0 && pairTargetSlot < static_cast<int>(kMaxSensors) &&
-        sensors[pairTargetSlot].used) {
-      snprintf(text, sizeof(text), "Remove %s from ESP PLANTS?",
-               sensors[pairTargetSlot].name);
-      label(pairInstruction, text);
+    if (pairRemovingInfrastructure) {
+      label(pairTitle, "REMOVE REPEATER?");
+      if (pairTargetSlot >= 0 &&
+          pairTargetSlot < static_cast<int>(kMaxInfrastructure) &&
+          infrastructure[pairTargetSlot].used) {
+        snprintf(text, sizeof(text), "Remove %s from the Zigbee network?",
+                 infrastructure[pairTargetSlot].name);
+        label(pairInstruction, text);
+      } else {
+        label(pairInstruction, "Remove this Zigbee repeater?");
+      }
+      label(pairStatus, "The H2 will ask the router to leave the Zigbee network.");
     } else {
-      label(pairInstruction, "Remove this plant sensor?");
+      label(pairTitle, "REMOVE SENSOR?");
+      if (pairTargetSlot >= 0 && pairTargetSlot < static_cast<int>(kMaxSensors) &&
+          sensors[pairTargetSlot].used) {
+        snprintf(text, sizeof(text), "Remove %s from ESP PLANTS?",
+                 sensors[pairTargetSlot].name);
+        label(pairInstruction, text);
+      } else {
+        label(pairInstruction, "Remove this plant sensor?");
+      }
+      label(pairStatus, "This deletes the plant slot and asks the sensor to leave the Zigbee network.");
     }
-    label(pairStatus, "This deletes the plant slot and asks the sensor to leave the Zigbee network.");
     lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x8E493E), 0);
     label(pairPrimaryLabel, "REMOVE");
@@ -1226,12 +1578,151 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_set_style_text_font(settingsPair, &lv_font_montserrat_16, 0);
   lv_obj_center(settingsPair);
 
-  lv_obj_t *note = lv_label_create(setup);
-  lv_label_set_text(note, "To pair: hold the water/drop button until\nthe red LED flashes. Names survive reboots.");
-  lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(note, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(note, 22, 280);
+  lv_obj_t *advancedButton = lv_btn_create(setup);
+  lv_obj_set_size(advancedButton, 330, 44);
+  lv_obj_set_pos(advancedButton, 22, 276);
+  lv_obj_set_style_radius(advancedButton, 12, 0);
+  lv_obj_set_style_bg_color(advancedButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(advancedButton, advancedEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *advancedLabel = lv_label_create(advancedButton);
+  lv_label_set_text(advancedLabel, "ADVANCED ZIGBEE");
+  lv_obj_set_style_text_font(advancedLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(advancedLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(advancedLabel);
 }
+
+void buildAdvanced(lv_obj_t *screen) {
+  advancedPage = lv_obj_create(screen);
+  lv_obj_set_pos(advancedPage, 0, 66);
+  lv_obj_set_size(advancedPage, 800, 356);
+  lv_obj_set_style_border_width(advancedPage, 0, 0);
+  lv_obj_set_style_bg_opa(advancedPage, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(advancedPage, 0, 0);
+  lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *p = card(advancedPage, 14, 10, 772, 334);
+
+  lv_obj_t *title = lv_label_create(p);
+  lv_label_set_text(title, "ZIGBEE NETWORK");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(title, 18, 14);
+
+  advancedSummary = lv_label_create(p);
+  lv_label_set_text(advancedSummary, "0 REPEATERS | 0 ONLINE");
+  lv_obj_set_style_text_font(advancedSummary, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(advancedSummary, lv_color_hex(0xC1D0C6), 0);
+  lv_obj_set_pos(advancedSummary, 18, 48);
+
+  lv_obj_t *back = lv_btn_create(p);
+  lv_obj_set_size(back, 92, 42);
+  lv_obj_set_pos(back, 530, 12);
+  lv_obj_set_style_radius(back, 11, 0);
+  lv_obj_set_style_bg_color(back, lv_color_hex(0x233029), 0);
+  lv_obj_add_event_cb(back, advancedBackEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *backLabel = lv_label_create(back);
+  lv_label_set_text(backLabel, "BACK");
+  lv_obj_set_style_text_font(backLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(backLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(backLabel);
+
+  advancedAddButton = lv_btn_create(p);
+  lv_obj_set_size(advancedAddButton, 118, 42);
+  lv_obj_set_pos(advancedAddButton, 632, 12);
+  lv_obj_set_style_radius(advancedAddButton, 11, 0);
+  lv_obj_set_style_bg_color(advancedAddButton, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_add_event_cb(advancedAddButton, infrastructureAddEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *addLabel = lv_label_create(advancedAddButton);
+  lv_label_set_text(addLabel, "ADD REPEATER");
+  lv_obj_set_style_text_font(addLabel, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(addLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(addLabel);
+
+  lv_obj_t *head = lv_label_create(p);
+  lv_label_set_text(head, "REPEATER / ROUTER                     STATUS        SIGNAL");
+  lv_obj_set_style_text_font(head, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(head, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(head, 18, 76);
+
+  lv_obj_t *list = lv_obj_create(p);
+  lv_obj_set_pos(list, 10, 96);
+  lv_obj_set_size(list, 752, 166);
+  lv_obj_set_style_border_width(list, 0, 0);
+  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(list, 0, 0);
+  lv_obj_set_style_pad_row(list, 6, 0);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+
+  for (size_t i = 0; i < kMaxInfrastructure; ++i) {
+    infrastructureRows[i].box = lv_obj_create(list);
+    lv_obj_set_size(infrastructureRows[i].box, 742, 50);
+    lv_obj_set_style_radius(infrastructureRows[i].box, 10, 0);
+    lv_obj_set_style_border_width(infrastructureRows[i].box, 0, 0);
+    lv_obj_set_style_bg_color(infrastructureRows[i].box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_pad_all(infrastructureRows[i].box, 8, 0);
+    lv_obj_clear_flag(infrastructureRows[i].box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(infrastructureRows[i].box, infrastructureRowEvent,
+                        LV_EVENT_CLICKED,
+                        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+
+    infrastructureRows[i].name = lv_label_create(infrastructureRows[i].box);
+    lv_obj_set_style_text_font(infrastructureRows[i].name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(infrastructureRows[i].name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_pos(infrastructureRows[i].name, 2, 6);
+    lv_obj_set_width(infrastructureRows[i].name, 390);
+    lv_label_set_long_mode(infrastructureRows[i].name, LV_LABEL_LONG_DOT);
+
+    infrastructureRows[i].status = lv_label_create(infrastructureRows[i].box);
+    lv_obj_set_style_text_font(infrastructureRows[i].status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(infrastructureRows[i].status, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_pos(infrastructureRows[i].status, 430, 7);
+    lv_obj_set_width(infrastructureRows[i].status, 110);
+
+    infrastructureRows[i].signal = lv_label_create(infrastructureRows[i].box);
+    lv_obj_set_style_text_font(infrastructureRows[i].signal, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(infrastructureRows[i].signal, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_pos(infrastructureRows[i].signal, 570, 7);
+    lv_obj_set_width(infrastructureRows[i].signal, 145);
+  }
+
+  advancedDetail = lv_label_create(p);
+  lv_label_set_text(advancedDetail, "Select a repeater to manage it.");
+  lv_obj_set_style_text_font(advancedDetail, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(advancedDetail, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(advancedDetail, 18, 277);
+  lv_obj_set_width(advancedDetail, 430);
+  lv_label_set_long_mode(advancedDetail, LV_LABEL_LONG_DOT);
+
+  advancedRenameButton = lv_btn_create(p);
+  lv_obj_set_size(advancedRenameButton, 126, 44);
+  lv_obj_set_pos(advancedRenameButton, 478, 270);
+  lv_obj_set_style_radius(advancedRenameButton, 11, 0);
+  lv_obj_set_style_bg_color(advancedRenameButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(advancedRenameButton, infrastructureRenameEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *renameLabel = lv_label_create(advancedRenameButton);
+  lv_label_set_text(renameLabel, "RENAME");
+  lv_obj_set_style_text_font(renameLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(renameLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(renameLabel);
+
+  advancedRemoveButton = lv_btn_create(p);
+  lv_obj_set_size(advancedRemoveButton, 126, 44);
+  lv_obj_set_pos(advancedRemoveButton, 616, 270);
+  lv_obj_set_style_radius(advancedRemoveButton, 11, 0);
+  lv_obj_set_style_bg_color(advancedRemoveButton, lv_color_hex(0x7A4037), 0);
+  lv_obj_add_event_cb(advancedRemoveButton, infrastructureRemoveEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *removeLabel = lv_label_create(advancedRemoveButton);
+  lv_label_set_text(removeLabel, "REMOVE");
+  lv_obj_set_style_text_font(removeLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(removeLabel, lv_color_hex(0xF7EDE9), 0);
+  lv_obj_center(removeLabel);
+
+  lv_obj_add_state(advancedRenameButton, LV_STATE_DISABLED);
+  lv_obj_add_state(advancedRemoveButton, LV_STATE_DISABLED);
+}
+
 void buildNav(lv_obj_t *screen) {
   lv_obj_t *bar = lv_obj_create(screen);
   lv_obj_set_pos(bar, 0, 422);
@@ -1409,6 +1900,7 @@ void buildUi() {
   buildAll(screen);
   buildPlant(screen);
   buildSettings(screen);
+  buildAdvanced(screen);
   buildNav(screen);
   buildRename(screen);
   buildPairDialog(screen);
@@ -1599,9 +2091,63 @@ void refreshUi() {
     lv_obj_clear_state(removeButton, LV_STATE_DISABLED);
   }
 
+  const size_t repeaterCount = infrastructureCount();
+  const size_t repeaterOnline = onlineInfrastructureCount();
+  snprintf(text, sizeof(text), "%u REPEATERS | %u ONLINE",
+           static_cast<unsigned>(repeaterCount),
+           static_cast<unsigned>(repeaterOnline));
+  label(advancedSummary, text);
+
+  for (size_t i = 0; i < kMaxInfrastructure; ++i) {
+    if (!infrastructure[i].used) {
+      lv_obj_add_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+
+    lv_obj_clear_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
+    label(infrastructureRows[i].name, infrastructure[i].name);
+    label(infrastructureRows[i].status, infrastructure[i].online ? "ONLINE" : "OFFLINE");
+    if (infrastructure[i].online) {
+      snprintf(text, sizeof(text), "LQI %u", infrastructure[i].lqi);
+    } else {
+      snprintf(text, sizeof(text), "LQI --");
+    }
+    label(infrastructureRows[i].signal, text);
+    lv_obj_set_style_bg_color(
+        infrastructureRows[i].box,
+        lv_color_hex(selectedInfrastructure == static_cast<int>(i) ? 0x1E3529 : 0x1D2922), 0);
+  }
+
+  const bool validInfrastructure =
+      selectedInfrastructure >= 0 &&
+      selectedInfrastructure < static_cast<int>(kMaxInfrastructure) &&
+      infrastructure[selectedInfrastructure].used;
+
+  if (validInfrastructure) {
+    InfrastructureNode &node = infrastructure[selectedInfrastructure];
+    char ieee[24]{};
+    plantlink::formatIeee(node.ieee, ieee, sizeof(ieee));
+    if (node.online) {
+      snprintf(text, sizeof(text), "%s  |  %s  |  short 0x%04X",
+               node.name, ieee, node.shortAddress);
+    } else {
+      snprintf(text, sizeof(text), "%s  |  %s  |  offline",
+               node.name, ieee);
+    }
+    label(advancedDetail, text);
+    lv_obj_clear_state(advancedRenameButton, LV_STATE_DISABLED);
+    lv_obj_clear_state(advancedRemoveButton, LV_STATE_DISABLED);
+  } else {
+    label(advancedDetail, repeaterCount ? "Select a repeater to manage it."
+                                       : "No repeaters paired yet.");
+    lv_obj_add_state(advancedRenameButton, LV_STATE_DISABLED);
+    lv_obj_add_state(advancedRemoveButton, LV_STATE_DISABLED);
+  }
+
   label(settingsDeviceName, deviceName);
   label(settingsH2, h2Online ? "ONLINE" : "OFFLINE");
-  if (networkReady) snprintf(text, sizeof(text), "READY  CH %u  |  H2 SEES %u", zigbeeChannel, h2SensorCount);
+  if (networkReady) snprintf(text, sizeof(text), "READY CH %u | P %u | R %u",
+                           zigbeeChannel, h2SensorCount, h2InfrastructureCount);
   else if (h2Online) snprintf(text, sizeof(text), "STARTING");
   else snprintf(text, sizeof(text), "H2 OFFLINE");
   label(settingsZigbee, text);
@@ -1621,6 +2167,7 @@ void handleNetworkStatus(const plantlink::Frame &frame) {
   zigbeeChannel = frame.payload[1];
   h2SensorCount = frame.payload[2];
   permitJoinRemaining = frame.payload[3];
+  h2InfrastructureCount = frame.payloadLength >= 5 ? frame.payload[4] : 0;
   uiDirty = true;
 }
 
@@ -1659,6 +2206,37 @@ PlantSensor *acceptPairingSensor(const uint8_t ieee[8], uint16_t shortAddress,
   return s;
 }
 
+void handleInfrastructureReport(const plantlink::Frame &frame) {
+  plantlink::InfrastructureReportData report;
+  if (!plantlink::parseInfrastructureReport(frame.payload, frame.payloadLength, report)) return;
+
+  size_t slot = 0;
+  bool created = false;
+  InfrastructureNode *node = findOrCreateInfrastructure(report, &slot, &created);
+  if (!node) {
+    Serial.println("[zigbee] repeater registry full; infrastructure report ignored");
+    return;
+  }
+
+  if (created) {
+    char ieee[24]{};
+    plantlink::formatIeee(report.ieee, ieee, sizeof(ieee));
+    Serial.printf("[zigbee] repeater discovered slot=%u ieee=%s short=0x%04X\n",
+                  static_cast<unsigned>(slot + 1), ieee, report.shortAddress);
+  }
+
+  if (pairInfrastructure &&
+      pairDialogState == PairDialogState::Pairing &&
+      created) {
+    requestJoin(0);
+    selectedInfrastructure = static_cast<int>(slot);
+    pairFoundInfrastructure = static_cast<int>(slot);
+    pairDialogState = PairDialogState::Found;
+  }
+
+  uiDirty = true;
+}
+
 void handleDeviceJoined(const plantlink::Frame &frame) {
   if (frame.payloadLength < 10) return;
 
@@ -1694,6 +2272,17 @@ void handleDeviceLeft(const plantlink::Frame &frame) {
   plantlink::formatIeee(frame.payload, ieee, sizeof(ieee));
 
   if (!s) {
+    size_t infrastructureSlot = 0;
+    InfrastructureNode *node = findInfrastructure(frame.payload, &infrastructureSlot);
+    if (node) {
+      node->online = false;
+      node->shortAddress = 0xffff;
+      Serial.printf("[zigbee] repeater left: %s slot=%u now offline\n",
+                    ieee, static_cast<unsigned>(infrastructureSlot + 1));
+      uiDirty = true;
+      return;
+    }
+
     Serial.printf("[zigbee] unregistered device left: %s\n", ieee);
     return;
   }
@@ -1763,6 +2352,7 @@ void handleFrame(const plantlink::Frame &frame) {
     case plantlink::MessageType::NetworkStatus: handleNetworkStatus(frame); break;
     case plantlink::MessageType::DeviceJoined: handleDeviceJoined(frame); break;
     case plantlink::MessageType::DeviceLeft: handleDeviceLeft(frame); break;
+    case plantlink::MessageType::InfrastructureReport: handleInfrastructureReport(frame); break;
     case plantlink::MessageType::SensorReport: handleSensorReport(frame); break;
     default: break;
   }
@@ -1795,6 +2385,7 @@ void setup() {
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
   Serial.printf("[settings] device name=\"%s\"\n", deviceName);
   loadRegistry();
+  loadInfrastructureRegistry();
 
   Serial0.begin(kPlantLinkBaud, SERIAL_8N1, kPlantLinkRxPin, kPlantLinkTxPin);
   Serial.printf("[plantlink] UART0 RX=%d TX=%d baud=%lu\n", kPlantLinkRxPin, kPlantLinkTxPin,

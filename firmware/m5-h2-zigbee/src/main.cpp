@@ -23,9 +23,13 @@ constexpr uint32_t kPlantLinkBaud = 115200;
 // M5Stack's current Gateway H2 NCP documentation maps Grove UART to H2 RX=23/TX=24.
 constexpr int kPlantLinkRxPin = 23;
 constexpr int kPlantLinkTxPin = 24;
-constexpr size_t kMaxSensors = 16;
+constexpr size_t kMaxSensors = 32;
+constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kCapturedApsBytes = 128;
 constexpr uint32_t kStatusIntervalMs = 1500;
+constexpr uint32_t kInfrastructureScanIntervalMs = 3000;
+constexpr uint8_t kCoordinatorMaxChildren = 48;
+constexpr uint16_t kOverallNetworkSize = 96;
 
 HardwareSerial PlantUart(1);
 
@@ -53,6 +57,7 @@ PlantZigbeeGateway zbGateway(kGatewayEndpoint);
 plantlink::Decoder plantDecoder;
 uint16_t nextSequence = 1;
 uint32_t lastStatusMs = 0;
+uint32_t lastInfrastructureScanMs = 0;
 uint32_t permitJoinUntilMs = 0;
 bool zigbeeReady = false;
 
@@ -87,8 +92,20 @@ struct SensorState {
   uint32_t lastSeenMs = 0;
 };
 
+struct InfrastructureState {
+  bool used = false;
+  bool online = false;
+  uint8_t ieee[8]{};
+  uint16_t shortAddress = 0xffff;
+  uint8_t lqi = 0;
+  int8_t rssi = plantlink::kRssiUnavailableDbm;
+  uint32_t lastSeenMs = 0;
+};
+
 SensorState sensors[kMaxSensors];
+InfrastructureState infrastructure[kMaxInfrastructure];
 uint8_t sensorCount = 0;
+uint8_t infrastructureCount = 0;
 
 bool ieeeIsZero(const uint8_t ieee[8]) {
   for (size_t i = 0; i < 8; ++i) {
@@ -127,11 +144,12 @@ uint8_t permitJoinRemaining() {
 }
 
 void sendNetworkStatus() {
-  uint8_t payload[4]{};
+  uint8_t payload[5]{};
   payload[0] = zigbeeReady ? 1 : 0;
   payload[1] = currentChannel();
   payload[2] = sensorCount;
   payload[3] = permitJoinRemaining();
+  payload[4] = infrastructureCount;
   sendFrame(plantlink::MessageType::NetworkStatus, payload, sizeof(payload));
 }
 
@@ -140,7 +158,8 @@ void sendHeartbeat() {
   plantlink::putU32LE(payload, millis());
   uint32_t caps = plantlink::CapabilityZigbeeCoordinator |
                   plantlink::CapabilityZg303zDecoder |
-                  plantlink::CapabilityRawZigbeeLog;
+                  plantlink::CapabilityRawZigbeeLog |
+                  plantlink::CapabilityInfrastructureRegistry;
   plantlink::putU32LE(payload + 4, caps);
   sendFrame(plantlink::MessageType::Heartbeat, payload, sizeof(payload));
 }
@@ -162,6 +181,27 @@ void sendDeviceJoined(const SensorState &sensor) {
 
 void sendDeviceLeft(const uint8_t ieee[8]) {
   sendFrame(plantlink::MessageType::DeviceLeft, ieee, 8);
+}
+
+void sendInfrastructureReport(const InfrastructureState &node) {
+  plantlink::InfrastructureReportData report;
+  memcpy(report.ieee, node.ieee, sizeof(report.ieee));
+  report.shortAddress = node.shortAddress;
+  report.flags = node.online
+                     ? static_cast<uint8_t>(plantlink::InfrastructureOnline |
+                                            plantlink::InfrastructureDirectNeighbor)
+                     : 0;
+  report.deviceType = static_cast<uint8_t>(ESP_ZB_DEVICE_TYPE_ROUTER);
+  report.lqi = node.lqi;
+  report.rssiDbm = node.rssi;
+
+  uint8_t payload[plantlink::kInfrastructureReportPayloadBytes]{};
+  const size_t length =
+      plantlink::serializeInfrastructureReport(report, payload, sizeof(payload));
+  if (length) {
+    sendFrame(plantlink::MessageType::InfrastructureReport, payload,
+              static_cast<uint16_t>(length));
+  }
 }
 
 void sendSensorReport(const SensorState &sensor) {
@@ -214,6 +254,56 @@ SensorState *findSensorByIeee(const uint8_t ieee[8]) {
   return nullptr;
 }
 
+SensorState *findSensorByShort(uint16_t shortAddress) {
+  if (shortAddress == 0xffff) return nullptr;
+  for (auto &sensor : sensors) {
+    if (sensor.used && sensor.shortAddress == shortAddress) return &sensor;
+  }
+  return nullptr;
+}
+
+InfrastructureState *findInfrastructureByIeee(const uint8_t ieee[8]) {
+  if (!ieee || ieeeIsZero(ieee)) return nullptr;
+  for (auto &node : infrastructure) {
+    if (node.used && ieeeEqual(node.ieee, ieee)) return &node;
+  }
+  return nullptr;
+}
+
+InfrastructureState *findInfrastructureByShort(uint16_t shortAddress) {
+  if (shortAddress == 0xffff) return nullptr;
+  for (auto &node : infrastructure) {
+    if (node.used && node.shortAddress == shortAddress) return &node;
+  }
+  return nullptr;
+}
+
+InfrastructureState *findOrCreateInfrastructure(const uint8_t ieee[8],
+                                                uint16_t shortAddress,
+                                                bool &created) {
+  created = false;
+  InfrastructureState *node = findInfrastructureByIeee(ieee);
+  if (!node) node = findInfrastructureByShort(shortAddress);
+  if (node) {
+    if (!ieeeIsZero(ieee)) memcpy(node->ieee, ieee, sizeof(node->ieee));
+    node->shortAddress = shortAddress;
+    return node;
+  }
+
+  if (!ieee || ieeeIsZero(ieee)) return nullptr;
+  for (auto &candidate : infrastructure) {
+    if (candidate.used) continue;
+    candidate = InfrastructureState{};
+    candidate.used = true;
+    memcpy(candidate.ieee, ieee, sizeof(candidate.ieee));
+    candidate.shortAddress = shortAddress;
+    created = true;
+    if (infrastructureCount < 255) ++infrastructureCount;
+    return &candidate;
+  }
+  return nullptr;
+}
+
 void leaveRequestCallback(esp_zb_zdp_status_t zdoStatus, void *) {
   Serial.printf("[zigbee] remove-device leave response status=0x%02X\n",
                 static_cast<unsigned>(zdoStatus));
@@ -225,11 +315,21 @@ void removeDeviceByIeee(const uint8_t ieee[8]) {
   char ieeeText[24]{};
   plantlink::formatIeee(ieee, ieeeText, sizeof(ieeeText));
   SensorState *sensor = findSensorByIeee(ieee);
+  InfrastructureState *node = findInfrastructureByIeee(ieee);
 
-  if (sensor && sensor->shortAddress != 0xffff) {
+  uint16_t shortAddress = 0xffff;
+  if (sensor) shortAddress = sensor->shortAddress;
+  else if (node) shortAddress = node->shortAddress;
+  else {
+    esp_zb_ieee_addr_t lookup{};
+    memcpy(lookup, ieee, sizeof(lookup));
+    shortAddress = esp_zb_address_short_by_ieee(lookup);
+  }
+
+  if (shortAddress != 0xffff) {
     esp_zb_zdo_mgmt_leave_req_param_t leaveReq{};
     memcpy(leaveReq.device_address, ieee, sizeof(leaveReq.device_address));
-    leaveReq.dst_nwk_addr = sensor->shortAddress;
+    leaveReq.dst_nwk_addr = shortAddress;
     leaveReq.remove_children = 0;
     leaveReq.rejoin = 0;
 
@@ -238,15 +338,19 @@ void removeDeviceByIeee(const uint8_t ieee[8]) {
     esp_zb_lock_release();
 
     Serial.printf("[zigbee] sent leave request ieee=%s short=0x%04X\n",
-                  ieeeText, sensor->shortAddress);
+                  ieeeText, shortAddress);
   } else {
-    Serial.printf("[zigbee] remove requested for ieee=%s but no current short address is known\n",
+    Serial.printf("[zigbee] remove requested for ieee=%s but no short address is known\n",
                   ieeeText);
   }
 
   if (sensor) {
     *sensor = SensorState{};
     if (sensorCount > 0) --sensorCount;
+  }
+  if (node) {
+    *node = InfrastructureState{};
+    if (infrastructureCount > 0) --infrastructureCount;
   }
 
   sendDeviceLeft(ieee);
@@ -326,21 +430,35 @@ void processApsEvent(const ApsEvent &event) {
   printHex(event.data, event.capturedLength);
   Serial.println();
 
-  bool created = false;
-  SensorState *sensor = findOrCreateSensor(event, created);
+  // Routers/repeaters are infrastructure, not plant slots. The neighbor-table
+  // scanner normally identifies them first, but this also protects the plant
+  // registry if a router emits APS traffic between scans.
+  InfrastructureState *router = findInfrastructureByIeee(event.ieee);
+  if (!router) router = findInfrastructureByShort(event.shortAddress);
+  if (router) {
+    router->online = true;
+    router->shortAddress = event.shortAddress;
+    router->lqi = event.lqi;
+    router->rssi = event.rssi;
+    router->lastSeenMs = millis();
+    sendInfrastructureReport(*router);
+    sendRawEvent(event);
+    return;
+  }
+
+  SensorState *sensor = findSensorByIeee(event.ieee);
+  if (!sensor) sensor = findSensorByShort(event.shortAddress);
   if (sensor) {
+    sensor->shortAddress = event.shortAddress;
     sensor->lqi = event.lqi;
     sensor->rssi = event.rssi;
     sensor->lastSeenMs = millis();
-    if (created) {
-      Serial.printf("[zigbee] first traffic from new IEEE device %s\n", ieeeText);
-      sendDeviceJoined(*sensor);
-      sendNetworkStatus();
-    }
   }
 
   zg303z::NormalizedUpdate normalized;
   bool decoded = false;
+  bool legacyMappingSeen = sensor ? sensor->legacyHobeianMappingSeen : false;
+  bool zg303zEvidence = false;
 
   if (event.clusterId == zg303z::kTuyaClusterId) {
     zg303z::TuyaFrameInfo info;
@@ -352,32 +470,52 @@ void processApsEvent(const ApsEvent &event) {
           if (dp.metric == zg303z::Metric::Unknown) Serial.print(" UNKNOWN");
           Serial.println();
 
-          if (!sensor) return;
-
-          // Hardware-verified HOBEIAN ZG-303Z legacy map:
-          //   DP3 soil, DP5 temperature, DP15 battery, DP109 air RH.
-          // On this map DP106 is the dry/water-shortage warning, not the
-          // user-facing C/F preference. Alternate ZG-303Z maps are left alone.
-          if (dp.id == 3 || dp.id == 5 || dp.id == 15) {
-            sensor->legacyHobeianMappingSeen = true;
+          // Hardware-verified HOBEIAN ZG-303Z evidence. A generic Zigbee
+          // device is not admitted to the plant registry just because it sends
+          // APS traffic.
+          if (dp.id == 3 || dp.id == 5 || dp.id == 15 || dp.id == 109) {
+            zg303zEvidence = true;
           }
-          if (dp.id == 106 && dp.numericValid && sensor->legacyHobeianMappingSeen) {
+          if (dp.id == 3 || dp.id == 5 || dp.id == 15) {
+            legacyMappingSeen = true;
+          }
+          if (dp.id == 106 && dp.numericValid && legacyMappingSeen) {
+            zg303zEvidence = true;
             normalized.hasWaterWarning = true;
             normalized.waterWarning = (dp.numeric != 0);
             Serial.printf("[tuya] legacy DP106 water warning=%s\n",
                           normalized.waterWarning ? "ON" : "OFF");
           }
         });
-  } else if (event.clusterId == zg303z::kTemperatureClusterId ||
-             event.clusterId == zg303z::kPowerConfigClusterId) {
+  } else if (sensor &&
+             (event.clusterId == zg303z::kTemperatureClusterId ||
+              event.clusterId == zg303z::kPowerConfigClusterId)) {
     decoded = zg303z::decodeStandardReport(event.clusterId, event.data,
                                             event.capturedLength, normalized);
-  } else if (event.clusterId == zg303z::kHumidityClusterId) {
+  } else if (sensor && event.clusterId == zg303z::kHumidityClusterId) {
     // Hardware-verified HOBEIAN ZG-303Z quirk: standard cluster 0x0405
-    // mirrors soil moisture (e.g. DP3=98 and 0x0405=9800), while actual
-    // air humidity arrives on Tuya DP109.
+    // mirrors soil moisture while actual air humidity arrives on Tuya DP109.
     decoded = zg303z::decodeZg303zSoilMirrorReport(
         event.data, event.capturedLength, normalized);
+  }
+
+  bool created = false;
+  if (!sensor && decoded && zg303zEvidence) {
+    sensor = findOrCreateSensor(event, created);
+    if (sensor) {
+      sensor->legacyHobeianMappingSeen = legacyMappingSeen;
+      sensor->lqi = event.lqi;
+      sensor->rssi = event.rssi;
+      sensor->lastSeenMs = millis();
+
+      if (created) {
+        Serial.printf("[zigbee] confirmed new ZG-303Z plant sensor %s\n", ieeeText);
+        sendDeviceJoined(*sensor);
+        sendNetworkStatus();
+      }
+    }
+  } else if (sensor && legacyMappingSeen) {
+    sensor->legacyHobeianMappingSeen = true;
   }
 
   if (sensor && decoded) {
@@ -385,8 +523,11 @@ void processApsEvent(const ApsEvent &event) {
     sendSensorReport(*sensor);
   }
 
-  // Keep raw traffic observable during bring-up, especially unknown Tuya DPs.
-  if (!decoded || event.clusterId == zg303z::kTuyaClusterId) sendRawEvent(event);
+  // Keep raw traffic observable during bring-up, especially unknown devices
+  // and Tuya vendor traffic.
+  if (!sensor || !decoded || event.clusterId == zg303z::kTuyaClusterId) {
+    sendRawEvent(event);
+  }
 }
 
 bool apsDataHandler(esp_zb_apsde_data_ind_t ind) {
@@ -420,6 +561,48 @@ bool apsDataHandler(esp_zb_apsde_data_ind_t ind) {
 
   // false = observe the frame but allow normal Zigbee stack processing to continue.
   return false;
+}
+
+void serviceInfrastructureRegistry() {
+  const uint32_t now = millis();
+  if (!zigbeeReady || now - lastInfrastructureScanMs < kInfrastructureScanIntervalMs) return;
+  lastInfrastructureScanMs = now;
+
+  for (auto &node : infrastructure) {
+    if (node.used) node.online = false;
+  }
+
+  esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_neighbor_info_t neighbor{};
+
+  esp_zb_lock_acquire(portMAX_DELAY);
+  while (esp_zb_nwk_get_next_neighbor(&iterator, &neighbor) == ESP_OK) {
+    if (neighbor.device_type != ESP_ZB_DEVICE_TYPE_ROUTER) continue;
+
+    bool created = false;
+    InfrastructureState *node =
+        findOrCreateInfrastructure(neighbor.ieee_addr, neighbor.short_addr, created);
+    if (!node) continue;
+
+    node->online = true;
+    node->shortAddress = neighbor.short_addr;
+    node->lqi = neighbor.lqi;
+    node->rssi = neighbor.rssi;
+    node->lastSeenMs = now;
+
+    if (created) {
+      char ieeeText[24]{};
+      plantlink::formatIeee(node->ieee, ieeeText, sizeof(ieeeText));
+      Serial.printf("[zigbee] router/repeater discovered ieee=%s short=0x%04X lqi=%u\n",
+                    ieeeText, node->shortAddress, node->lqi);
+    }
+  }
+  esp_zb_lock_release();
+
+  for (const auto &node : infrastructure) {
+    if (node.used) sendInfrastructureReport(node);
+  }
+  sendNetworkStatus();
 }
 
 void handlePlantFrame(const plantlink::Frame &frame) {
@@ -480,26 +663,23 @@ void servicePlantLink() {
     sendHeartbeat();
     sendNetworkStatus();
   }
+
+  serviceInfrastructureRegistry();
 }
 
 void printUsbConsoleHelp() {
   Serial.println("[console] commands:");
   Serial.println("  p = open Zigbee pairing for 120 seconds");
   Serial.println("  c = close Zigbee pairing");
-  Serial.println("  s = print Zigbee/network/sensor status");
+  Serial.println("  s = print Zigbee/network/sensor/repeater status");
   Serial.println("  h or ? = show this help");
 }
 
 void printUsbConsoleStatus() {
   zigbeeReady = Zigbee.connected();
-  Serial.printf("[console] zigbee=%s channel=%u sensors=%u permit_join=%us\n",
+  Serial.printf("[console] zigbee=%s channel=%u plants=%u repeaters=%u permit_join=%us\n",
                 zigbeeReady ? "online" : "not-ready", currentChannel(), sensorCount,
-                permitJoinRemaining());
-
-  if (sensorCount == 0) {
-    Serial.println("[console] no Zigbee sensors seen yet");
-    return;
-  }
+                infrastructureCount, permitJoinRemaining());
 
   for (const auto &sensor : sensors) {
     if (!sensor.used) continue;
@@ -507,31 +687,38 @@ void printUsbConsoleStatus() {
     char ieeeText[24]{};
     plantlink::formatIeee(sensor.ieee, ieeeText, sizeof(ieeeText));
 
-    Serial.printf("[console] sensor ieee=%s short=0x%04X lqi=%u",
+    Serial.printf("[console] plant ieee=%s short=0x%04X lqi=%u",
                   ieeeText, sensor.shortAddress, sensor.lqi);
 
-    if (sensor.rssi == plantlink::kRssiUnavailableDbm) {
-      Serial.print(" rssi=n/a");
-    } else {
-      Serial.printf(" rssi=%d", sensor.rssi);
-    }
+    if (sensor.rssi == plantlink::kRssiUnavailableDbm) Serial.print(" rssi=n/a");
+    else Serial.printf(" rssi=%d", sensor.rssi);
 
-    if (sensor.fieldFlags & plantlink::SensorHasSoilMoisture) {
+    if (sensor.fieldFlags & plantlink::SensorHasSoilMoisture)
       Serial.printf(" soil=%u%%", sensor.soilMoisturePct);
-    }
-    if (sensor.fieldFlags & plantlink::SensorHasTemperature) {
+    if (sensor.fieldFlags & plantlink::SensorHasTemperature)
       Serial.printf(" temp=%.1fC", sensor.temperatureCentiC / 100.0f);
-    }
-    if (sensor.fieldFlags & plantlink::SensorHasHumidity) {
+    if (sensor.fieldFlags & plantlink::SensorHasHumidity)
       Serial.printf(" rh=%.1f%%", sensor.humidityCentiPct / 100.0f);
-    }
-    if (sensor.fieldFlags & plantlink::SensorHasBattery) {
+    if (sensor.fieldFlags & plantlink::SensorHasBattery)
       Serial.printf(" batt=%u%%", sensor.batteryPct);
-    }
-    if (sensor.fieldFlags & plantlink::SensorHasWaterWarning) {
+    if (sensor.fieldFlags & plantlink::SensorHasWaterWarning)
       Serial.printf(" water_warning=%s", sensor.waterWarning ? "ON" : "OFF");
-    }
     Serial.println();
+  }
+
+  for (const auto &node : infrastructure) {
+    if (!node.used) continue;
+    char ieeeText[24]{};
+    plantlink::formatIeee(node.ieee, ieeeText, sizeof(ieeeText));
+    Serial.printf("[console] repeater ieee=%s short=0x%04X online=%s lqi=%u",
+                  ieeeText, node.shortAddress, node.online ? "yes" : "no", node.lqi);
+    if (node.rssi == plantlink::kRssiUnavailableDbm) Serial.print(" rssi=n/a");
+    else Serial.printf(" rssi=%d", node.rssi);
+    Serial.println();
+  }
+
+  if (sensorCount == 0 && infrastructureCount == 0) {
+    Serial.println("[console] no plant sensors or repeaters tracked yet");
   }
 }
 
@@ -592,14 +779,22 @@ bool startZigbee() {
   Zigbee.setDebugMode(true);
   Zigbee.setRebootOpenNetwork(0);
 
-  if (!Zigbee.begin(ZIGBEE_COORDINATOR)) {
+  // ESP PLANTS supports up to 32 plant sensors plus infrastructure. Grow the
+  // stack tables before esp_zb_init(), then allow substantial direct-child
+  // headroom while repeaters expand the mesh beyond the coordinator.
+  esp_zb_overall_network_size_set(kOverallNetworkSize);
+  esp_zb_cfg_t coordinatorConfig = ZIGBEE_DEFAULT_COORDINATOR_CONFIG();
+  coordinatorConfig.nwk_cfg.zczr_cfg.max_children = kCoordinatorMaxChildren;
+
+  if (!Zigbee.begin(&coordinatorConfig)) {
     Serial.println("[zigbee] FAILED to start coordinator");
     return false;
   }
 
   zigbeeReady = Zigbee.connected();
-  Serial.printf("[zigbee] coordinator started; connected=%s channel=%u\n",
-                zigbeeReady ? "yes" : "no", currentChannel());
+  Serial.printf("[zigbee] coordinator started; connected=%s channel=%u max_children=%u network_size=%u\n",
+                zigbeeReady ? "yes" : "no", currentChannel(),
+                kCoordinatorMaxChildren, kOverallNetworkSize);
 
   // Observe raw APS frames so vendor-specific Tuya 0xEF00 traffic remains visible.
   // This is registered after Arduino Zigbee startup and returns false so the stack
