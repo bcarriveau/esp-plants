@@ -3,42 +3,43 @@
 Waveshare ESP32-S3-Touch-LCD-7 application controller for the direct-Zigbee
 ESP PLANTS branch.
 
-## Current bring-up scope
+## Hardware/runtime ownership
 
-This first executable scaffold deliberately reuses the exact display/touch stack
-from Bill's hardware-proven ESP Aircraft Radar project:
+- Waveshare: 800x480 UI, plant/user configuration, history, Wi-Fi and updates.
+- M5Stack ESP32-H2: Zigbee coordinator/network, ZG-303Z decoding and Zigbee
+  persistence over PlantLink UART.
+- Home Assistant is not part of this build.
 
-- pioarduino platform 51.03.07 / Arduino-ESP32 3.0.7 generation
-- ST7262 800x480 RGB panel
-- GT911 touch
-- the same custom panel timings/pin map
-- Waveshare_ST7262_LVGL v0.1
-- ESP32_Display_Panel v0.1.4
-- LVGL 8.3.11
+## Build environments
 
-The only deliberate USB/UART change is architectural:
+Developer/USB build:
 
-- `Serial` = native USB CDC debug
-- `Serial0` GPIO43/44 = dedicated PlantLink to the H2 through UART2
+```text
+pio run -d firmware/waveshare-hub -e waveshare_s3_touch_lcd_7
+```
 
-That lets the Waveshare UART selector remain on UART2 without losing VS Code
-serial diagnostics over the board's native USB port.
+Public OTA producer:
 
-## Current screen
+```text
+pio run -d firmware/waveshare-hub -e waveshare_s3_touch_lcd_7_release
+```
 
-The bring-up screen shows:
+Only the release environment embeds the public-distribution provenance marker
+and generates `.plantsota` + manifest release assets.
 
-- H2 link status
-- Zigbee coordinator status/channel
-- sensor count
-- latest join/plant reading event
-- an `ADD SENSOR` button that sends a 120-second permit-join request to the H2
+## Persistence
 
-This is not the final plant dashboard. It exists to prove the complete physical
-path before UI work piles on top of it.
+The 16 MB flash layout keeps two 6 MB application slots separate from the
+`plantdata` NVS partition and history partition. Phase 1 migrates pre-existing
+ESP PLANTS user records from default NVS into `plantdata` without erasing the
+legacy copy.
 
-## Persistence layout
+## Phase 1 update safety
 
-The 16 MB flash layout has dual 6 MB OTA app slots plus a separate `plantdata`
-NVS partition and separate history partition. Normal application OTA therefore
-does not require erasing plant/user data.
+The GitHub updater follows the Aircraft Radar Product 102 safety model:
+certificate-verified HTTPS, fixed package identity, hardware/product/build
+validation, package + firmware SHA-256, ESP32-S3 image validation, inactive OTA
+slot writes, final activation only after `esp_ota_end()`, and the proven
+Waveshare controlled restart handoff.
+
+H2 firmware updating is deliberately deferred to Phase 2.

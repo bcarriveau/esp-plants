@@ -2,8 +2,10 @@
 #include <Preferences.h>
 #include <Waveshare_ST7262_LVGL.h>
 #include <lvgl.h>
+#include <src/extra/libs/qrcode/qrcodegen.h>
 
 #include "plantlink.h"
+#include "update_service.h"
 
 namespace {
 
@@ -23,6 +25,20 @@ constexpr uint32_t kPlantRecordMagic = 0x504C4E54u;  // PLNT
 constexpr uint8_t kPlantRecordVersion = 1;
 constexpr uint32_t kInfrastructureRecordMagic = 0x52505452u;  // RPTR
 constexpr uint8_t kInfrastructureRecordVersion = 1;
+constexpr lv_coord_t kSetupQrOuterSize = 116;
+constexpr lv_coord_t kSetupQrSize = 108;
+constexpr uint8_t kSetupQrMaxVersion = 5;
+constexpr uint8_t kSetupQrQuietModules = 4;
+constexpr size_t kSetupQrPaletteBytes = 8U;
+constexpr size_t kSetupQrRowBytes =
+    (static_cast<size_t>(kSetupQrSize) + 7U) / 8U;
+constexpr size_t kSetupQrCanvasBufferBytes =
+    LV_IMG_BUF_SIZE_INDEXED_1BIT(kSetupQrSize, kSetupQrSize);
+constexpr size_t kSetupQrEncodeBufferBytes =
+    (((kSetupQrMaxVersion * 4U + 17U) *
+      (kSetupQrMaxVersion * 4U + 17U) + 7U) / 8U) + 1U;
+static_assert(kSetupQrEncodeBufferBytes == 173U,
+              "Unexpected ESP PLANTS setup QR encoder buffer size");
 
 enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3, Advanced = 4 };
 enum class RenameTarget : uint8_t { Plant = 0, Device = 1, Infrastructure = 2 };
@@ -180,6 +196,24 @@ lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
 lv_obj_t *settingsPair = nullptr;
 lv_obj_t *settingsDeviceName = nullptr;
+lv_obj_t *updateModal = nullptr;
+lv_obj_t *updateWifiState = nullptr;
+lv_obj_t *updateWifiDetail = nullptr;
+lv_obj_t *updatePortalInfo = nullptr;
+lv_obj_t *updateQrCard = nullptr;
+lv_obj_t *updateQrCode = nullptr;
+lv_obj_t *updateQrHint = nullptr;
+uint8_t updateQrCanvasBuffer[kSetupQrCanvasBufferBytes]{};
+uint8_t updateQrTempBuffer[kSetupQrEncodeBufferBytes]{};
+uint8_t updateQrEncodedBuffer[kSetupQrEncodeBufferBytes]{};
+char updateQrPayload[128]{};
+lv_obj_t *updateCurrentVersion = nullptr;
+lv_obj_t *updateLatestVersion = nullptr;
+lv_obj_t *updateStatus = nullptr;
+lv_obj_t *updateCheckButton = nullptr;
+lv_obj_t *updateCheckLabel = nullptr;
+lv_obj_t *updateInstallButton = nullptr;
+lv_obj_t *updateInstallLabel = nullptr;
 lv_obj_t *advancedSummary = nullptr;
 lv_obj_t *advancedDetail = nullptr;
 lv_obj_t *advancedRenameButton = nullptr;
@@ -214,6 +248,59 @@ void label(lv_obj_t *obj, const char *text) {
   if (obj && text) lv_label_set_text(obj, text);
 }
 
+void clearSetupQrCanvas() {
+  memset(updateQrCanvasBuffer + kSetupQrPaletteBytes, 0xFF,
+         kSetupQrRowBytes * static_cast<size_t>(kSetupQrSize));
+}
+
+bool renderSetupQr(const char *payload) {
+  if (!updateQrCode || !payload || !payload[0]) return false;
+
+  memset(updateQrTempBuffer, 0, sizeof(updateQrTempBuffer));
+  memset(updateQrEncodedBuffer, 0, sizeof(updateQrEncodedBuffer));
+  if (!qrcodegen_encodeText(
+          payload, updateQrTempBuffer, updateQrEncodedBuffer,
+          qrcodegen_Ecc_MEDIUM, qrcodegen_VERSION_MIN,
+          kSetupQrMaxVersion, qrcodegen_Mask_AUTO, true)) {
+    return false;
+  }
+
+  const int moduleCount = qrcodegen_getSize(updateQrEncodedBuffer);
+  if (moduleCount <= 0) return false;
+  const int totalModules =
+      moduleCount + static_cast<int>(kSetupQrQuietModules) * 2;
+  const int scale = static_cast<int>(kSetupQrSize) / totalModules;
+  if (scale <= 0) return false;
+
+  clearSetupQrCanvas();
+  const int renderedSize = totalModules * scale;
+  const int quietPixels = static_cast<int>(kSetupQrQuietModules) * scale;
+  const int origin =
+      (static_cast<int>(kSetupQrSize) - renderedSize) / 2 + quietPixels;
+
+  for (int moduleY = 0; moduleY < moduleCount; ++moduleY) {
+    for (int moduleX = 0; moduleX < moduleCount; ++moduleX) {
+      if (!qrcodegen_getModule(updateQrEncodedBuffer, moduleX, moduleY)) continue;
+      const int startX = origin + moduleX * scale;
+      const int startY = origin + moduleY * scale;
+      for (int pixelY = 0; pixelY < scale; ++pixelY) {
+        const size_t row =
+            static_cast<size_t>(startY + pixelY) * kSetupQrRowBytes;
+        for (int pixelX = 0; pixelX < scale; ++pixelX) {
+          const int x = startX + pixelX;
+          uint8_t &byte = updateQrCanvasBuffer[
+              kSetupQrPaletteBytes + row + static_cast<size_t>(x >> 3)];
+          byte = static_cast<uint8_t>(byte & ~(1U << (7 - (x & 0x7))));
+        }
+      }
+    }
+  }
+
+  lv_img_cache_invalidate_src(lv_canvas_get_img(updateQrCode));
+  lv_obj_invalidate(updateQrCode);
+  return true;
+}
+
 void slotKey(size_t slot, char out[12]) {
   snprintf(out, 12, "plant%02u", static_cast<unsigned>(slot));
 }
@@ -228,6 +315,74 @@ void infrastructureKey(size_t slot, char out[12]) {
 
 void defaultInfrastructureName(size_t slot, char *out, size_t size) {
   snprintf(out, size, "REPEATER %u", static_cast<unsigned>(slot + 1));
+}
+
+void copyLegacyPreference(Preferences &legacy, Preferences &target, const char *key) {
+  if (!key || target.isKey(key) || !legacy.isKey(key)) return;
+
+  const size_t bytes = legacy.getBytesLength(key);
+  if (bytes) {
+    uint8_t *buffer = static_cast<uint8_t *>(malloc(bytes));
+    if (!buffer) {
+      Serial.printf("[storage] could not allocate %u bytes to migrate %s\n",
+                    static_cast<unsigned>(bytes), key);
+      return;
+    }
+    if (legacy.getBytes(key, buffer, bytes) == bytes) {
+      target.putBytes(key, buffer, bytes);
+      Serial.printf("[storage] migrated blob %s (%u bytes)\n", key,
+                    static_cast<unsigned>(bytes));
+    }
+    free(buffer);
+    return;
+  }
+
+  // Scalar/string keys are copied explicitly by migrateUserPreferences().
+}
+
+void migrateUserPreferences() {
+  Preferences target;
+  if (!target.begin("espplants", false, "plantdata")) {
+    Serial.println("[storage] ERROR: could not open dedicated plantdata partition");
+    return;
+  }
+
+  const uint32_t schema = target.getUInt("_schema", 0);
+  if (schema >= 1) {
+    target.end();
+    return;
+  }
+
+  // Phase 1 moves user-owned settings out of the generic NVS partition and
+  // into the partition that was reserved for them from the start. The legacy
+  // copy is deliberately left untouched as a recovery fallback.
+  Preferences legacy;
+  if (legacy.begin("espplants", true, "nvs")) {
+    if (!target.isKey("fahrenheit") && legacy.isKey("fahrenheit")) {
+      target.putBool("fahrenheit", legacy.getBool("fahrenheit", true));
+      Serial.println("[storage] migrated fahrenheit preference");
+    }
+    if (!target.isKey("device_name") && legacy.isKey("device_name")) {
+      target.putString("device_name", legacy.getString("device_name", "ESP PLANTS"));
+      Serial.println("[storage] migrated device name");
+    }
+
+    char key[12]{};
+    for (size_t slot = 0; slot < kMaxSensors; ++slot) {
+      slotKey(slot, key);
+      copyLegacyPreference(legacy, target, key);
+    }
+    for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
+      infrastructureKey(slot, key);
+      copyLegacyPreference(legacy, target, key);
+    }
+    legacy.end();
+  }
+
+  target.putUInt("_schema", 1);
+  target.putBool("_nvs_mig1", true);
+  target.end();
+  Serial.println("[storage] plantdata schema=1 ready; legacy NVS retained");
 }
 
 size_t infrastructureCount() {
@@ -718,6 +873,36 @@ void advancedEvent(lv_event_t *event) {
 void advancedBackEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   showPage(Page::Settings);
+}
+
+void openUpdateEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
+  lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(updateModal);
+  uiDirty = true;
+}
+
+void closeUpdateEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
+  lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
+}
+
+void wifiSetupEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  espplants_update::startWifiSetup();
+  uiDirty = true;
+}
+
+void updateCheckEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  espplants_update::requestCheck();
+  uiDirty = true;
+}
+
+void updateInstallEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  espplants_update::requestInstall();
+  uiDirty = true;
 }
 
 void infrastructureAddEvent(lv_event_t *event) {
@@ -1611,7 +1796,19 @@ void buildSettings(lv_obj_t *screen) {
   lv_label_set_text(legend, "P = PLANTS     R = REPEATERS");
   lv_obj_set_style_text_font(legend, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(legend, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(legend, 22, 282);
+  lv_obj_set_pos(legend, 22, 276);
+
+  lv_obj_t *networkButton = lv_btn_create(system);
+  lv_obj_set_size(networkButton, 330, 36);
+  lv_obj_set_pos(networkButton, 22, 294);
+  lv_obj_set_style_radius(networkButton, 10, 0);
+  lv_obj_set_style_bg_color(networkButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(networkButton, openUpdateEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *networkLabel = lv_label_create(networkButton);
+  lv_label_set_text(networkLabel, "NETWORK & UPDATES  >");
+  lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(networkLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(networkLabel);
 
   // PLANT SETUP: three deliberate rows with breathing room.
   lv_obj_t *setup = card(settingsPage, 408, 10, 378, 334);
@@ -1848,6 +2045,195 @@ void buildNav(lv_obj_t *screen) {
   add(406, "PLANT", Page::Plant, &navPlant);
   add(602, "SETTINGS", Page::Settings, &navSettings);
 }
+void buildUpdateDialog(lv_obj_t *screen) {
+  updateModal = lv_obj_create(screen);
+  lv_obj_set_pos(updateModal, 0, 0);
+  lv_obj_set_size(updateModal, 800, 480);
+  lv_obj_set_style_radius(updateModal, 0, 0);
+  lv_obj_set_style_border_width(updateModal, 0, 0);
+  lv_obj_set_style_bg_color(updateModal, lv_color_hex(0x101814), 0);
+  lv_obj_set_style_pad_all(updateModal, 0, 0);
+  lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *top = lv_obj_create(updateModal);
+  lv_obj_set_pos(top, 0, 0);
+  lv_obj_set_size(top, 800, 70);
+  lv_obj_set_style_radius(top, 0, 0);
+  lv_obj_set_style_border_width(top, 0, 0);
+  lv_obj_set_style_bg_color(top, lv_color_hex(0x0C2518), 0);
+  lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(top);
+  lv_label_set_text(title, "NETWORK & UPDATES");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(title, 22, 18);
+
+  lv_obj_t *close = lv_btn_create(top);
+  lv_obj_set_size(close, 94, 42);
+  lv_obj_set_pos(close, 684, 14);
+  lv_obj_set_style_radius(close, 11, 0);
+  lv_obj_set_style_bg_color(close, lv_color_hex(0x233029), 0);
+  lv_obj_add_event_cb(close, closeUpdateEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *closeLabel = lv_label_create(close);
+  lv_label_set_text(closeLabel, "CLOSE");
+  lv_obj_set_style_text_font(closeLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(closeLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(closeLabel);
+
+  lv_obj_t *network = card(updateModal, 18, 86, 370, 374);
+  title = lv_label_create(network);
+  lv_label_set_text(title, "WI-FI");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(title, 20, 16);
+
+  lv_obj_t *cap = lv_label_create(network);
+  lv_label_set_text(cap, "STATUS");
+  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(cap, 20, 62);
+
+  updateWifiState = lv_label_create(network);
+  lv_label_set_text(updateWifiState, "NOT CONFIGURED");
+  lv_obj_set_style_text_font(updateWifiState, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(updateWifiState, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(updateWifiState, 20, 82);
+
+  updateWifiDetail = lv_label_create(network);
+  lv_label_set_text(updateWifiDetail, "SSID --\nIP --");
+  lv_obj_set_style_text_font(updateWifiDetail, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(updateWifiDetail, lv_color_hex(0xC1D0C6), 0);
+  lv_obj_set_pos(updateWifiDetail, 20, 120);
+  lv_obj_set_width(updateWifiDetail, 326);
+  lv_label_set_long_mode(updateWifiDetail, LV_LABEL_LONG_WRAP);
+
+  lv_obj_t *wifiButton = lv_btn_create(network);
+  lv_obj_set_size(wifiButton, 326, 48);
+  lv_obj_set_pos(wifiButton, 20, 180);
+  lv_obj_set_style_radius(wifiButton, 12, 0);
+  lv_obj_set_style_bg_color(wifiButton, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_add_event_cb(wifiButton, wifiSetupEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *wifiLabel = lv_label_create(wifiButton);
+  lv_label_set_text(wifiLabel, "SET UP / CHANGE WI-FI");
+  lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(wifiLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(wifiLabel);
+
+  updateQrHint = lv_label_create(network);
+  lv_label_set_text(updateQrHint, "SCAN TO CONNECT");
+  lv_obj_set_style_text_font(updateQrHint, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
+  lv_obj_set_pos(updateQrHint, 20, 234);
+  lv_obj_set_width(updateQrHint, kSetupQrOuterSize);
+  lv_obj_set_style_text_align(updateQrHint, LV_TEXT_ALIGN_CENTER, 0);
+
+  updateQrCard = lv_obj_create(network);
+  lv_obj_set_size(updateQrCard, kSetupQrOuterSize, kSetupQrOuterSize);
+  lv_obj_set_pos(updateQrCard, 20, 252);
+  lv_obj_set_style_bg_color(updateQrCard, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(updateQrCard, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(updateQrCard, 0, 0);
+  lv_obj_set_style_radius(updateQrCard, 0, 0);
+  lv_obj_set_style_pad_all(updateQrCard, 0, 0);
+  lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_CLICKABLE);
+
+  updateQrCode = lv_canvas_create(updateQrCard);
+  lv_canvas_set_buffer(updateQrCode, updateQrCanvasBuffer,
+                       kSetupQrSize, kSetupQrSize, LV_IMG_CF_INDEXED_1BIT);
+  lv_canvas_set_palette(updateQrCode, 0, lv_color_black());
+  lv_canvas_set_palette(updateQrCode, 1, lv_color_white());
+  clearSetupQrCanvas();
+  lv_obj_set_size(updateQrCode, kSetupQrSize, kSetupQrSize);
+  lv_obj_center(updateQrCode);
+
+  updatePortalInfo = lv_label_create(network);
+  lv_label_set_text(updatePortalInfo,
+                    "Tap SET UP / CHANGE WI-FI. A QR code will appear so your phone can join the temporary setup hotspot.");
+  lv_obj_set_style_text_font(updatePortalInfo, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(updatePortalInfo, lv_color_hex(0x9DB5A5), 0);
+  lv_obj_set_pos(updatePortalInfo, 20, 246);
+  lv_obj_set_width(updatePortalInfo, 326);
+  lv_label_set_long_mode(updatePortalInfo, LV_LABEL_LONG_WRAP);
+
+  lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t *software = card(updateModal, 412, 86, 370, 374);
+  title = lv_label_create(software);
+  lv_label_set_text(title, "SOFTWARE");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(title, 20, 16);
+
+  cap = lv_label_create(software);
+  lv_label_set_text(cap, "CURRENT");
+  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(cap, 20, 62);
+
+  updateCurrentVersion = lv_label_create(software);
+  lv_obj_set_style_text_font(updateCurrentVersion, &lv_font_montserrat_18, 0);
+  lv_obj_set_style_text_color(updateCurrentVersion, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(updateCurrentVersion, 20, 82);
+
+  cap = lv_label_create(software);
+  lv_label_set_text(cap, "LATEST");
+  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(cap, 190, 62);
+
+  updateLatestVersion = lv_label_create(software);
+  lv_obj_set_style_text_font(updateLatestVersion, &lv_font_montserrat_18, 0);
+  lv_obj_set_style_text_color(updateLatestVersion, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(updateLatestVersion, 190, 82);
+  lv_obj_set_width(updateLatestVersion, 150);
+  lv_label_set_long_mode(updateLatestVersion, LV_LABEL_LONG_DOT);
+
+  updateStatus = lv_label_create(software);
+  lv_label_set_text(updateStatus, "Connect Wi-Fi to check for updates.");
+  lv_obj_set_style_text_font(updateStatus, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(updateStatus, lv_color_hex(0xA5C3AD), 0);
+  lv_obj_set_pos(updateStatus, 20, 124);
+  lv_obj_set_width(updateStatus, 326);
+  lv_label_set_long_mode(updateStatus, LV_LABEL_LONG_WRAP);
+
+  updateCheckButton = lv_btn_create(software);
+  lv_obj_set_size(updateCheckButton, 326, 46);
+  lv_obj_set_pos(updateCheckButton, 20, 194);
+  lv_obj_set_style_radius(updateCheckButton, 12, 0);
+  lv_obj_set_style_bg_color(updateCheckButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(updateCheckButton, updateCheckEvent, LV_EVENT_CLICKED, nullptr);
+  updateCheckLabel = lv_label_create(updateCheckButton);
+  lv_label_set_text(updateCheckLabel, "CHECK NOW");
+  lv_obj_set_style_text_font(updateCheckLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(updateCheckLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(updateCheckLabel);
+
+  updateInstallButton = lv_btn_create(software);
+  lv_obj_set_size(updateInstallButton, 326, 54);
+  lv_obj_set_pos(updateInstallButton, 20, 252);
+  lv_obj_set_style_radius(updateInstallButton, 12, 0);
+  lv_obj_set_style_bg_color(updateInstallButton, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_add_event_cb(updateInstallButton, updateInstallEvent, LV_EVENT_CLICKED, nullptr);
+  updateInstallLabel = lv_label_create(updateInstallButton);
+  lv_label_set_text(updateInstallLabel, "INSTALL UPDATE");
+  lv_obj_set_style_text_font(updateInstallLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(updateInstallLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(updateInstallLabel);
+
+  lv_obj_t *note = lv_label_create(software);
+  lv_label_set_text(note, "Verified .plantsota writes only the inactive app slot; plant data is preserved.");
+  lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(note, lv_color_hex(0x8DA695), 0);
+  lv_obj_set_pos(note, 20, 319);
+  lv_obj_set_width(note, 326);
+  lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+
+  lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
+}
+
 void buildRename(lv_obj_t *screen) {
   renameModal = lv_obj_create(screen);
   lv_obj_set_pos(renameModal, 0, 0);
@@ -1998,6 +2384,7 @@ void buildUi() {
   buildNav(screen);
   buildRename(screen);
   buildPairDialog(screen);
+  buildUpdateDialog(screen);
   showPage(Page::Home);
 }
 
@@ -2251,6 +2638,83 @@ void refreshUi() {
   else snprintf(text, sizeof(text), "ADD SENSOR");
   label(settingsPair, text);
 
+  if (espplants_update::wifiConnected()) {
+    label(updateWifiState, "CONNECTED");
+  } else if (espplants_update::wifiConfigured()) {
+    label(updateWifiState, "OFFLINE / CONNECTING");
+  } else {
+    label(updateWifiState, "NOT CONFIGURED");
+  }
+  snprintf(text, sizeof(text), "SSID  %s\nIP       %s",
+           espplants_update::wifiSsid(), espplants_update::wifiAddress());
+  label(updateWifiDetail, text);
+
+  if (espplants_update::setupPortalActive()) {
+    char qr[sizeof(updateQrPayload)]{};
+    snprintf(qr, sizeof(qr), "WIFI:T:WPA;S:%s;P:%s;;",
+             espplants_update::setupSsid(), espplants_update::setupPassword());
+    if (strcmp(updateQrPayload, qr) != 0) {
+      if (renderSetupQr(qr)) {
+        strncpy(updateQrPayload, qr, sizeof(updateQrPayload) - 1);
+        updateQrPayload[sizeof(updateQrPayload) - 1] = '\0';
+        label(updateQrHint, "SCAN TO CONNECT");
+        lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
+      } else {
+        updateQrPayload[0] = '\0';
+        label(updateQrHint, "QR ERROR - JOIN MANUALLY");
+        lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xE2B276), 0);
+      }
+    }
+    lv_obj_clear_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
+    if (updateQrPayload[0]) lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(updatePortalInfo, 170, 242);
+    lv_obj_set_width(updatePortalInfo, 176);
+    snprintf(text, sizeof(text),
+             "PHONE SETUP READY\n\n%s\n\nPassword:\n%s\n\nCaptive setup page should open automatically. If not, open 192.168.4.1",
+             espplants_update::setupSsid(), espplants_update::setupPassword());
+    label(updatePortalInfo, text);
+  } else {
+    updateQrPayload[0] = '\0';
+    lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(updatePortalInfo, 20, 246);
+    lv_obj_set_width(updatePortalInfo, 326);
+    label(updatePortalInfo,
+          "Tap SET UP / CHANGE WI-FI. A QR code will appear so your phone can join the temporary setup hotspot.");
+  }
+
+  snprintf(text, sizeof(text), "v%s", espplants_update::currentVersion());
+  label(updateCurrentVersion, text);
+  if (strcmp(espplants_update::latestVersion(), "--") == 0) {
+    label(updateLatestVersion, "--");
+  } else {
+    snprintf(text, sizeof(text), "v%s", espplants_update::latestVersion());
+    label(updateLatestVersion, text);
+  }
+  label(updateStatus, espplants_update::statusText());
+
+  const bool updateBusy = espplants_update::checking() || espplants_update::installing();
+  if (espplants_update::checking()) label(updateCheckLabel, "CHECKING...");
+  else label(updateCheckLabel, "CHECK NOW");
+  if (!espplants_update::wifiConnected() || updateBusy)
+    lv_obj_add_state(updateCheckButton, LV_STATE_DISABLED);
+  else
+    lv_obj_clear_state(updateCheckButton, LV_STATE_DISABLED);
+
+  if (espplants_update::installing()) {
+    snprintf(text, sizeof(text), "INSTALLING... %d%%", espplants_update::updateProgress());
+    label(updateInstallLabel, text);
+  } else if (espplants_update::updateAvailable()) {
+    label(updateInstallLabel, "INSTALL UPDATE");
+  } else {
+    label(updateInstallLabel, "NO UPDATE READY");
+  }
+  if (!espplants_update::wifiConnected() || !espplants_update::updateAvailable() || updateBusy)
+    lv_obj_add_state(updateInstallButton, LV_STATE_DISABLED);
+  else
+    lv_obj_clear_state(updateInstallButton, LV_STATE_DISABLED);
+
   refreshPairDialog();
 
   lvgl_port_unlock();
@@ -2472,7 +2936,11 @@ void setup() {
   Serial.println("ESP PLANTS Waveshare multi-page dashboard");
   Serial.println("[usb] native USB CDC console online");
 
-  preferences.begin("espplants", false);
+  migrateUserPreferences();
+  if (!preferences.begin("espplants", false, "plantdata")) {
+    Serial.println("[storage] ERROR: plantdata unavailable; falling back to default NVS");
+    preferences.begin("espplants", false);
+  }
   useFahrenheit = preferences.getBool("fahrenheit", true);
   String savedDeviceName = preferences.getString("device_name", "ESP PLANTS");
   savedDeviceName.toCharArray(deviceName, sizeof(deviceName));
@@ -2489,11 +2957,14 @@ void setup() {
   lcd_init();
   if (lvgl_port_lock(-1)) { buildUi(); lvgl_port_unlock(); }
   Serial.println("[display] ready");
+
+  espplants_update::begin();
   Serial.println("[plantlink] waiting for H2 frames");
 }
 
 void loop() {
   servicePlantLink();
+  espplants_update::service();
   refreshUi();
   delay(2);
 }
