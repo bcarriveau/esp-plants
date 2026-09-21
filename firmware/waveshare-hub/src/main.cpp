@@ -22,6 +22,13 @@ constexpr uint8_t kPlantRecordVersion = 1;
 
 enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3 };
 enum class RenameTarget : uint8_t { Plant = 0, Device = 1 };
+enum class PairDialogState : uint8_t {
+  Hidden = 0,
+  Pairing = 1,
+  Found = 2,
+  TimedOut = 3,
+  RemoveConfirm = 4,
+};
 
 struct PersistedPlant {
   uint32_t magic = kPlantRecordMagic;
@@ -84,6 +91,11 @@ int manualHomeSensor = -1;
 uint32_t manualHomeUntilMs = 0;
 char deviceName[kDeviceNameBytes] = "ESP PLANTS";
 Page currentPage = Page::Home;
+PairDialogState pairDialogState = PairDialogState::Hidden;
+bool pairReplacing = false;
+int pairTargetSlot = -1;
+int pairFoundSlot = -1;
+uint32_t pairStartedMs = 0;
 
 lv_obj_t *homePage = nullptr;
 lv_obj_t *allPage = nullptr;
@@ -120,6 +132,8 @@ lv_obj_t *detailUpdated = nullptr;
 lv_obj_t *detailBar = nullptr;
 lv_obj_t *detailWarning = nullptr;
 lv_obj_t *renameButton = nullptr;
+lv_obj_t *replaceButton = nullptr;
+lv_obj_t *removeButton = nullptr;
 
 lv_obj_t *settingsH2 = nullptr;
 lv_obj_t *settingsZigbee = nullptr;
@@ -135,6 +149,15 @@ lv_obj_t *renameInput = nullptr;
 lv_obj_t *renameKeyboard = nullptr;
 bool renameUppercase = true;
 RenameTarget renameTarget = RenameTarget::Plant;
+
+lv_obj_t *pairModal = nullptr;
+lv_obj_t *pairTitle = nullptr;
+lv_obj_t *pairInstruction = nullptr;
+lv_obj_t *pairStatus = nullptr;
+lv_obj_t *pairPrimary = nullptr;
+lv_obj_t *pairPrimaryLabel = nullptr;
+lv_obj_t *pairSecondary = nullptr;
+lv_obj_t *pairSecondaryLabel = nullptr;
 
 bool ieeeEqual(const uint8_t a[8], const uint8_t b[8]) { return memcmp(a, b, 8) == 0; }
 
@@ -353,13 +376,77 @@ void requestJoin(uint8_t seconds) {
   Serial.printf("[plantlink] permit join requested: %u s\n", seconds);
 }
 
+void requestRemoveDevice(const uint8_t ieee[8]) {
+  if (!ieee || ieeeZero(ieee)) return;
+  sendFrame(plantlink::MessageType::RemoveDevice, ieee, 8);
+  char formatted[24]{};
+  plantlink::formatIeee(ieee, formatted, sizeof(formatted));
+  Serial.printf("[plantlink] remove device requested: %s\n", formatted);
+}
+
+void selectFirstRegisteredPlant() {
+  selectedSensor = -1;
+  for (size_t slot = 0; slot < kMaxSensors; ++slot) {
+    if (sensors[slot].used) {
+      selectedSensor = static_cast<int>(slot);
+      break;
+    }
+  }
+}
+
+void clearPlantSlot(size_t slot) {
+  if (slot >= kMaxSensors || !sensors[slot].used) return;
+
+  char key[12]{};
+  slotKey(slot, key);
+  preferences.remove(key);
+  sensors[slot] = PlantSensor{};
+
+  if (manualHomeSensor == static_cast<int>(slot)) {
+    manualHomeSensor = -1;
+    manualHomeUntilMs = 0;
+  }
+  if (selectedSensor == static_cast<int>(slot)) selectFirstRegisteredPlant();
+
+  Serial.printf("[registry] cleared slot=%u\n", static_cast<unsigned>(slot + 1));
+  uiDirty = true;
+}
+
+PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t shortAddress) {
+  if (slot >= kMaxSensors || !sensors[slot].used || !ieee || ieeeZero(ieee)) return nullptr;
+
+  char preservedName[kPlantNameBytes]{};
+  strncpy(preservedName, sensors[slot].name, sizeof(preservedName) - 1);
+
+  PlantSensor replacement{};
+  replacement.used = true;
+  memcpy(replacement.ieee, ieee, sizeof(replacement.ieee));
+  replacement.shortAddress = shortAddress;
+  strncpy(replacement.name, preservedName, sizeof(replacement.name) - 1);
+  replacement.name[sizeof(replacement.name) - 1] = '\0';
+  sensors[slot] = replacement;
+  saveSlot(slot);
+
+  selectedSensor = static_cast<int>(slot);
+  manualHomeSensor = -1;
+  manualHomeUntilMs = 0;
+  uiDirty = true;
+
+  char formatted[24]{};
+  plantlink::formatIeee(ieee, formatted, sizeof(formatted));
+  Serial.printf("[registry] replaced slot=%u name=\"%s\" new_ieee=%s\n",
+                static_cast<unsigned>(slot + 1), sensors[slot].name, formatted);
+  return &sensors[slot];
+}
+
 lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
   lv_obj_t *obj = lv_obj_create(parent);
   lv_obj_set_pos(obj, x, y);
   lv_obj_set_size(obj, w, h);
   lv_obj_set_style_radius(obj, 20, 0);
   lv_obj_set_style_border_width(obj, 0, 0);
-  lv_obj_set_style_bg_color(obj, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_bg_color(obj, lv_color_hex(0x18231D), 0);
+  lv_obj_set_style_text_color(obj, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_style_shadow_width(obj, 10, 0);
   lv_obj_set_style_shadow_opa(obj, LV_OPA_20, 0);
   lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
@@ -371,12 +458,12 @@ void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **valu
   lv_obj_t *c = lv_label_create(parent);
   lv_label_set_text(c, caption);
   lv_obj_set_style_text_font(c, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(c, lv_color_hex(0x687269), 0);
+  lv_obj_set_style_text_color(c, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(c, x, y);
   *value = lv_label_create(parent);
   lv_label_set_text(*value, "--");
   lv_obj_set_style_text_font(*value, font, 0);
-  lv_obj_set_style_text_color(*value, lv_color_hex(0x142419), 0);
+  lv_obj_set_style_text_color(*value, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(*value, x, y + 19);
 }
 
@@ -391,8 +478,8 @@ void showPage(Page page) {
   if (settingsPage) (page == Page::Settings) ? lv_obj_clear_flag(settingsPage, LV_OBJ_FLAG_HIDDEN)
                                              : lv_obj_add_flag(settingsPage, LV_OBJ_FLAG_HIDDEN);
 
-  const lv_color_t active = lv_color_hex(0xDDECDD);
-  const lv_color_t idle = lv_color_hex(0xFFFFFF);
+  const lv_color_t active = lv_color_hex(0x1E3529);
+  const lv_color_t idle = lv_color_hex(0x151F1A);
   if (navHome) lv_obj_set_style_bg_color(navHome, page == Page::Home ? active : idle, 0);
   if (navAll) lv_obj_set_style_bg_color(navAll, page == Page::All ? active : idle, 0);
   if (navPlant) lv_obj_set_style_bg_color(navPlant, page == Page::Plant ? active : idle, 0);
@@ -440,8 +527,26 @@ void unitEvent(lv_event_t *event) {
   uiDirty = true;
 }
 
+void startPairing(bool replacing, int targetSlot);
+void showRemoveConfirm(int targetSlot);
+
 void pairEvent(lv_event_t *event) {
-  if (lv_event_get_code(event) == LV_EVENT_CLICKED) requestJoin(120);
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  startPairing(false, -1);
+}
+
+void replaceEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
+      !sensors[selectedSensor].used) return;
+  startPairing(true, selectedSensor);
+}
+
+void removeEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
+      !sensors[selectedSensor].used) return;
+  showRemoveConfirm(selectedSensor);
 }
 
 void closeRename() {
@@ -523,12 +628,11 @@ void renameKeyboardEvent(lv_event_t *event) {
   }
 }
 
-void renameEvent(lv_event_t *event) {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
-      !sensors[selectedSensor].used) return;
-
+void openPlantRename(int slot) {
+  if (slot < 0 || slot >= static_cast<int>(kMaxSensors) || !sensors[slot].used) return;
+  selectedSensor = slot;
   renameTarget = RenameTarget::Plant;
+
   char titleText[48]{};
   snprintf(titleText, sizeof(titleText), "RENAME PLANT %u",
            static_cast<unsigned>(selectedSensor + 1));
@@ -541,6 +645,11 @@ void renameEvent(lv_event_t *event) {
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
   lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
+}
+
+void renameEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  openPlantRename(selectedSensor);
 }
 
 void deviceNameEvent(lv_event_t *event) {
@@ -556,20 +665,182 @@ void deviceNameEvent(lv_event_t *event) {
   lv_obj_move_foreground(renameModal);
 }
 
+
+void closePairDialog() {
+  pairDialogState = PairDialogState::Hidden;
+  pairFoundSlot = -1;
+  if (pairModal) lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
+  uiDirty = true;
+}
+
+void startPairing(bool replacing, int targetSlot) {
+  if (replacing) {
+    if (targetSlot < 0 || targetSlot >= static_cast<int>(kMaxSensors) ||
+        !sensors[targetSlot].used) return;
+  } else if (registeredCount() >= kMaxSensors) {
+    pairReplacing = false;
+    pairTargetSlot = -1;
+    pairFoundSlot = -1;
+    pairDialogState = PairDialogState::TimedOut;
+    uiDirty = true;
+    return;
+  }
+
+  pairReplacing = replacing;
+  pairTargetSlot = replacing ? targetSlot : -1;
+  pairFoundSlot = -1;
+  pairStartedMs = millis();
+  pairDialogState = PairDialogState::Pairing;
+
+  if (h2Online && networkReady) {
+    requestJoin(120);
+  } else {
+    permitJoinRemaining = 0;
+    pairDialogState = PairDialogState::TimedOut;
+  }
+  uiDirty = true;
+}
+
+void showRemoveConfirm(int targetSlot) {
+  if (targetSlot < 0 || targetSlot >= static_cast<int>(kMaxSensors) ||
+      !sensors[targetSlot].used) return;
+  pairReplacing = false;
+  pairTargetSlot = targetSlot;
+  pairFoundSlot = -1;
+  pairDialogState = PairDialogState::RemoveConfirm;
+  uiDirty = true;
+}
+
+void pairPrimaryEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+
+  if (pairDialogState == PairDialogState::Found) {
+    const int slot = pairFoundSlot;
+    closePairDialog();
+    openPlantRename(slot);
+    return;
+  }
+
+  if (pairDialogState == PairDialogState::TimedOut) {
+    startPairing(pairReplacing, pairTargetSlot);
+    return;
+  }
+
+  if (pairDialogState == PairDialogState::RemoveConfirm) {
+    const int slot = pairTargetSlot;
+    if (slot >= 0 && slot < static_cast<int>(kMaxSensors) && sensors[slot].used) {
+      uint8_t oldIeee[8]{};
+      memcpy(oldIeee, sensors[slot].ieee, sizeof(oldIeee));
+      requestRemoveDevice(oldIeee);
+      clearPlantSlot(static_cast<size_t>(slot));
+    }
+    closePairDialog();
+  }
+}
+
+void pairSecondaryEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (pairDialogState == PairDialogState::Pairing) requestJoin(0);
+  closePairDialog();
+}
+
+void refreshPairDialog() {
+  if (!pairModal) return;
+
+  if (pairDialogState == PairDialogState::Hidden) {
+    lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+
+  if (pairDialogState == PairDialogState::Pairing &&
+      permitJoinRemaining == 0 &&
+      millis() - pairStartedMs > 2500u) {
+    pairDialogState = PairDialogState::TimedOut;
+  }
+
+  lv_obj_clear_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(pairModal);
+
+  char text[180]{};
+  lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x3F7A4E), 0);
+
+  if (pairDialogState == PairDialogState::Pairing) {
+    label(pairTitle, pairReplacing ? "REPLACE SENSOR" : "ADD SENSOR");
+    label(pairInstruction,
+          pairReplacing
+              ? "Hold the NEW sensor's water/drop button until its red LED begins flashing."
+              : "Hold the sensor's water/drop button until its red LED begins flashing.");
+    snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+    label(pairStatus, text);
+    lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+    label(pairSecondaryLabel, "CANCEL");
+  } else if (pairDialogState == PairDialogState::Found) {
+    label(pairTitle, "SENSOR FOUND");
+    if (pairFoundSlot >= 0 && pairFoundSlot < static_cast<int>(kMaxSensors) &&
+        sensors[pairFoundSlot].used) {
+      if (pairReplacing) {
+        snprintf(text, sizeof(text), "%s now uses the new sensor.",
+                 sensors[pairFoundSlot].name);
+      } else {
+        snprintf(text, sizeof(text), "Added as %s.", sensors[pairFoundSlot].name);
+      }
+      label(pairInstruction, text);
+    } else {
+      label(pairInstruction, "The new sensor is connected.");
+    }
+    label(pairStatus, "Name it now, or tap DONE.");
+    lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+    label(pairPrimaryLabel, "NAME PLANT");
+    label(pairSecondaryLabel, "DONE");
+  } else if (pairDialogState == PairDialogState::TimedOut) {
+    if (!h2Online || !networkReady) {
+      label(pairTitle, "ZIGBEE NOT READY");
+      label(pairInstruction, "The H2 Zigbee gateway is not ready yet.");
+      label(pairStatus, "Check the H2 link, then tap TRY AGAIN.");
+    } else if (!pairReplacing && registeredCount() >= kMaxSensors) {
+      label(pairTitle, "NO FREE PLANT SLOTS");
+      label(pairInstruction, "ESP PLANTS already has 16 registered plants.");
+      label(pairStatus, "Remove a plant first, then add the new sensor.");
+    } else {
+      label(pairTitle, "NO SENSOR FOUND");
+      label(pairInstruction, "No new sensor reported before the pairing window closed.");
+      label(pairStatus, "Put the sensor in pairing mode and try again.");
+    }
+    lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+    label(pairPrimaryLabel, "TRY AGAIN");
+    label(pairSecondaryLabel, "CLOSE");
+  } else if (pairDialogState == PairDialogState::RemoveConfirm) {
+    label(pairTitle, "REMOVE SENSOR?");
+    if (pairTargetSlot >= 0 && pairTargetSlot < static_cast<int>(kMaxSensors) &&
+        sensors[pairTargetSlot].used) {
+      snprintf(text, sizeof(text), "Remove %s from ESP PLANTS?",
+               sensors[pairTargetSlot].name);
+      label(pairInstruction, text);
+    } else {
+      label(pairInstruction, "Remove this plant sensor?");
+    }
+    label(pairStatus, "This deletes the plant slot and asks the sensor to leave the Zigbee network.");
+    lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x8E493E), 0);
+    label(pairPrimaryLabel, "REMOVE");
+    label(pairSecondaryLabel, "CANCEL");
+  }
+}
+
 void buildHeader(lv_obj_t *screen) {
   lv_obj_t *header = lv_obj_create(screen);
   lv_obj_set_pos(header, 0, 0);
   lv_obj_set_size(header, 800, 66);
   lv_obj_set_style_radius(header, 0, 0);
   lv_obj_set_style_border_width(header, 0, 0);
-  lv_obj_set_style_bg_color(header, lv_color_hex(0x183E2B), 0);
+  lv_obj_set_style_bg_color(header, lv_color_hex(0x0C2518), 0);
   lv_obj_set_style_pad_all(header, 0, 0);
   lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
   headerTitle = lv_label_create(header);
   lv_label_set_text(headerTitle, deviceName);
   lv_obj_set_style_text_font(headerTitle, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(headerTitle, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_color(headerTitle, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(headerTitle, 22, 9);
   lv_obj_set_width(headerTitle, 500);
   lv_label_set_long_mode(headerTitle, LV_LABEL_LONG_DOT);
@@ -577,13 +848,13 @@ void buildHeader(lv_obj_t *screen) {
   lv_obj_t *tag = lv_label_create(header);
   lv_label_set_text(tag, "keep 'em alive");
   lv_obj_set_style_text_font(tag, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(tag, lv_color_hex(0xCDE0D2), 0);
+  lv_obj_set_style_text_color(tag, lv_color_hex(0x9DB5A5), 0);
   lv_obj_set_pos(tag, 24, 43);
 
   headerCount = lv_label_create(header);
   lv_label_set_text(headerCount, "0 PLANTS");
   lv_obj_set_style_text_font(headerCount, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(headerCount, lv_color_hex(0xE6F3E9), 0);
+  lv_obj_set_style_text_color(headerCount, lv_color_hex(0xD1DED5), 0);
   lv_obj_align(headerCount, LV_ALIGN_RIGHT_MID, -22, 0);
 }
 
@@ -602,19 +873,19 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_t *section = lv_label_create(featured);
   lv_label_set_text(section, "WHO NEEDS WATER?");
   lv_obj_set_style_text_font(section, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(section, lv_color_hex(0x66806D), 0);
+  lv_obj_set_style_text_color(section, lv_color_hex(0x8DA695), 0);
   lv_obj_set_pos(section, 22, 14);
 
   homeSummary = lv_label_create(featured);
   lv_label_set_text(homeSummary, "0 REPORTING | 0 WAITING");
   lv_obj_set_style_text_font(homeSummary, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(homeSummary, lv_color_hex(0x839087), 0);
+  lv_obj_set_style_text_color(homeSummary, lv_color_hex(0xAABBAF), 0);
   lv_obj_align(homeSummary, LV_ALIGN_TOP_RIGHT, -18, 14);
 
   homeName = lv_label_create(featured);
   lv_label_set_text(homeName, "WAITING FOR SENSOR");
   lv_obj_set_style_text_font(homeName, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(homeName, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_style_text_color(homeName, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(homeName, 22, 38);
   lv_obj_set_width(homeName, 440);
   lv_label_set_long_mode(homeName, LV_LABEL_LONG_DOT);
@@ -622,7 +893,7 @@ void buildHome(lv_obj_t *screen) {
   homeMood = lv_label_create(featured);
   lv_label_set_text(homeMood, "Pair a sensor and I'll keep an eye on it");
   lv_obj_set_style_text_font(homeMood, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(homeMood, lv_color_hex(0x467252), 0);
+  lv_obj_set_style_text_color(homeMood, lv_color_hex(0xA5C3AD), 0);
   lv_obj_set_pos(homeMood, 24, 82);
   lv_obj_set_width(homeMood, 445);
   lv_label_set_long_mode(homeMood, LV_LABEL_LONG_WRAP);
@@ -635,20 +906,20 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_pos(homeBar, 24, 201);
   lv_obj_set_size(homeBar, 448, 22);
   lv_bar_set_range(homeBar, 0, 100);
-  lv_obj_set_style_bg_color(homeBar, lv_color_hex(0xDCE8DD), LV_PART_MAIN);
-  lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x62A86E), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
 
   lv_obj_t *hint = lv_label_create(featured);
   lv_label_set_text(hint, "Tap card for full plant details");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x839087), 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0xAABBAF), 0);
   lv_obj_set_pos(hint, 24, 248);
 
   homeWarning = lv_label_create(featured);
   lv_label_set_text(homeWarning, "WATER ME!");
   lv_obj_set_style_text_font(homeWarning, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(homeWarning, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_bg_color(homeWarning, lv_color_hex(0xB94C3E), 0);
+  lv_obj_set_style_text_color(homeWarning, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_style_bg_color(homeWarning, lv_color_hex(0x8E493E), 0);
   lv_obj_set_style_pad_hor(homeWarning, 14, 0);
   lv_obj_set_style_pad_ver(homeWarning, 8, 0);
   lv_obj_set_style_radius(homeWarning, 10, 0);
@@ -659,7 +930,7 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_t *listTitle = lv_label_create(listCard);
   lv_label_set_text(listTitle, "YOUR PLANTS");
   lv_obj_set_style_text_font(listTitle, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(listTitle, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_style_text_color(listTitle, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(listTitle, 10, 8);
 
   lv_obj_t *list = lv_obj_create(listCard);
@@ -677,7 +948,7 @@ void buildHome(lv_obj_t *screen) {
     lv_obj_set_size(rows[i].box, 228, 56);
     lv_obj_set_style_radius(rows[i].box, 12, 0);
     lv_obj_set_style_border_width(rows[i].box, 0, 0);
-    lv_obj_set_style_bg_color(rows[i].box, lv_color_hex(0xF2F6F1), 0);
+    lv_obj_set_style_bg_color(rows[i].box, lv_color_hex(0x1D2922), 0);
     lv_obj_set_style_pad_all(rows[i].box, 8, 0);
     lv_obj_clear_flag(rows[i].box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
@@ -687,21 +958,22 @@ void buildHome(lv_obj_t *screen) {
     rows[i].name = lv_label_create(rows[i].box);
     lv_label_set_text(rows[i].name, "PLANT");
     lv_obj_set_style_text_font(rows[i].name, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(rows[i].name, lv_color_hex(0x173E2A), 0);
+    lv_obj_set_style_text_color(rows[i].name, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_width(rows[i].name, 145);
     lv_label_set_long_mode(rows[i].name, LV_LABEL_LONG_DOT);
 
     rows[i].moisture = lv_label_create(rows[i].box);
     lv_label_set_text(rows[i].moisture, "--%");
     lv_obj_set_style_text_font(rows[i].moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(rows[i].moisture, lv_color_hex(0xE5ECE7), 0);
     lv_obj_align(rows[i].moisture, LV_ALIGN_TOP_RIGHT, -2, -2);
 
     rows[i].bar = lv_bar_create(rows[i].box);
     lv_obj_set_pos(rows[i].bar, 2, 30);
     lv_obj_set_size(rows[i].bar, 208, 9);
     lv_bar_set_range(rows[i].bar, 0, 100);
-    lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0xDCE8DD), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0x62A86E), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
   }
 }
 
@@ -719,19 +991,19 @@ void buildAll(lv_obj_t *screen) {
   lv_obj_t *title = lv_label_create(p);
   lv_label_set_text(title, "ALL SENSORS");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(title, 18, 14);
 
   allSummary = lv_label_create(p);
   lv_label_set_text(allSummary, "0 REPORTING | 0 WAITING");
   lv_obj_set_style_text_font(allSummary, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(allSummary, lv_color_hex(0x687269), 0);
+  lv_obj_set_style_text_color(allSummary, lv_color_hex(0xC1D0C6), 0);
   lv_obj_align(allSummary, LV_ALIGN_TOP_RIGHT, -18, 18);
 
   lv_obj_t *head = lv_label_create(p);
   lv_label_set_text(head, "PLANT                         SOIL       BATTERY       LAST REPORT");
   lv_obj_set_style_text_font(head, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(head, lv_color_hex(0x839087), 0);
+  lv_obj_set_style_text_color(head, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(head, 18, 50);
 
   lv_obj_t *list = lv_obj_create(p);
@@ -749,7 +1021,7 @@ void buildAll(lv_obj_t *screen) {
     lv_obj_set_size(allRows[i].box, 742, 54);
     lv_obj_set_style_radius(allRows[i].box, 10, 0);
     lv_obj_set_style_border_width(allRows[i].box, 0, 0);
-    lv_obj_set_style_bg_color(allRows[i].box, lv_color_hex(0xF2F6F1), 0);
+    lv_obj_set_style_bg_color(allRows[i].box, lv_color_hex(0x1D2922), 0);
     lv_obj_set_style_pad_all(allRows[i].box, 8, 0);
     lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
@@ -758,22 +1030,24 @@ void buildAll(lv_obj_t *screen) {
 
     allRows[i].name = lv_label_create(allRows[i].box);
     lv_obj_set_style_text_font(allRows[i].name, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(allRows[i].name, lv_color_hex(0x173E2A), 0);
+    lv_obj_set_style_text_color(allRows[i].name, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(allRows[i].name, 2, 8);
     lv_obj_set_width(allRows[i].name, 270);
     lv_label_set_long_mode(allRows[i].name, LV_LABEL_LONG_DOT);
 
     allRows[i].moisture = lv_label_create(allRows[i].box);
     lv_obj_set_style_text_font(allRows[i].moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(allRows[i].moisture, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(allRows[i].moisture, 300, 7);
 
     allRows[i].battery = lv_label_create(allRows[i].box);
     lv_obj_set_style_text_font(allRows[i].battery, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(allRows[i].battery, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(allRows[i].battery, 420, 8);
 
     allRows[i].updated = lv_label_create(allRows[i].box);
     lv_obj_set_style_text_font(allRows[i].updated, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(allRows[i].updated, lv_color_hex(0x687269), 0);
+    lv_obj_set_style_text_color(allRows[i].updated, lv_color_hex(0xD1DED5), 0);
     lv_obj_set_pos(allRows[i].updated, 540, 9);
     lv_obj_set_width(allRows[i].updated, 180);
     lv_label_set_long_mode(allRows[i].updated, LV_LABEL_LONG_DOT);
@@ -792,36 +1066,61 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_t *p = card(plantPage, 14, 10, 772, 334);
   detailSlot = lv_label_create(p);
   lv_obj_set_style_text_font(detailSlot, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(detailSlot, lv_color_hex(0x66806D), 0);
+  lv_obj_set_style_text_color(detailSlot, lv_color_hex(0x8DA695), 0);
   lv_obj_set_pos(detailSlot, 22, 14);
 
   detailName = lv_label_create(p);
   lv_obj_set_style_text_font(detailName, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(detailName, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_style_text_color(detailName, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(detailName, 22, 38);
-  lv_obj_set_width(detailName, 510);
+  lv_obj_set_width(detailName, 345);
   lv_label_set_long_mode(detailName, LV_LABEL_LONG_DOT);
 
   detailMood = lv_label_create(p);
   lv_obj_set_style_text_font(detailMood, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(detailMood, lv_color_hex(0x467252), 0);
+  lv_obj_set_style_text_color(detailMood, lv_color_hex(0xA5C3AD), 0);
   lv_obj_set_pos(detailMood, 24, 80);
 
   detailIeee = lv_label_create(p);
   lv_obj_set_style_text_font(detailIeee, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(detailIeee, lv_color_hex(0x839087), 0);
+  lv_obj_set_style_text_color(detailIeee, lv_color_hex(0xAABBAF), 0);
   lv_obj_set_pos(detailIeee, 24, 108);
 
   renameButton = lv_btn_create(p);
-  lv_obj_set_size(renameButton, 142, 48);
-  lv_obj_set_pos(renameButton, 600, 24);
+  lv_obj_set_size(renameButton, 110, 48);
+  lv_obj_set_pos(renameButton, 390, 24);
   lv_obj_set_style_radius(renameButton, 12, 0);
-  lv_obj_set_style_bg_color(renameButton, lv_color_hex(0x2E6144), 0);
+  lv_obj_set_style_bg_color(renameButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(renameButton, renameEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_t *renameLabel = lv_label_create(renameButton);
   lv_label_set_text(renameLabel, "RENAME");
-  lv_obj_set_style_text_font(renameLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_font(renameLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(renameLabel, lv_color_hex(0xE5ECE7), 0);
   lv_obj_center(renameLabel);
+
+  replaceButton = lv_btn_create(p);
+  lv_obj_set_size(replaceButton, 110, 48);
+  lv_obj_set_pos(replaceButton, 510, 24);
+  lv_obj_set_style_radius(replaceButton, 12, 0);
+  lv_obj_set_style_bg_color(replaceButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(replaceButton, replaceEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *replaceLabel = lv_label_create(replaceButton);
+  lv_label_set_text(replaceLabel, "REPLACE");
+  lv_obj_set_style_text_font(replaceLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(replaceLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(replaceLabel);
+
+  removeButton = lv_btn_create(p);
+  lv_obj_set_size(removeButton, 110, 48);
+  lv_obj_set_pos(removeButton, 630, 24);
+  lv_obj_set_style_radius(removeButton, 12, 0);
+  lv_obj_set_style_bg_color(removeButton, lv_color_hex(0x7A4037), 0);
+  lv_obj_add_event_cb(removeButton, removeEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *removeLabel = lv_label_create(removeButton);
+  lv_label_set_text(removeLabel, "REMOVE");
+  lv_obj_set_style_text_font(removeLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(removeLabel, lv_color_hex(0xF7EDE9), 0);
+  lv_obj_center(removeLabel);
 
   metric(p, "SOIL", 24, 150, &detailSoil, &lv_font_montserrat_32);
   metric(p, "TEMP", 182, 150, &detailTemp);
@@ -833,19 +1132,19 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_set_pos(detailBar, 24, 226);
   lv_obj_set_size(detailBar, 718, 22);
   lv_bar_set_range(detailBar, 0, 100);
-  lv_obj_set_style_bg_color(detailBar, lv_color_hex(0xDCE8DD), LV_PART_MAIN);
-  lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x62A86E), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
 
   detailUpdated = lv_label_create(p);
   lv_obj_set_style_text_font(detailUpdated, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(detailUpdated, lv_color_hex(0x687269), 0);
+  lv_obj_set_style_text_color(detailUpdated, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(detailUpdated, 24, 276);
 
   detailWarning = lv_label_create(p);
   lv_label_set_text(detailWarning, "WATER ME!");
   lv_obj_set_style_text_font(detailWarning, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(detailWarning, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_bg_color(detailWarning, lv_color_hex(0xB94C3E), 0);
+  lv_obj_set_style_text_color(detailWarning, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_style_bg_color(detailWarning, lv_color_hex(0x8E493E), 0);
   lv_obj_set_style_pad_hor(detailWarning, 14, 0);
   lv_obj_set_style_pad_ver(detailWarning, 8, 0);
   lv_obj_set_style_radius(detailWarning, 10, 0);
@@ -866,7 +1165,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_t *title = lv_label_create(system);
   lv_label_set_text(title, "SYSTEM");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(title, 22, 18);
 
   lv_obj_t *cap = lv_label_create(system);
@@ -874,7 +1173,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_t *deviceButton = lv_btn_create(system);
   lv_obj_set_size(deviceButton, 330, 46); lv_obj_set_pos(deviceButton, 22, 82);
   lv_obj_set_style_radius(deviceButton, 12, 0);
-  lv_obj_set_style_bg_color(deviceButton, lv_color_hex(0x2E6144), 0);
+  lv_obj_set_style_bg_color(deviceButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(deviceButton, deviceNameEvent, LV_EVENT_CLICKED, nullptr);
   settingsDeviceName = lv_label_create(deviceButton);
   lv_obj_set_style_text_font(settingsDeviceName, &lv_font_montserrat_16, 0);
@@ -901,7 +1200,7 @@ void buildSettings(lv_obj_t *screen) {
   title = lv_label_create(setup);
   lv_label_set_text(title, "PLANT SETUP");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0x173E2A), 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(title, 22, 18);
 
   cap = lv_label_create(setup);
@@ -909,7 +1208,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_t *unitButton = lv_btn_create(setup);
   lv_obj_set_size(unitButton, 122, 52); lv_obj_set_pos(unitButton, 22, 103);
   lv_obj_set_style_radius(unitButton, 12, 0);
-  lv_obj_set_style_bg_color(unitButton, lv_color_hex(0x2E6144), 0);
+  lv_obj_set_style_bg_color(unitButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(unitButton, unitEvent, LV_EVENT_CLICKED, nullptr);
   settingsUnit = lv_label_create(unitButton);
   lv_obj_set_style_text_font(settingsUnit, &lv_font_montserrat_24, 0);
@@ -920,7 +1219,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_t *pairButton = lv_btn_create(setup);
   lv_obj_set_size(pairButton, 180, 52); lv_obj_set_pos(pairButton, 22, 207);
   lv_obj_set_style_radius(pairButton, 12, 0);
-  lv_obj_set_style_bg_color(pairButton, lv_color_hex(0x66A66F), 0);
+  lv_obj_set_style_bg_color(pairButton, lv_color_hex(0x3F7A4E), 0);
   lv_obj_add_event_cb(pairButton, pairEvent, LV_EVENT_CLICKED, nullptr);
   settingsPair = lv_label_create(pairButton);
   lv_label_set_text(settingsPair, "ADD SENSOR");
@@ -928,9 +1227,9 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_center(settingsPair);
 
   lv_obj_t *note = lv_label_create(setup);
-  lv_label_set_text(note, "Names stay tied to each sensor's\nIEEE address across reboots.");
+  lv_label_set_text(note, "To pair: hold the water/drop button until\nthe red LED flashes. Names survive reboots.");
   lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(note, lv_color_hex(0x687269), 0);
+  lv_obj_set_style_text_color(note, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(note, 22, 280);
 }
 void buildNav(lv_obj_t *screen) {
@@ -939,7 +1238,7 @@ void buildNav(lv_obj_t *screen) {
   lv_obj_set_size(bar, 800, 58);
   lv_obj_set_style_radius(bar, 0, 0);
   lv_obj_set_style_border_width(bar, 0, 0);
-  lv_obj_set_style_bg_color(bar, lv_color_hex(0xF9FBF8), 0);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(0x111A16), 0);
   lv_obj_set_style_pad_all(bar, 0, 0);
   lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -950,13 +1249,13 @@ void buildNav(lv_obj_t *screen) {
     lv_obj_set_style_radius(*button, 12, 0);
     lv_obj_set_style_shadow_width(*button, 0, 0);
     lv_obj_set_style_border_width(*button, 1, 0);
-    lv_obj_set_style_border_color(*button, lv_color_hex(0xD6E1D7), 0);
+    lv_obj_set_style_border_color(*button, lv_color_hex(0x304138), 0);
     lv_obj_add_event_cb(*button, navEvent, LV_EVENT_CLICKED,
                         reinterpret_cast<void *>(static_cast<intptr_t>(page)));
     lv_obj_t *l = lv_label_create(*button);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0x173E2A), 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(0xE5ECE7), 0);
     lv_obj_center(l);
   };
   add(14, "HOME", Page::Home, &navHome);
@@ -970,7 +1269,7 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_set_size(renameModal, 800, 480);
   lv_obj_set_style_radius(renameModal, 0, 0);
   lv_obj_set_style_border_width(renameModal, 0, 0);
-  lv_obj_set_style_bg_color(renameModal, lv_color_hex(0xEEF3ED), 0);
+  lv_obj_set_style_bg_color(renameModal, lv_color_hex(0x101814), 0);
   lv_obj_set_style_pad_all(renameModal, 0, 0);
   lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -979,18 +1278,18 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_set_size(topBar, 800, 68);
   lv_obj_set_style_radius(topBar, 0, 0);
   lv_obj_set_style_border_width(topBar, 0, 0);
-  lv_obj_set_style_bg_color(topBar, lv_color_hex(0x183E2B), 0);
+  lv_obj_set_style_bg_color(topBar, lv_color_hex(0x0C2518), 0);
   lv_obj_clear_flag(topBar, LV_OBJ_FLAG_SCROLLABLE);
 
   renameTitle = lv_label_create(topBar);
   lv_obj_set_style_text_font(renameTitle, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(renameTitle, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_color(renameTitle, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(renameTitle, 18, 8);
 
   renameHint = lv_label_create(topBar);
   lv_label_set_text(renameHint, "Name stays tied to this sensor.");
   lv_obj_set_style_text_font(renameHint, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(renameHint, lv_color_hex(0xCDE0D2), 0);
+  lv_obj_set_style_text_color(renameHint, lv_color_hex(0x9DB5A5), 0);
   lv_obj_set_pos(renameHint, 20, 36);
 
   renameInput = lv_textarea_create(renameModal);
@@ -1001,8 +1300,9 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_set_style_text_font(renameInput, &lv_font_montserrat_28, 0);
   lv_obj_set_style_radius(renameInput, 12, 0);
   lv_obj_set_style_border_width(renameInput, 2, 0);
-  lv_obj_set_style_border_color(renameInput, lv_color_hex(0x66A66F), 0);
-  lv_obj_set_style_bg_color(renameInput, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_border_color(renameInput, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_set_style_bg_color(renameInput, lv_color_hex(0x131C17), 0);
+  lv_obj_set_style_text_color(renameInput, lv_color_hex(0xE5ECE7), 0);
 
   renameKeyboard = lv_btnmatrix_create(renameModal);
   lv_obj_set_pos(renameKeyboard, 18, 158);
@@ -1010,14 +1310,14 @@ void buildRename(lv_obj_t *screen) {
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
   lv_obj_set_style_radius(renameKeyboard, 14, 0);
   lv_obj_set_style_border_width(renameKeyboard, 0, 0);
-  lv_obj_set_style_bg_color(renameKeyboard, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_bg_color(renameKeyboard, lv_color_hex(0x18231D), 0);
   lv_obj_set_style_pad_all(renameKeyboard, 8, 0);
   lv_obj_set_style_pad_row(renameKeyboard, 7, 0);
   lv_obj_set_style_pad_column(renameKeyboard, 7, 0);
 
   lv_obj_set_style_radius(renameKeyboard, 9, LV_PART_ITEMS);
-  lv_obj_set_style_bg_color(renameKeyboard, lv_color_hex(0xEDF3ED), LV_PART_ITEMS);
-  lv_obj_set_style_text_color(renameKeyboard, lv_color_hex(0x173E2A), LV_PART_ITEMS);
+  lv_obj_set_style_bg_color(renameKeyboard, lv_color_hex(0x233029), LV_PART_ITEMS);
+  lv_obj_set_style_text_color(renameKeyboard, lv_color_hex(0xE5ECE7), LV_PART_ITEMS);
   lv_obj_set_style_text_font(renameKeyboard, &lv_font_montserrat_18, LV_PART_ITEMS);
 
   lv_obj_add_event_cb(renameKeyboard, renameKeyboardEvent, LV_EVENT_VALUE_CHANGED, nullptr);
@@ -1025,10 +1325,84 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_add_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
 }
 
+
+void buildPairDialog(lv_obj_t *screen) {
+  pairModal = lv_obj_create(screen);
+  lv_obj_set_pos(pairModal, 0, 0);
+  lv_obj_set_size(pairModal, 800, 480);
+  lv_obj_set_style_radius(pairModal, 0, 0);
+  lv_obj_set_style_border_width(pairModal, 0, 0);
+  lv_obj_set_style_bg_color(pairModal, lv_color_hex(0x101814), 0);
+  lv_obj_set_style_pad_all(pairModal, 0, 0);
+  lv_obj_clear_flag(pairModal, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *top = lv_obj_create(pairModal);
+  lv_obj_set_pos(top, 0, 0);
+  lv_obj_set_size(top, 800, 74);
+  lv_obj_set_style_radius(top, 0, 0);
+  lv_obj_set_style_border_width(top, 0, 0);
+  lv_obj_set_style_bg_color(top, lv_color_hex(0x0C2518), 0);
+  lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+
+  pairTitle = lv_label_create(top);
+  lv_obj_set_style_text_font(pairTitle, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(pairTitle, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(pairTitle, 22, 18);
+
+  lv_obj_t *cardObj = lv_obj_create(pairModal);
+  lv_obj_set_pos(cardObj, 24, 94);
+  lv_obj_set_size(cardObj, 752, 350);
+  lv_obj_set_style_radius(cardObj, 20, 0);
+  lv_obj_set_style_border_width(cardObj, 1, 0);
+  lv_obj_set_style_border_color(cardObj, lv_color_hex(0x304138), 0);
+  lv_obj_set_style_bg_color(cardObj, lv_color_hex(0x18231D), 0);
+  lv_obj_clear_flag(cardObj, LV_OBJ_FLAG_SCROLLABLE);
+
+  pairInstruction = lv_label_create(cardObj);
+  lv_obj_set_style_text_font(pairInstruction, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(pairInstruction, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(pairInstruction, 28, 28);
+  lv_obj_set_width(pairInstruction, 680);
+  lv_label_set_long_mode(pairInstruction, LV_LABEL_LONG_WRAP);
+
+  pairStatus = lv_label_create(cardObj);
+  lv_obj_set_style_text_font(pairStatus, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(pairStatus, lv_color_hex(0xA5C3AD), 0);
+  lv_obj_set_pos(pairStatus, 28, 126);
+  lv_obj_set_width(pairStatus, 680);
+  lv_label_set_long_mode(pairStatus, LV_LABEL_LONG_WRAP);
+
+  pairPrimary = lv_btn_create(cardObj);
+  lv_obj_set_size(pairPrimary, 220, 58);
+  lv_obj_set_pos(pairPrimary, 140, 250);
+  lv_obj_set_style_radius(pairPrimary, 12, 0);
+  lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_add_event_cb(pairPrimary, pairPrimaryEvent, LV_EVENT_CLICKED, nullptr);
+  pairPrimaryLabel = lv_label_create(pairPrimary);
+  lv_obj_set_style_text_font(pairPrimaryLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(pairPrimaryLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(pairPrimaryLabel);
+
+  pairSecondary = lv_btn_create(cardObj);
+  lv_obj_set_size(pairSecondary, 220, 58);
+  lv_obj_set_pos(pairSecondary, 392, 250);
+  lv_obj_set_style_radius(pairSecondary, 12, 0);
+  lv_obj_set_style_bg_color(pairSecondary, lv_color_hex(0x233029), 0);
+  lv_obj_set_style_border_width(pairSecondary, 1, 0);
+  lv_obj_set_style_border_color(pairSecondary, lv_color_hex(0x405348), 0);
+  lv_obj_add_event_cb(pairSecondary, pairSecondaryEvent, LV_EVENT_CLICKED, nullptr);
+  pairSecondaryLabel = lv_label_create(pairSecondary);
+  lv_obj_set_style_text_font(pairSecondaryLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(pairSecondaryLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(pairSecondaryLabel);
+
+  lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
+}
+
 void buildUi() {
   lv_obj_t *screen = lv_scr_act();
-  lv_obj_set_style_bg_color(screen, lv_color_hex(0xEEF3ED), LV_PART_MAIN);
-  lv_obj_set_style_text_color(screen, lv_color_hex(0x142419), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0x101814), LV_PART_MAIN);
+  lv_obj_set_style_text_color(screen, lv_color_hex(0xE5ECE7), LV_PART_MAIN);
   lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
   buildHeader(screen);
   buildHome(screen);
@@ -1037,6 +1411,7 @@ void buildUi() {
   buildSettings(screen);
   buildNav(screen);
   buildRename(screen);
+  buildPairDialog(screen);
   showPage(Page::Home);
 }
 
@@ -1106,7 +1481,7 @@ void refreshUi() {
     }
     label(rows[i].moisture, text);
     lv_obj_set_style_bg_color(rows[i].box,
-                              lv_color_hex(homeSensor == static_cast<int>(i) ? 0xDDECDD : 0xF2F6F1), 0);
+                              lv_color_hex(homeSensor == static_cast<int>(i) ? 0x1E3529 : 0x1D2922), 0);
 
     lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
     label(allRows[i].name, sensors[i].name);
@@ -1127,7 +1502,7 @@ void refreshUi() {
                          ((sensors[i].fieldFlags & plantlink::SensorHasWaterWarning) &&
                           sensors[i].waterWarning);
     lv_obj_set_style_bg_color(allRows[i].box,
-                              lv_color_hex(thirsty ? 0xF7E0DB : 0xF2F6F1), 0);
+                              lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
   }
 
   if (homeSensor < 0 || homeSensor >= static_cast<int>(kMaxSensors) || !sensors[homeSensor].used) {
@@ -1175,6 +1550,8 @@ void refreshUi() {
     lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
     lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_state(renameButton, LV_STATE_DISABLED);
+    lv_obj_add_state(replaceButton, LV_STATE_DISABLED);
+    lv_obj_add_state(removeButton, LV_STATE_DISABLED);
   } else {
     PlantSensor &s = sensors[selectedSensor];
     snprintf(text, sizeof(text), "PLANT %u", static_cast<unsigned>(selectedSensor + 1));
@@ -1218,6 +1595,8 @@ void refreshUi() {
     else
       lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_state(renameButton, LV_STATE_DISABLED);
+    lv_obj_clear_state(replaceButton, LV_STATE_DISABLED);
+    lv_obj_clear_state(removeButton, LV_STATE_DISABLED);
   }
 
   label(settingsDeviceName, deviceName);
@@ -1232,6 +1611,8 @@ void refreshUi() {
   else snprintf(text, sizeof(text), "ADD SENSOR");
   label(settingsPair, text);
 
+  refreshPairDialog();
+
   lvgl_port_unlock();
 }
 void handleNetworkStatus(const plantlink::Frame &frame) {
@@ -1243,25 +1624,102 @@ void handleNetworkStatus(const plantlink::Frame &frame) {
   uiDirty = true;
 }
 
+PlantSensor *acceptPairingSensor(const uint8_t ieee[8], uint16_t shortAddress,
+                                  size_t *slotOut) {
+  if (pairDialogState != PairDialogState::Pairing || !ieee || ieeeZero(ieee)) return nullptr;
+
+  size_t existingSlot = 0;
+  if (findSensor(ieee, &existingSlot)) return nullptr;
+
+  PlantSensor *s = nullptr;
+  size_t slot = 0;
+
+  if (pairReplacing &&
+      pairTargetSlot >= 0 &&
+      pairTargetSlot < static_cast<int>(kMaxSensors) &&
+      sensors[pairTargetSlot].used) {
+    slot = static_cast<size_t>(pairTargetSlot);
+    uint8_t oldIeee[8]{};
+    memcpy(oldIeee, sensors[slot].ieee, sizeof(oldIeee));
+
+    s = replacePlantIdentity(slot, ieee, shortAddress);
+    if (s) requestRemoveDevice(oldIeee);
+  } else {
+    s = findOrCreateSensor(ieee, shortAddress, &slot);
+  }
+
+  if (!s) return nullptr;
+
+  requestJoin(0);
+  selectedSensor = static_cast<int>(slot);
+  pairFoundSlot = static_cast<int>(slot);
+  pairDialogState = PairDialogState::Found;
+  uiDirty = true;
+  if (slotOut) *slotOut = slot;
+  return s;
+}
+
 void handleDeviceJoined(const plantlink::Frame &frame) {
   if (frame.payloadLength < 10) return;
+
+  const uint16_t shortAddress = plantlink::getU16LE(frame.payload + 8);
   size_t slot = 0;
-  PlantSensor *s = findOrCreateSensor(frame.payload, plantlink::getU16LE(frame.payload + 8), &slot);
-  char ieee[24]{}; plantlink::formatIeee(frame.payload, ieee, sizeof(ieee));
-  Serial.printf("[zigbee] device seen: %s short=0x%04X slot=%u\n", ieee,
-                plantlink::getU16LE(frame.payload + 8), s ? static_cast<unsigned>(slot + 1) : 0u);
-  if (s) {
-    s->shortAddress = plantlink::getU16LE(frame.payload + 8);
-    uiDirty = true;
+  PlantSensor *s = findSensor(frame.payload, &slot);
+
+  if (!s) {
+    s = acceptPairingSensor(frame.payload, shortAddress, &slot);
   }
+
+  char ieee[24]{};
+  plantlink::formatIeee(frame.payload, ieee, sizeof(ieee));
+
+  if (!s) {
+    Serial.printf("[zigbee] ignored unregistered device: %s short=0x%04X\n",
+                  ieee, shortAddress);
+    return;
+  }
+
+  s->shortAddress = shortAddress;
+  Serial.printf("[zigbee] device seen: %s short=0x%04X slot=%u\n", ieee,
+                shortAddress, static_cast<unsigned>(slot + 1));
+  uiDirty = true;
+}
+
+void handleDeviceLeft(const plantlink::Frame &frame) {
+  if (frame.payloadLength < 8) return;
+
+  size_t slot = 0;
+  PlantSensor *s = findSensor(frame.payload, &slot);
+  char ieee[24]{};
+  plantlink::formatIeee(frame.payload, ieee, sizeof(ieee));
+
+  if (!s) {
+    Serial.printf("[zigbee] unregistered device left: %s\n", ieee);
+    return;
+  }
+
+  s->seenThisBoot = false;
+  s->lastSeenMs = 0;
+  s->shortAddress = 0xffff;
+  Serial.printf("[zigbee] registered sensor left: %s slot=%u now waiting\n",
+                ieee, static_cast<unsigned>(slot + 1));
+  uiDirty = true;
 }
 
 void handleSensorReport(const plantlink::Frame &frame) {
   plantlink::SensorReportData report;
   if (!plantlink::parseSensorReport(frame.payload, frame.payloadLength, report)) return;
+
   size_t slot = 0;
-  PlantSensor *s = findOrCreateSensor(report.ieee, report.shortAddress, &slot);
-  if (!s) return;
+  PlantSensor *s = findSensor(report.ieee, &slot);
+  if (!s) s = acceptPairingSensor(report.ieee, report.shortAddress, &slot);
+
+  if (!s) {
+    char ieee[24]{};
+    plantlink::formatIeee(report.ieee, ieee, sizeof(ieee));
+    Serial.printf("[sensor] ignored report from unregistered ieee=%s\n", ieee);
+    return;
+  }
 
   s->seenThisBoot = true;
   s->shortAddress = report.shortAddress;
@@ -1304,6 +1762,7 @@ void handleFrame(const plantlink::Frame &frame) {
     }
     case plantlink::MessageType::NetworkStatus: handleNetworkStatus(frame); break;
     case plantlink::MessageType::DeviceJoined: handleDeviceJoined(frame); break;
+    case plantlink::MessageType::DeviceLeft: handleDeviceLeft(frame); break;
     case plantlink::MessageType::SensorReport: handleSensorReport(frame); break;
     default: break;
   }

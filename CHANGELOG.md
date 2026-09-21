@@ -5,6 +5,16 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Waveshare dark greenhouse theme
+
+#### Changed
+
+- Reworked the Waveshare UI around a dark green-charcoal palette to reduce perceived brightness on the fixed-backlight 7-inch display.
+- Converted cards, sensor rows, navigation, settings, and the rename keyboard to dark surfaces with soft off-white text.
+- Kept moisture/healthy states green while changing warning rows and `WATER ME!` badges to a muted dark rust treatment.
+- Updated runtime row-selection colors as well as static styles so the interface stays dark after normal UI refreshes.
+
+
 ### Waveshare current-data and all-sensors UX
 
 #### Added

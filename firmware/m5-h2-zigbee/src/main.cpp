@@ -4,6 +4,7 @@
 #include "aps/esp_zigbee_aps.h"
 #include "esp_zigbee_core.h"
 #include "nwk/esp_zigbee_nwk.h"
+#include "zdo/esp_zigbee_zdo_command.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -159,6 +160,10 @@ void sendDeviceJoined(const SensorState &sensor) {
   sendFrame(plantlink::MessageType::DeviceJoined, payload, sizeof(payload));
 }
 
+void sendDeviceLeft(const uint8_t ieee[8]) {
+  sendFrame(plantlink::MessageType::DeviceLeft, ieee, 8);
+}
+
 void sendSensorReport(const SensorState &sensor) {
   plantlink::SensorReportData report;
   memcpy(report.ieee, sensor.ieee, 8);
@@ -198,6 +203,54 @@ void sendRawEvent(const ApsEvent &event) {
   memcpy(payload + offset, event.data, copyLen);
   offset += copyLen;
   sendFrame(plantlink::MessageType::RawZigbeeEvent, payload, static_cast<uint16_t>(offset));
+}
+
+
+SensorState *findSensorByIeee(const uint8_t ieee[8]) {
+  if (!ieee || ieeeIsZero(ieee)) return nullptr;
+  for (auto &sensor : sensors) {
+    if (sensor.used && ieeeEqual(sensor.ieee, ieee)) return &sensor;
+  }
+  return nullptr;
+}
+
+void leaveRequestCallback(esp_zb_zdp_status_t zdoStatus, void *) {
+  Serial.printf("[zigbee] remove-device leave response status=0x%02X\n",
+                static_cast<unsigned>(zdoStatus));
+}
+
+void removeDeviceByIeee(const uint8_t ieee[8]) {
+  if (!ieee || ieeeIsZero(ieee)) return;
+
+  char ieeeText[24]{};
+  plantlink::formatIeee(ieee, ieeeText, sizeof(ieeeText));
+  SensorState *sensor = findSensorByIeee(ieee);
+
+  if (sensor && sensor->shortAddress != 0xffff) {
+    esp_zb_zdo_mgmt_leave_req_param_t leaveReq{};
+    memcpy(leaveReq.device_address, ieee, sizeof(leaveReq.device_address));
+    leaveReq.dst_nwk_addr = sensor->shortAddress;
+    leaveReq.remove_children = 0;
+    leaveReq.rejoin = 0;
+
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zdo_device_leave_req(&leaveReq, leaveRequestCallback, nullptr);
+    esp_zb_lock_release();
+
+    Serial.printf("[zigbee] sent leave request ieee=%s short=0x%04X\n",
+                  ieeeText, sensor->shortAddress);
+  } else {
+    Serial.printf("[zigbee] remove requested for ieee=%s but no current short address is known\n",
+                  ieeeText);
+  }
+
+  if (sensor) {
+    *sensor = SensorState{};
+    if (sensorCount > 0) --sensorCount;
+  }
+
+  sendDeviceLeft(ieee);
+  sendNetworkStatus();
 }
 
 SensorState *findOrCreateSensor(const ApsEvent &event, bool &created) {
@@ -391,6 +444,15 @@ void handlePlantFrame(const plantlink::Frame &frame) {
       sendNetworkStatus();
       break;
     }
+
+    case plantlink::MessageType::RemoveDevice:
+      if (frame.payloadLength == 8) {
+        removeDeviceByIeee(frame.payload);
+      } else {
+        Serial.printf("[zigbee] ignored RemoveDevice with invalid payload length=%u\n",
+                      frame.payloadLength);
+      }
+      break;
 
     case plantlink::MessageType::FactoryResetNetwork:
       // Destructive reset is intentionally NOT wired to the first UI build.

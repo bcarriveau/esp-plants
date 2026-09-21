@@ -32,3 +32,14 @@ secrets.*
 # Serial/build logs
 *.log
 logs/
+
+# Local ESP PLANTS patch/apply helpers
+/*.cmd
+/*.ps1
+/*.patch
+/*.diff
+
+# Temporary patch-package notes/exports
+/README-FIRST*.txt
+/COMMIT MESSAGE*.txt
+/ESP_PLANTS_*.zip
