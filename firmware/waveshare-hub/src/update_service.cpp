@@ -965,6 +965,11 @@ bool checkGithubRelease() {
   bool manifestTransportFailed = false;
   bool manifestRejected = false;
 
+  // Phase 2 release selection: choose highest compatible semantic version.
+  bool haveBestRelease = false;
+  espplants_ota_installer::Release bestRelease{};
+  String bestVersion;
+
   for (JsonObject githubRelease : releases.as<JsonArray>()) {
     if (githubRelease["draft"] | false) continue;
     const String tag = githubRelease["tag_name"] | "";
@@ -1008,9 +1013,18 @@ bool checkGithubRelease() {
     }
     if (!matchingPackageFound) continue;
 
-    pendingRelease = candidate;
-    snprintf(latestVersionText, sizeof(latestVersionText), "%s", candidateVersion.c_str());
-    const int comparison = compareVersions(String(ESP_PLANTS_WAVESHARE_VERSION), candidateVersion);
+    if (!haveBestRelease || compareVersions(candidateVersion, bestVersion) > 0) {
+      haveBestRelease = true;
+      bestRelease = candidate;
+      bestVersion = candidateVersion;
+    }
+  }
+
+  if (haveBestRelease) {
+    pendingRelease = bestRelease;
+    snprintf(latestVersionText, sizeof(latestVersionText), "%s", bestVersion.c_str());
+    const int comparison =
+        compareVersions(String(ESP_PLANTS_WAVESHARE_VERSION), bestVersion);
     if (comparison >= 0) {
       hasUpdate = false;
       setStatus("Up to date: v%s", ESP_PLANTS_WAVESHARE_VERSION);
