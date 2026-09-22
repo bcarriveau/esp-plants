@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_bt.h>
 #include <esp_crt_bundle.h>
 #include <esp_err.h>
 #include <esp_http_client.h>
@@ -59,6 +60,48 @@ constexpr char kEmbeddedHardwareId[] = ESP_PLANTS_WAVESHARE_HARDWARE_ID;
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 constexpr char kEmbeddedDistributionMarker[] = ESP_PLANTS_DISTRIBUTION_MARKER;
 #endif
+
+
+class PsramAllocator final : public ArduinoJson::Allocator {
+ public:
+  void *allocate(size_t size) override {
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+
+  void deallocate(void *pointer) override { heap_caps_free(pointer); }
+
+  void *reallocate(void *pointer, size_t newSize) override {
+    return heap_caps_realloc(pointer, newSize,
+                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+};
+
+PsramAllocator psramAllocator;
+
+void releaseUnusedBluetoothControllerMemory() {
+  const size_t heapBefore = heap_caps_get_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const size_t largestBefore = heap_caps_get_largest_free_block(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+  const esp_err_t result = esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+
+  const size_t heapAfter = heap_caps_get_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const size_t largestAfter = heap_caps_get_largest_free_block(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+  if (result == ESP_OK) {
+    Serial.printf(
+        "[memory] unused BLE controller memory released: internal +%ld, "
+        "largest +%ld bytes\n",
+        static_cast<long>(heapAfter) - static_cast<long>(heapBefore),
+        static_cast<long>(largestAfter) - static_cast<long>(largestBefore));
+  } else {
+    Serial.printf("[memory] BLE controller memory release skipped: %s (%d)\n",
+                  esp_err_to_name(result), static_cast<int>(result));
+  }
+}
 
 Preferences networkPreferences;
 DNSServer dnsServer;
@@ -828,7 +871,7 @@ bool parseManifest(const String &body, const String &githubTag,
     setStatus("Release manifest exceeds the supported size");
     return false;
   }
-  JsonDocument doc;
+  JsonDocument doc(&psramAllocator);
   const DeserializationError error = deserializeJson(doc, body);
   if (error) {
     setStatus("Release manifest is invalid JSON");
@@ -905,12 +948,18 @@ bool checkGithubRelease() {
     return false;
   }
 
-  JsonDocument releases;
+  JsonDocument releases(&psramAllocator);
   const DeserializationError releasesError = deserializeJson(releases, releasesBody);
   if (releasesError || !releases.is<JsonArray>()) {
     setStatus("GitHub returned an invalid release list");
     return false;
   }
+
+  // The parsed release metadata now lives in PSRAM. Drop the HTTP response
+  // body before the manifest TLS handshakes so it does not compete with the
+  // RGB/LVGL driver for scarce internal DRAM.
+  releasesBody = static_cast<const char *>(nullptr);
+  logHttpsMemory("release metadata parsed");
 
   bool sawManifestRelease = false;
   bool manifestTransportFailed = false;
@@ -1070,6 +1119,11 @@ void begin() {
   if (initialized) return;
   initialized = true;
   bootStartedMs = millis();
+
+  // ESP PLANTS does not use the S3 Bluetooth controller. Match the proven
+  // Aircraft Radar startup and return that reserved internal RAM before Wi-Fi,
+  // TLS, and the RGB/LVGL driver have to coexist under load.
+  releaseUnusedBluetoothControllerMemory();
 
   Serial.printf("[update] firmware=%s build=%s hardware=%s channel=%s updater=%u\n",
                 ESP_PLANTS_WAVESHARE_VERSION, kEmbeddedBuildId,
