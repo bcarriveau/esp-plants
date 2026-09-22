@@ -8,12 +8,16 @@ void begin();
 void service();
 
 void startWifiSetup();
+void disconnectWifi();
+void reconnectWifi();
+void forgetWifi();
 void requestCheck();
 void requestInstall();
 
 bool wifiConfigured();
 bool wifiConnected();
 bool setupPortalActive();
+bool wifiReconnectSuppressed();
 const char *wifiSsid();
 const char *wifiAddress();
 const char *setupSsid();

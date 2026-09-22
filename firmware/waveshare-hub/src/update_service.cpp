@@ -88,6 +88,7 @@ volatile int installProgressPct = 0;
 
 bool initialized = false;
 bool sawWifiConnected = false;
+bool reconnectSuppressed = false;
 bool autoCheckedThisBoot = false;
 bool waitingForClockNotice = false;
 uint32_t connectedSinceMs = 0;
@@ -857,7 +858,8 @@ void service() {
   } else if (!connected && sawWifiConnected) {
     sawWifiConnected = false;
     strncpy(wifiAddressText, "--", sizeof(wifiAddressText) - 1);
-    setStatus("Wi-Fi disconnected; reconnecting...");
+    setStatus(reconnectSuppressed ? "Wi-Fi disconnected until you reconnect or reboot"
+                                  : "Wi-Fi disconnected; reconnecting...");
   }
 
   if (connected && setupPortalRunning && portalConnectionPending &&
@@ -886,6 +888,7 @@ void service() {
   }
 
   if (!connected && savedSsid.length() && !setupPortalRunning &&
+      !reconnectSuppressed &&
       millis() - lastReconnectAttemptMs >= kWifiReconnectMs) {
     beginStationConnection();
   }
@@ -930,6 +933,7 @@ void service() {
 
 void startWifiSetup() {
   if (!initialized || setupPortalRunning) return;
+  reconnectSuppressed = false;
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAP(setupSsidText, setupPasswordText)) {
     setStatus("Could not start Wi-Fi setup hotspot");
@@ -949,6 +953,66 @@ void startWifiSetup() {
   Serial.printf("[wifi] setup AP \"%s\" password \"%s\" at %s\n",
                 setupSsidText, setupPasswordText,
                 WiFi.softAPIP().toString().c_str());
+}
+
+void disconnectWifi() {
+  if (!initialized) return;
+  if (installTaskRunning) {
+    setStatus("Cannot disconnect Wi-Fi during an update install");
+    return;
+  }
+  if (setupPortalRunning) stopSetupPortal();
+  reconnectSuppressed = true;
+  manualCheckRequested = false;
+  waitingForClockNotice = false;
+  WiFi.disconnect(true, false);
+  sawWifiConnected = false;
+  strncpy(connectedSsid, "--", sizeof(connectedSsid) - 1);
+  connectedSsid[sizeof(connectedSsid) - 1] = '\0';
+  strncpy(wifiAddressText, "--", sizeof(wifiAddressText) - 1);
+  wifiAddressText[sizeof(wifiAddressText) - 1] = '\0';
+  setStatus("Wi-Fi disconnected until you reconnect or reboot");
+  Serial.println("[wifi] user disconnected station; saved credentials retained");
+}
+
+void reconnectWifi() {
+  if (!initialized) return;
+  if (!savedSsid.length()) {
+    setStatus("No saved Wi-Fi network; use SET UP / CHANGE WI-FI");
+    return;
+  }
+  if (installTaskRunning) return;
+  reconnectSuppressed = false;
+  beginStationConnection();
+}
+
+void forgetWifi() {
+  if (!initialized) return;
+  if (installTaskRunning) {
+    setStatus("Cannot forget Wi-Fi during an update install");
+    return;
+  }
+  if (setupPortalRunning) stopSetupPortal();
+  reconnectSuppressed = true;
+  manualCheckRequested = false;
+  waitingForClockNotice = false;
+  hasUpdate = false;
+  pendingRelease = espplants_ota_installer::Release{};
+  snprintf(latestVersionText, sizeof(latestVersionText), "--");
+  networkPreferences.remove("ssid");
+  networkPreferences.remove("pass");
+  savedSsid = "";
+  savedPassword = "";
+  pendingSsid = "";
+  pendingPassword = "";
+  WiFi.disconnect(true, false);
+  sawWifiConnected = false;
+  strncpy(connectedSsid, "--", sizeof(connectedSsid) - 1);
+  connectedSsid[sizeof(connectedSsid) - 1] = '\0';
+  strncpy(wifiAddressText, "--", sizeof(wifiAddressText) - 1);
+  wifiAddressText[sizeof(wifiAddressText) - 1] = '\0';
+  setStatus("Saved Wi-Fi forgotten; ESP PLANTS remains available offline");
+  Serial.println("[wifi] saved Wi-Fi credentials erased by user");
 }
 
 void requestCheck() {
@@ -985,6 +1049,7 @@ void requestInstall() {
 bool wifiConfigured() { return savedSsid.length() > 0; }
 bool wifiConnected() { return WiFi.status() == WL_CONNECTED; }
 bool setupPortalActive() { return setupPortalRunning; }
+bool wifiReconnectSuppressed() { return reconnectSuppressed; }
 const char *wifiSsid() {
   return wifiConnected() ? connectedSsid : (savedSsid.length() ? savedSsid.c_str() : "--");
 }

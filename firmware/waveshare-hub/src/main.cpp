@@ -212,6 +212,10 @@ lv_obj_t *updateLatestVersion = nullptr;
 lv_obj_t *updateStatus = nullptr;
 lv_obj_t *updateCheckButton = nullptr;
 lv_obj_t *updateCheckLabel = nullptr;
+lv_obj_t *updateDisconnectButton = nullptr;
+lv_obj_t *updateDisconnectLabel = nullptr;
+lv_obj_t *updateForgetButton = nullptr;
+lv_obj_t *wifiForgetConfirm = nullptr;
 lv_obj_t *updateInstallButton = nullptr;
 lv_obj_t *updateInstallLabel = nullptr;
 lv_obj_t *advancedSummary = nullptr;
@@ -884,12 +888,40 @@ void openUpdateEvent(lv_event_t *event) {
 
 void closeUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
+  if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
 }
 
 void wifiSetupEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   espplants_update::startWifiSetup();
+  uiDirty = true;
+}
+
+void wifiDisconnectEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (espplants_update::wifiReconnectSuppressed())
+    espplants_update::reconnectWifi();
+  else
+    espplants_update::disconnectWifi();
+  uiDirty = true;
+}
+
+void wifiForgetAskEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !wifiForgetConfirm) return;
+  lv_obj_clear_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(wifiForgetConfirm);
+}
+
+void wifiForgetCancelEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !wifiForgetConfirm) return;
+  lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
+}
+
+void wifiForgetConfirmEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  espplants_update::forgetWifi();
+  if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   uiDirty = true;
 }
 
@@ -1796,17 +1828,17 @@ void buildSettings(lv_obj_t *screen) {
   lv_label_set_text(legend, "P = PLANTS     R = REPEATERS");
   lv_obj_set_style_text_font(legend, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(legend, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(legend, 22, 276);
+  lv_obj_set_pos(legend, 22, 282);
 
   lv_obj_t *networkButton = lv_btn_create(system);
-  lv_obj_set_size(networkButton, 330, 36);
-  lv_obj_set_pos(networkButton, 22, 294);
+  lv_obj_set_size(networkButton, 162, 36);
+  lv_obj_set_pos(networkButton, 190, 14);
   lv_obj_set_style_radius(networkButton, 10, 0);
   lv_obj_set_style_bg_color(networkButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(networkButton, openUpdateEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_t *networkLabel = lv_label_create(networkButton);
   lv_label_set_text(networkLabel, "NETWORK & UPDATES  >");
-  lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(networkLabel, lv_color_hex(0xE5ECE7), 0);
   lv_obj_center(networkLabel);
 
@@ -1861,17 +1893,17 @@ void buildSettings(lv_obj_t *screen) {
   lv_label_set_text(cap, "ZIGBEE NETWORK");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(cap, 22, 239);
+  lv_obj_set_pos(cap, 22, 225);
 
   lv_obj_t *networkHint = lv_label_create(setup);
   lv_label_set_text(networkHint, "Repeaters, routers and mesh tools");
   lv_obj_set_style_text_font(networkHint, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(networkHint, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(networkHint, 22, 261);
+  lv_obj_set_pos(networkHint, 22, 247);
 
   lv_obj_t *advancedButton = lv_btn_create(setup);
   lv_obj_set_size(advancedButton, 334, 42);
-  lv_obj_set_pos(advancedButton, 22, 282);
+  lv_obj_set_pos(advancedButton, 22, 266);
   lv_obj_set_style_radius(advancedButton, 12, 0);
   lv_obj_set_style_bg_color(advancedButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(advancedButton, advancedEvent, LV_EVENT_CLICKED, nullptr);
@@ -2061,6 +2093,7 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_style_radius(top, 0, 0);
   lv_obj_set_style_border_width(top, 0, 0);
   lv_obj_set_style_bg_color(top, lv_color_hex(0x0C2518), 0);
+  lv_obj_set_style_pad_all(top, 0, 0);
   lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *title = lv_label_create(top);
@@ -2081,36 +2114,39 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_style_text_color(closeLabel, lv_color_hex(0xE5ECE7), 0);
   lv_obj_center(closeLabel);
 
-  lv_obj_t *network = card(updateModal, 18, 86, 370, 374);
+  // These two cards intentionally use zero padding so every child bound below
+  // is measured directly against the 370x388 card rectangle.
+  lv_obj_t *network = card(updateModal, 18, 82, 370, 388);
+  lv_obj_set_style_pad_all(network, 0, 0);
   title = lv_label_create(network);
   lv_label_set_text(title, "WI-FI");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 20, 16);
+  lv_obj_set_pos(title, 20, 14);
 
   lv_obj_t *cap = lv_label_create(network);
   lv_label_set_text(cap, "STATUS");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 20, 62);
+  lv_obj_set_pos(cap, 20, 54);
 
   updateWifiState = lv_label_create(network);
   lv_label_set_text(updateWifiState, "NOT CONFIGURED");
   lv_obj_set_style_text_font(updateWifiState, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(updateWifiState, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(updateWifiState, 20, 82);
+  lv_obj_set_pos(updateWifiState, 20, 72);
 
   updateWifiDetail = lv_label_create(network);
   lv_label_set_text(updateWifiDetail, "SSID --\nIP --");
   lv_obj_set_style_text_font(updateWifiDetail, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(updateWifiDetail, lv_color_hex(0xC1D0C6), 0);
-  lv_obj_set_pos(updateWifiDetail, 20, 120);
+  lv_obj_set_pos(updateWifiDetail, 20, 106);
   lv_obj_set_width(updateWifiDetail, 326);
   lv_label_set_long_mode(updateWifiDetail, LV_LABEL_LONG_WRAP);
 
   lv_obj_t *wifiButton = lv_btn_create(network);
-  lv_obj_set_size(wifiButton, 326, 48);
-  lv_obj_set_pos(wifiButton, 20, 180);
+  lv_obj_set_size(wifiButton, 326, 42);
+  lv_obj_set_pos(wifiButton, 20, 150);
   lv_obj_set_style_radius(wifiButton, 12, 0);
   lv_obj_set_style_bg_color(wifiButton, lv_color_hex(0x3F7A4E), 0);
   lv_obj_add_event_cb(wifiButton, wifiSetupEvent, LV_EVENT_CLICKED, nullptr);
@@ -2120,17 +2156,41 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_style_text_color(wifiLabel, lv_color_hex(0xE5ECE7), 0);
   lv_obj_center(wifiLabel);
 
+  updateDisconnectButton = lv_btn_create(network);
+  lv_obj_set_size(updateDisconnectButton, 158, 40);
+  lv_obj_set_pos(updateDisconnectButton, 20, 202);
+  lv_obj_set_style_radius(updateDisconnectButton, 11, 0);
+  lv_obj_set_style_bg_color(updateDisconnectButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(updateDisconnectButton, wifiDisconnectEvent, LV_EVENT_CLICKED, nullptr);
+  updateDisconnectLabel = lv_label_create(updateDisconnectButton);
+  lv_label_set_text(updateDisconnectLabel, "DISCONNECT WI-FI");
+  lv_obj_set_style_text_font(updateDisconnectLabel, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(updateDisconnectLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(updateDisconnectLabel);
+
+  updateForgetButton = lv_btn_create(network);
+  lv_obj_set_size(updateForgetButton, 158, 40);
+  lv_obj_set_pos(updateForgetButton, 188, 202);
+  lv_obj_set_style_radius(updateForgetButton, 11, 0);
+  lv_obj_set_style_bg_color(updateForgetButton, lv_color_hex(0x7A4037), 0);
+  lv_obj_add_event_cb(updateForgetButton, wifiForgetAskEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *forgetLabel = lv_label_create(updateForgetButton);
+  lv_label_set_text(forgetLabel, "FORGET WI-FI");
+  lv_obj_set_style_text_font(forgetLabel, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(forgetLabel, lv_color_hex(0xF7EDE9), 0);
+  lv_obj_center(forgetLabel);
+
   updateQrHint = lv_label_create(network);
   lv_label_set_text(updateQrHint, "SCAN TO CONNECT");
   lv_obj_set_style_text_font(updateQrHint, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
-  lv_obj_set_pos(updateQrHint, 20, 234);
+  lv_obj_set_pos(updateQrHint, 20, 248);
   lv_obj_set_width(updateQrHint, kSetupQrOuterSize);
   lv_obj_set_style_text_align(updateQrHint, LV_TEXT_ALIGN_CENTER, 0);
 
   updateQrCard = lv_obj_create(network);
   lv_obj_set_size(updateQrCard, kSetupQrOuterSize, kSetupQrOuterSize);
-  lv_obj_set_pos(updateQrCard, 20, 252);
+  lv_obj_set_pos(updateQrCard, 20, 268);
   lv_obj_set_style_bg_color(updateQrCard, lv_color_white(), 0);
   lv_obj_set_style_bg_opa(updateQrCard, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(updateQrCard, 0, 0);
@@ -2150,44 +2210,46 @@ void buildUpdateDialog(lv_obj_t *screen) {
 
   updatePortalInfo = lv_label_create(network);
   lv_label_set_text(updatePortalInfo,
-                    "Tap SET UP / CHANGE WI-FI. A QR code will appear so your phone can join the temporary setup hotspot.");
+                    "Tap SET UP / CHANGE WI-FI. Scan the QR when it appears.");
   lv_obj_set_style_text_font(updatePortalInfo, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(updatePortalInfo, lv_color_hex(0x9DB5A5), 0);
-  lv_obj_set_pos(updatePortalInfo, 20, 246);
+  lv_obj_set_pos(updatePortalInfo, 20, 260);
   lv_obj_set_width(updatePortalInfo, 326);
+  lv_obj_set_height(updatePortalInfo, 116);
   lv_label_set_long_mode(updatePortalInfo, LV_LABEL_LONG_WRAP);
 
   lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_t *software = card(updateModal, 412, 86, 370, 374);
+  lv_obj_t *software = card(updateModal, 412, 82, 370, 388);
+  lv_obj_set_style_pad_all(software, 0, 0);
   title = lv_label_create(software);
   lv_label_set_text(title, "SOFTWARE");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 20, 16);
+  lv_obj_set_pos(title, 20, 14);
 
   cap = lv_label_create(software);
   lv_label_set_text(cap, "CURRENT");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 20, 62);
+  lv_obj_set_pos(cap, 20, 58);
 
   updateCurrentVersion = lv_label_create(software);
   lv_obj_set_style_text_font(updateCurrentVersion, &lv_font_montserrat_18, 0);
   lv_obj_set_style_text_color(updateCurrentVersion, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(updateCurrentVersion, 20, 82);
+  lv_obj_set_pos(updateCurrentVersion, 20, 78);
 
   cap = lv_label_create(software);
   lv_label_set_text(cap, "LATEST");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 190, 62);
+  lv_obj_set_pos(cap, 190, 58);
 
   updateLatestVersion = lv_label_create(software);
   lv_obj_set_style_text_font(updateLatestVersion, &lv_font_montserrat_18, 0);
   lv_obj_set_style_text_color(updateLatestVersion, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(updateLatestVersion, 190, 82);
+  lv_obj_set_pos(updateLatestVersion, 190, 78);
   lv_obj_set_width(updateLatestVersion, 150);
   lv_label_set_long_mode(updateLatestVersion, LV_LABEL_LONG_DOT);
 
@@ -2195,8 +2257,9 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_label_set_text(updateStatus, "Connect Wi-Fi to check for updates.");
   lv_obj_set_style_text_font(updateStatus, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(updateStatus, lv_color_hex(0xA5C3AD), 0);
-  lv_obj_set_pos(updateStatus, 20, 124);
+  lv_obj_set_pos(updateStatus, 20, 120);
   lv_obj_set_width(updateStatus, 326);
+  lv_obj_set_height(updateStatus, 60);
   lv_label_set_long_mode(updateStatus, LV_LABEL_LONG_WRAP);
 
   updateCheckButton = lv_btn_create(software);
@@ -2227,10 +2290,62 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_label_set_text(note, "Verified .plantsota writes only the inactive app slot; plant data is preserved.");
   lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(note, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(note, 20, 319);
+  lv_obj_set_pos(note, 20, 320);
   lv_obj_set_width(note, 326);
+  lv_obj_set_height(note, 50);
   lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 
+  wifiForgetConfirm = lv_obj_create(updateModal);
+  lv_obj_set_pos(wifiForgetConfirm, 180, 120);
+  lv_obj_set_size(wifiForgetConfirm, 440, 240);
+  lv_obj_set_style_radius(wifiForgetConfirm, 18, 0);
+  lv_obj_set_style_border_width(wifiForgetConfirm, 2, 0);
+  lv_obj_set_style_border_color(wifiForgetConfirm, lv_color_hex(0x7A4037), 0);
+  lv_obj_set_style_bg_color(wifiForgetConfirm, lv_color_hex(0x18231D), 0);
+  lv_obj_set_style_pad_all(wifiForgetConfirm, 0, 0);
+  lv_obj_clear_flag(wifiForgetConfirm, LV_OBJ_FLAG_SCROLLABLE);
+
+  title = lv_label_create(wifiForgetConfirm);
+  lv_label_set_text(title, "FORGET WI-FI?");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0xF7EDE9), 0);
+  lv_obj_set_pos(title, 24, 22);
+
+  lv_obj_t *warning = lv_label_create(wifiForgetConfirm);
+  lv_label_set_text(warning,
+                    "This erases the saved SSID and password and disconnects Wi-Fi. ESP PLANTS will keep working offline.");
+  lv_obj_set_style_text_font(warning, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(warning, lv_color_hex(0xC1D0C6), 0);
+  lv_obj_set_pos(warning, 24, 64);
+  lv_obj_set_width(warning, 392);
+  lv_obj_set_height(warning, 76);
+  lv_label_set_long_mode(warning, LV_LABEL_LONG_WRAP);
+
+  lv_obj_t *cancel = lv_btn_create(wifiForgetConfirm);
+  lv_obj_set_size(cancel, 180, 48);
+  lv_obj_set_pos(cancel, 24, 164);
+  lv_obj_set_style_radius(cancel, 11, 0);
+  lv_obj_set_style_bg_color(cancel, lv_color_hex(0x233029), 0);
+  lv_obj_add_event_cb(cancel, wifiForgetCancelEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *cancelLabel = lv_label_create(cancel);
+  lv_label_set_text(cancelLabel, "CANCEL");
+  lv_obj_set_style_text_font(cancelLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(cancelLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(cancelLabel);
+
+  lv_obj_t *forget = lv_btn_create(wifiForgetConfirm);
+  lv_obj_set_size(forget, 180, 48);
+  lv_obj_set_pos(forget, 236, 164);
+  lv_obj_set_style_radius(forget, 11, 0);
+  lv_obj_set_style_bg_color(forget, lv_color_hex(0x7A4037), 0);
+  lv_obj_add_event_cb(forget, wifiForgetConfirmEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *forgetConfirmLabel = lv_label_create(forget);
+  lv_label_set_text(forgetConfirmLabel, "FORGET WI-FI");
+  lv_obj_set_style_text_font(forgetConfirmLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(forgetConfirmLabel, lv_color_hex(0xF7EDE9), 0);
+  lv_obj_center(forgetConfirmLabel);
+
+  lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -2414,7 +2529,7 @@ void refreshUi() {
   uiDirty = false;
   if (!lvgl_port_lock(-1)) return;
 
-  char text[128]{};
+  char text[200]{};
   const size_t count = registeredCount();
   const size_t reporting = reportedCount();
   const size_t waiting = count >= reporting ? count - reporting : 0;
@@ -2640,6 +2755,8 @@ void refreshUi() {
 
   if (espplants_update::wifiConnected()) {
     label(updateWifiState, "CONNECTED");
+  } else if (espplants_update::wifiConfigured() && espplants_update::wifiReconnectSuppressed()) {
+    label(updateWifiState, "DISCONNECTED");
   } else if (espplants_update::wifiConfigured()) {
     label(updateWifiState, "OFFLINE / CONNECTING");
   } else {
@@ -2648,6 +2765,21 @@ void refreshUi() {
   snprintf(text, sizeof(text), "SSID  %s\nIP       %s",
            espplants_update::wifiSsid(), espplants_update::wifiAddress());
   label(updateWifiDetail, text);
+
+  const bool wifiBusy = espplants_update::checking() || espplants_update::installing();
+  if (espplants_update::wifiReconnectSuppressed())
+    label(updateDisconnectLabel, "RECONNECT WI-FI");
+  else
+    label(updateDisconnectLabel, "DISCONNECT WI-FI");
+  if ((!espplants_update::wifiConnected() && !espplants_update::wifiReconnectSuppressed()) ||
+      !espplants_update::wifiConfigured() || wifiBusy)
+    lv_obj_add_state(updateDisconnectButton, LV_STATE_DISABLED);
+  else
+    lv_obj_clear_state(updateDisconnectButton, LV_STATE_DISABLED);
+  if (!espplants_update::wifiConfigured() || wifiBusy)
+    lv_obj_add_state(updateForgetButton, LV_STATE_DISABLED);
+  else
+    lv_obj_clear_state(updateForgetButton, LV_STATE_DISABLED);
 
   if (espplants_update::setupPortalActive()) {
     char qr[sizeof(updateQrPayload)]{};
@@ -2668,20 +2800,20 @@ void refreshUi() {
     lv_obj_clear_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
     if (updateQrPayload[0]) lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(updatePortalInfo, 170, 242);
-    lv_obj_set_width(updatePortalInfo, 176);
+    lv_obj_set_pos(updatePortalInfo, 150, 268);
+    lv_obj_set_width(updatePortalInfo, 196);
     snprintf(text, sizeof(text),
-             "PHONE SETUP READY\n\n%s\n\nPassword:\n%s\n\nCaptive setup page should open automatically. If not, open 192.168.4.1",
+             "PHONE SETUP READY\nSSID: %s\nPassword: %s\n\nScan QR. If the captive page does not open, use 192.168.4.1",
              espplants_update::setupSsid(), espplants_update::setupPassword());
     label(updatePortalInfo, text);
   } else {
     updateQrPayload[0] = '\0';
     lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(updatePortalInfo, 20, 246);
+    lv_obj_set_pos(updatePortalInfo, 20, 260);
     lv_obj_set_width(updatePortalInfo, 326);
     label(updatePortalInfo,
-          "Tap SET UP / CHANGE WI-FI. A QR code will appear so your phone can join the temporary setup hotspot.");
+          "Tap SET UP / CHANGE WI-FI. Scan the QR when it appears.");
   }
 
   snprintf(text, sizeof(text), "v%s", espplants_update::currentVersion());

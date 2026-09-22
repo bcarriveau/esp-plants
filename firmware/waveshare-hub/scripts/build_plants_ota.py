@@ -78,12 +78,13 @@ def _extract_integer(text: str, name: str) -> int:
 
 def read_build_identity(path: Path) -> BuildIdentity:
     text = path.read_text(encoding="utf-8")
+    version = _extract_string(text, "ESP_PLANTS_WAVESHARE_VERSION")
     identity = BuildIdentity(
-        version=_extract_string(text, "ESP_PLANTS_WAVESHARE_VERSION"),
+        version=version,
         hardware=_extract_string(text, "ESP_PLANTS_WAVESHARE_HARDWARE_ID"),
         product=_extract_string(text, "ESP_PLANTS_WAVESHARE_PRODUCT_ID"),
         channel=_extract_string(text, "ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL"),
-        build_id=_extract_string(text, "ESP_PLANTS_WAVESHARE_BUILD_ID"),
+        build_id=f"ESPPLANTS-WAVESHARE-{version}",
         updater_version=_extract_integer(text, "ESP_PLANTS_WAVESHARE_UPDATER_VERSION"),
         release_notes=_extract_string(text, "ESP_PLANTS_WAVESHARE_RELEASE_NOTES"),
     )
@@ -263,6 +264,7 @@ def _platformio_post_action(source, target, env) -> None:
     print(f"  package:  {metadata.package_size} bytes SHA256 {metadata.package_sha256}")
     print(f"  firmware: {metadata.firmware_size} bytes SHA256 {metadata.firmware_sha256}")
     print(f"GitHub Release manifest: {manifest}")
+    print(f"GitHub Release tag: v{read_build_identity(build_header).version}")
 
 
 def main() -> int:
