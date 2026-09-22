@@ -93,6 +93,7 @@ bool portalConnectionPending = false;
 uint32_t portalAttemptStartedMs = 0;
 uint32_t portalStopAtMs = 0;
 volatile bool checkTaskRunning = false;
+TaskHandle_t checkTaskHandle = nullptr;
 volatile bool installTaskRunning = false;
 volatile bool manualCheckRequested = false;
 volatile bool installRequested = false;
@@ -990,25 +991,39 @@ bool checkGithubRelease() {
 }
 
 void checkTask(void *) {
-  setStatus("Checking GitHub securely for updates...");
-  const bool ok = checkGithubRelease();
-  if (!ok) nextFailedCheckMs = millis() + kFailedCheckRetryMs;
-  checkTaskRunning = false;
-  vTaskDeleteWithCaps(xTaskGetCurrentTaskHandle());
+  // Keep one PSRAM-backed metadata worker alive for the lifetime of the app.
+  // Reusing the same blocked task avoids the ESP-IDF 5.1 WithCaps deletion
+  // race that could free a task stack while that task was still executing on
+  // the other core after repeated CHECK NOW operations.
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    setStatus("Checking GitHub securely for updates...");
+    const bool ok = checkGithubRelease();
+    if (!ok) nextFailedCheckMs = millis() + kFailedCheckRetryMs;
+    checkTaskRunning = false;
+    Serial.println("[update] GitHub check worker idle");
+  }
 }
 
 bool startCheckTask(const char *failureMessage) {
-  // Certificate verification needs scarce internal DRAM. Put the disposable
-  // metadata task stack in PSRAM so MbedTLS has room for RSA/X.509 work.
-  // The OTA install task intentionally stays on an internal stack because
-  // PSRAM may be unavailable while flash writes are in progress.
-  const BaseType_t result = xTaskCreateWithCaps(
-      checkTask, "espplants-update-check", 16384, nullptr, 1, nullptr,
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (result == pdPASS) return true;
-  checkTaskRunning = false;
-  setStatus("%s", failureMessage);
-  return false;
+  // Certificate verification needs scarce internal DRAM. Keep the metadata
+  // worker's stack in PSRAM so MbedTLS has room for RSA/X.509 work. The worker
+  // is persistent and blocks between checks; it is never repeatedly created or
+  // deleted. The OTA install task intentionally remains on an internal stack
+  // because PSRAM may be unavailable while flash writes are in progress.
+  if (!checkTaskHandle) {
+    const BaseType_t result = xTaskCreateWithCaps(
+        checkTask, "espplants-update-check", 16384, nullptr, 1, &checkTaskHandle,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (result != pdPASS) {
+      checkTaskHandle = nullptr;
+      checkTaskRunning = false;
+      setStatus("%s", failureMessage);
+      return false;
+    }
+  }
+  xTaskNotifyGive(checkTaskHandle);
+  return true;
 }
 
 void installProgress(uint32_t receivedBytes, uint32_t packageBytes) {
