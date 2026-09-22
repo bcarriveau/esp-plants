@@ -23,6 +23,7 @@
 #include <strings.h>
 
 #include "update_policy.h"
+#include "h2_ota_client.h"
 
 namespace espplants_ota_installer {
 namespace {
@@ -696,6 +697,14 @@ Result install(const Release &release, ProgressCallback progress,
                char *message, size_t messageCapacity) {
   if (!message || messageCapacity == 0) return Result::FAILED;
   message[0] = 0;
+
+  // Phase 2 Update All: H2 must validate, switch its inactive OTA slot, reboot,
+  // and report the target build before the Waveshare inactive slot is touched.
+  {
+    const auto h2Result = espplants_h2_ota::updateForRelease(
+        release, progress, message, messageCapacity);
+    if (h2Result != espplants_h2_ota::Result::OK) return Result::FAILED;
+  }
 
   if (!packageLayoutValid(release.packageSize, release.firmwareSize) ||
       !boundedPrintableAscii(release.buildId, kMaxBuildIdLength) ||

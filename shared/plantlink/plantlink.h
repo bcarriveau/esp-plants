@@ -1,340 +1,37 @@
 #pragma once
-
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
 namespace plantlink {
-
-constexpr uint8_t kProtocolVersion = 1;
-constexpr size_t kMaxPayloadBytes = 256;
-constexpr size_t kHeaderBytes = 7;  // version, type, flags, seq(2), payload_len(2)
-constexpr size_t kCrcBytes = 4;
-constexpr size_t kMaxDecodedBytes = kHeaderBytes + kMaxPayloadBytes + kCrcBytes;
-constexpr size_t kMaxEncodedBytes = kMaxDecodedBytes + (kMaxDecodedBytes / 254) + 2;
-
-enum class MessageType : uint8_t {
-  Hello = 0x01,
-  HelloAck = 0x02,
-  Heartbeat = 0x03,
-
-  NetworkStatus = 0x10,
-  PermitJoin = 0x11,
-  DeviceJoined = 0x12,
-  DeviceLeft = 0x13,
-  RemoveDevice = 0x14,
-  InfrastructureReport = 0x15,
-
-  SensorReport = 0x20,
-  SetSensorOption = 0x21,
-  CommandResult = 0x22,
-
-  RawZigbeeEvent = 0x30,
-
-  FactoryResetNetwork = 0x40,
-};
-
-enum FrameFlags : uint8_t {
-  FlagNone = 0x00,
-  FlagResponse = 0x01,
-  FlagError = 0x02,
-};
-
-enum CapabilityFlags : uint32_t {
-  CapabilityNone = 0,
-  CapabilityZigbeeCoordinator = 1u << 0,
-  CapabilityZg303zDecoder = 1u << 1,
-  CapabilityRawZigbeeLog = 1u << 2,
-  CapabilityInfrastructureRegistry = 1u << 3,
-};
-
-enum SensorFieldFlags : uint16_t {
-  SensorHasTemperature = 1u << 0,
-  SensorHasHumidity = 1u << 1,
-  SensorHasSoilMoisture = 1u << 2,
-  SensorHasBattery = 1u << 3,
-  SensorHasWaterWarning = 1u << 4,
-};
-
-enum InfrastructureFlags : uint8_t {
-  InfrastructureOnline = 1u << 0,
-  InfrastructureDirectNeighbor = 1u << 1,
-};
-
-struct Frame {
-  MessageType type = MessageType::Hello;
-  uint8_t flags = 0;
-  uint16_t sequence = 0;
-  uint16_t payloadLength = 0;
-  uint8_t payload[kMaxPayloadBytes]{};
-};
-
-// SensorReport payload, serialized explicitly with the helpers below.
-// Wire layout (little endian):
-// ieee[8], short_addr[2], field_flags[2], temp_centi_c[2],
-// humidity_centi_pct[2], soil_pct[1], battery_pct[1], water_warning[1],
-// lqi[1], rssi_dbm[1]
-constexpr size_t kSensorReportPayloadBytes = 21;
-constexpr int8_t kRssiUnavailableDbm = static_cast<int8_t>(-128);
-
-struct SensorReportData {
-  uint8_t ieee[8]{};
-  uint16_t shortAddress = 0xffff;
-  uint16_t fieldFlags = 0;
-  int16_t temperatureCentiC = 0;
-  uint16_t humidityCentiPct = 0;
-  uint8_t soilMoisturePct = 0;
-  uint8_t batteryPct = 0;
-  uint8_t waterWarning = 0;
-  uint8_t lqi = 0;
-  int8_t rssiDbm = kRssiUnavailableDbm;
-};
-
-// InfrastructureReport payload:
-// ieee[8], short_addr[2], flags[1], device_type[1], lqi[1], rssi_dbm[1]
-constexpr size_t kInfrastructureReportPayloadBytes = 14;
-
-struct InfrastructureReportData {
-  uint8_t ieee[8]{};
-  uint16_t shortAddress = 0xffff;
-  uint8_t flags = 0;
-  uint8_t deviceType = 0;
-  uint8_t lqi = 0;
-  int8_t rssiDbm = kRssiUnavailableDbm;
-};
-
-inline void putU16LE(uint8_t *p, uint16_t value) {
-  p[0] = static_cast<uint8_t>(value & 0xffu);
-  p[1] = static_cast<uint8_t>((value >> 8) & 0xffu);
-}
-
-inline uint16_t getU16LE(const uint8_t *p) {
-  return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
-
-inline void putU32LE(uint8_t *p, uint32_t value) {
-  p[0] = static_cast<uint8_t>(value & 0xffu);
-  p[1] = static_cast<uint8_t>((value >> 8) & 0xffu);
-  p[2] = static_cast<uint8_t>((value >> 16) & 0xffu);
-  p[3] = static_cast<uint8_t>((value >> 24) & 0xffu);
-}
-
-inline uint32_t getU32LE(const uint8_t *p) {
-  return static_cast<uint32_t>(p[0]) |
-         (static_cast<uint32_t>(p[1]) << 8) |
-         (static_cast<uint32_t>(p[2]) << 16) |
-         (static_cast<uint32_t>(p[3]) << 24);
-}
-
-inline uint32_t crc32(const uint8_t *data, size_t length) {
-  uint32_t crc = 0xffffffffu;
-  for (size_t i = 0; i < length; ++i) {
-    crc ^= data[i];
-    for (uint8_t bit = 0; bit < 8; ++bit) {
-      const uint32_t mask = static_cast<uint32_t>(-(static_cast<int32_t>(crc & 1u)));
-      crc = (crc >> 1) ^ (0xedb88320u & mask);
-    }
-  }
-  return ~crc;
-}
-
-inline size_t cobsEncode(const uint8_t *input, size_t length, uint8_t *output, size_t capacity) {
-  if (capacity == 0) return 0;
-  size_t readIndex = 0;
-  size_t writeIndex = 1;
-  size_t codeIndex = 0;
-  uint8_t code = 1;
-
-  while (readIndex < length) {
-    if (input[readIndex] == 0) {
-      if (codeIndex >= capacity) return 0;
-      output[codeIndex] = code;
-      code = 1;
-      codeIndex = writeIndex++;
-      if (writeIndex > capacity) return 0;
-      ++readIndex;
-    } else {
-      if (writeIndex >= capacity) return 0;
-      output[writeIndex++] = input[readIndex++];
-      ++code;
-      if (code == 0xff) {
-        if (codeIndex >= capacity) return 0;
-        output[codeIndex] = code;
-        code = 1;
-        codeIndex = writeIndex++;
-        if (writeIndex > capacity) return 0;
-      }
-    }
-  }
-
-  if (codeIndex >= capacity) return 0;
-  output[codeIndex] = code;
-  return writeIndex;
-}
-
-inline size_t cobsDecode(const uint8_t *input, size_t length, uint8_t *output, size_t capacity) {
-  if (length == 0) return 0;
-  size_t readIndex = 0;
-  size_t writeIndex = 0;
-
-  while (readIndex < length) {
-    const uint8_t code = input[readIndex];
-    if (code == 0) return 0;
-    ++readIndex;
-
-    for (uint8_t i = 1; i < code; ++i) {
-      if (readIndex >= length || writeIndex >= capacity) return 0;
-      output[writeIndex++] = input[readIndex++];
-    }
-
-    if (code != 0xff && readIndex < length) {
-      if (writeIndex >= capacity) return 0;
-      output[writeIndex++] = 0;
-    }
-  }
-  return writeIndex;
-}
-
-inline size_t encodeFrame(MessageType type, uint8_t flags, uint16_t sequence,
-                          const uint8_t *payload, uint16_t payloadLength,
-                          uint8_t *output, size_t outputCapacity) {
-  if (payloadLength > kMaxPayloadBytes || outputCapacity < 2) return 0;
-
-  uint8_t decoded[kMaxDecodedBytes]{};
-  decoded[0] = kProtocolVersion;
-  decoded[1] = static_cast<uint8_t>(type);
-  decoded[2] = flags;
-  putU16LE(decoded + 3, sequence);
-  putU16LE(decoded + 5, payloadLength);
-  if (payloadLength && payload) memcpy(decoded + kHeaderBytes, payload, payloadLength);
-
-  const size_t crcOffset = kHeaderBytes + payloadLength;
-  putU32LE(decoded + crcOffset, crc32(decoded, crcOffset));
-  const size_t decodedLength = crcOffset + kCrcBytes;
-
-  const size_t encodedLength = cobsEncode(decoded, decodedLength, output, outputCapacity - 1);
-  if (!encodedLength || encodedLength >= outputCapacity) return 0;
-  output[encodedLength] = 0;
-  return encodedLength + 1;
-}
-
-inline bool decodeFrame(const uint8_t *encoded, size_t encodedLength, Frame &out) {
-  uint8_t decoded[kMaxDecodedBytes]{};
-  const size_t decodedLength = cobsDecode(encoded, encodedLength, decoded, sizeof(decoded));
-  if (decodedLength < (kHeaderBytes + kCrcBytes)) return false;
-  if (decoded[0] != kProtocolVersion) return false;
-
-  const uint16_t payloadLength = getU16LE(decoded + 5);
-  if (payloadLength > kMaxPayloadBytes) return false;
-  if (decodedLength != kHeaderBytes + payloadLength + kCrcBytes) return false;
-
-  const size_t crcOffset = kHeaderBytes + payloadLength;
-  const uint32_t expectedCrc = getU32LE(decoded + crcOffset);
-  if (expectedCrc != crc32(decoded, crcOffset)) return false;
-
-  out.type = static_cast<MessageType>(decoded[1]);
-  out.flags = decoded[2];
-  out.sequence = getU16LE(decoded + 3);
-  out.payloadLength = payloadLength;
-  if (payloadLength) memcpy(out.payload, decoded + kHeaderBytes, payloadLength);
-  return true;
-}
-
-class Decoder {
- public:
-  bool feed(uint8_t byte, Frame &out) {
-    if (byte == 0) {
-      if (length_ == 0) return false;
-      const bool ok = decodeFrame(encoded_, length_, out);
-      length_ = 0;
-      overflowed_ = false;
-      return ok;
-    }
-
-    if (overflowed_) return false;
-    if (length_ >= sizeof(encoded_)) {
-      overflowed_ = true;
-      return false;
-    }
-    encoded_[length_++] = byte;
-    return false;
-  }
-
-  void reset() {
-    length_ = 0;
-    overflowed_ = false;
-  }
-
- private:
-  uint8_t encoded_[kMaxEncodedBytes]{};
-  size_t length_ = 0;
-  bool overflowed_ = false;
-};
-
-inline size_t serializeSensorReport(const SensorReportData &in, uint8_t *out, size_t capacity) {
-  if (capacity < kSensorReportPayloadBytes) return 0;
-  memcpy(out, in.ieee, 8);
-  putU16LE(out + 8, in.shortAddress);
-  putU16LE(out + 10, in.fieldFlags);
-  putU16LE(out + 12, static_cast<uint16_t>(in.temperatureCentiC));
-  putU16LE(out + 14, in.humidityCentiPct);
-  out[16] = in.soilMoisturePct;
-  out[17] = in.batteryPct;
-  out[18] = in.waterWarning;
-  out[19] = in.lqi;
-  out[20] = static_cast<uint8_t>(in.rssiDbm);
-  return kSensorReportPayloadBytes;
-}
-
-inline bool parseSensorReport(const uint8_t *payload, size_t length, SensorReportData &out) {
-  if (!payload || length != kSensorReportPayloadBytes) return false;
-  memcpy(out.ieee, payload, 8);
-  out.shortAddress = getU16LE(payload + 8);
-  out.fieldFlags = getU16LE(payload + 10);
-  out.temperatureCentiC = static_cast<int16_t>(getU16LE(payload + 12));
-  out.humidityCentiPct = getU16LE(payload + 14);
-  out.soilMoisturePct = payload[16];
-  out.batteryPct = payload[17];
-  out.waterWarning = payload[18];
-  out.lqi = payload[19];
-  out.rssiDbm = static_cast<int8_t>(payload[20]);
-  return true;
-}
-
-inline size_t serializeInfrastructureReport(const InfrastructureReportData &in,
-                                            uint8_t *out, size_t capacity) {
-  if (capacity < kInfrastructureReportPayloadBytes) return 0;
-  memcpy(out, in.ieee, 8);
-  putU16LE(out + 8, in.shortAddress);
-  out[10] = in.flags;
-  out[11] = in.deviceType;
-  out[12] = in.lqi;
-  out[13] = static_cast<uint8_t>(in.rssiDbm);
-  return kInfrastructureReportPayloadBytes;
-}
-
-inline bool parseInfrastructureReport(const uint8_t *payload, size_t length,
-                                      InfrastructureReportData &out) {
-  if (!payload || length != kInfrastructureReportPayloadBytes) return false;
-  memcpy(out.ieee, payload, 8);
-  out.shortAddress = getU16LE(payload + 8);
-  out.flags = payload[10];
-  out.deviceType = payload[11];
-  out.lqi = payload[12];
-  out.rssiDbm = static_cast<int8_t>(payload[13]);
-  return true;
-}
-
-inline void formatIeee(const uint8_t ieee[8], char *out, size_t outSize) {
-  static const char hex[] = "0123456789ABCDEF";
-  if (!out || outSize < 24) return;
-  size_t p = 0;
-  for (int i = 7; i >= 0; --i) {
-    out[p++] = hex[(ieee[i] >> 4) & 0x0f];
-    out[p++] = hex[ieee[i] & 0x0f];
-    if (i != 0) out[p++] = ':';
-  }
-  out[p] = '\0';
-}
-
-}  // namespace plantlink
+constexpr uint8_t kProtocolVersion=1;
+constexpr size_t kMaxPayloadBytes=256;
+constexpr size_t kHeaderBytes=7;
+constexpr size_t kCrcBytes=4;
+constexpr size_t kMaxDecodedBytes=kHeaderBytes+kMaxPayloadBytes+kCrcBytes;
+constexpr size_t kMaxEncodedBytes=kMaxDecodedBytes+(kMaxDecodedBytes/254)+2;
+enum class MessageType:uint8_t{Hello=0x01,HelloAck=0x02,Heartbeat=0x03,NetworkStatus=0x10,PermitJoin=0x11,DeviceJoined=0x12,DeviceLeft=0x13,RemoveDevice=0x14,InfrastructureReport=0x15,SensorReport=0x20,SetSensorOption=0x21,CommandResult=0x22,RawZigbeeEvent=0x30,FactoryResetNetwork=0x40,H2OtaBegin=0x50,H2OtaChunk=0x51,H2OtaEnd=0x52,H2OtaStatus=0x53,H2OtaAbort=0x54};
+enum FrameFlags:uint8_t{FlagNone=0,FlagResponse=1,FlagError=2};
+enum CapabilityFlags:uint32_t{CapabilityNone=0,CapabilityZigbeeCoordinator=1u<<0,CapabilityZg303zDecoder=1u<<1,CapabilityRawZigbeeLog=1u<<2,CapabilityInfrastructureRegistry=1u<<3,CapabilityH2Ota=1u<<4};
+enum SensorFieldFlags:uint16_t{SensorHasTemperature=1u<<0,SensorHasHumidity=1u<<1,SensorHasSoilMoisture=1u<<2,SensorHasBattery=1u<<3,SensorHasWaterWarning=1u<<4};
+enum InfrastructureFlags:uint8_t{InfrastructureOnline=1u<<0,InfrastructureDirectNeighbor=1u<<1};
+struct Frame{MessageType type=MessageType::Hello;uint8_t flags=0;uint16_t sequence=0;uint16_t payloadLength=0;uint8_t payload[kMaxPayloadBytes]{};};
+using FrameObserver=void(*)(const Frame&);
+inline FrameObserver &frameObserver(){static FrameObserver observer=nullptr;return observer;}
+inline void setFrameObserver(FrameObserver observer){frameObserver()=observer;}
+constexpr size_t kSensorReportPayloadBytes=21; constexpr int8_t kRssiUnavailableDbm=static_cast<int8_t>(-128);
+struct SensorReportData{uint8_t ieee[8]{};uint16_t shortAddress=0xffff;uint16_t fieldFlags=0;int16_t temperatureCentiC=0;uint16_t humidityCentiPct=0;uint8_t soilMoisturePct=0;uint8_t batteryPct=0;uint8_t waterWarning=0;uint8_t lqi=0;int8_t rssiDbm=kRssiUnavailableDbm;};
+constexpr size_t kInfrastructureReportPayloadBytes=14;
+struct InfrastructureReportData{uint8_t ieee[8]{};uint16_t shortAddress=0xffff;uint8_t flags=0;uint8_t deviceType=0;uint8_t lqi=0;int8_t rssiDbm=kRssiUnavailableDbm;};
+inline void putU16LE(uint8_t*p,uint16_t v){p[0]=v&0xff;p[1]=(v>>8)&0xff;} inline uint16_t getU16LE(const uint8_t*p){return uint16_t(p[0])|(uint16_t(p[1])<<8);} inline void putU32LE(uint8_t*p,uint32_t v){p[0]=v&0xff;p[1]=(v>>8)&0xff;p[2]=(v>>16)&0xff;p[3]=(v>>24)&0xff;} inline uint32_t getU32LE(const uint8_t*p){return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
+inline uint32_t crc32(const uint8_t*d,size_t n){uint32_t c=0xffffffffu;for(size_t i=0;i<n;++i){c^=d[i];for(uint8_t b=0;b<8;++b){uint32_t m=uint32_t(-(int32_t(c&1u)));c=(c>>1)^(0xedb88320u&m);}}return ~c;}
+inline size_t cobsEncode(const uint8_t*in,size_t n,uint8_t*out,size_t cap){if(!cap)return 0;size_t r=0,w=1,ci=0;uint8_t code=1;while(r<n){if(in[r]==0){if(ci>=cap)return 0;out[ci]=code;code=1;ci=w++;if(w>cap)return 0;++r;}else{if(w>=cap)return 0;out[w++]=in[r++];++code;if(code==0xff){if(ci>=cap)return 0;out[ci]=code;code=1;ci=w++;if(w>cap)return 0;}}}if(ci>=cap)return 0;out[ci]=code;return w;}
+inline size_t cobsDecode(const uint8_t*in,size_t n,uint8_t*out,size_t cap){if(!n)return 0;size_t r=0,w=0;while(r<n){uint8_t code=in[r];if(!code)return 0;++r;for(uint8_t i=1;i<code;++i){if(r>=n||w>=cap)return 0;out[w++]=in[r++];}if(code!=0xff&&r<n){if(w>=cap)return 0;out[w++]=0;}}return w;}
+inline size_t encodeFrame(MessageType t,uint8_t f,uint16_t s,const uint8_t*p,uint16_t pn,uint8_t*out,size_t cap){if(pn>kMaxPayloadBytes||cap<2)return 0;uint8_t d[kMaxDecodedBytes]{};d[0]=kProtocolVersion;d[1]=uint8_t(t);d[2]=f;putU16LE(d+3,s);putU16LE(d+5,pn);if(pn&&p)memcpy(d+kHeaderBytes,p,pn);size_t co=kHeaderBytes+pn;putU32LE(d+co,crc32(d,co));size_t dl=co+kCrcBytes;size_t en=cobsEncode(d,dl,out,cap-1);if(!en||en>=cap)return 0;out[en]=0;return en+1;}
+inline bool decodeFrame(const uint8_t*e,size_t en,Frame&o){uint8_t d[kMaxDecodedBytes]{};size_t n=cobsDecode(e,en,d,sizeof(d));if(n<kHeaderBytes+kCrcBytes||d[0]!=kProtocolVersion)return false;uint16_t pn=getU16LE(d+5);if(pn>kMaxPayloadBytes||n!=kHeaderBytes+pn+kCrcBytes)return false;size_t co=kHeaderBytes+pn;if(getU32LE(d+co)!=crc32(d,co))return false;o.type=MessageType(d[1]);o.flags=d[2];o.sequence=getU16LE(d+3);o.payloadLength=pn;if(pn)memcpy(o.payload,d+kHeaderBytes,pn);return true;}
+class Decoder{public:bool feed(uint8_t b,Frame&o){if(b==0){if(length_==0)return false;bool ok=decodeFrame(encoded_,length_,o);length_=0;overflowed_=false;if(ok&&frameObserver())frameObserver()(o);return ok;}if(overflowed_)return false;if(length_>=sizeof(encoded_)){overflowed_=true;return false;}encoded_[length_++]=b;return false;}void reset(){length_=0;overflowed_=false;}private:uint8_t encoded_[kMaxEncodedBytes]{};size_t length_=0;bool overflowed_=false;};
+inline size_t serializeSensorReport(const SensorReportData&i,uint8_t*out,size_t cap){if(cap<kSensorReportPayloadBytes)return 0;memcpy(out,i.ieee,8);putU16LE(out+8,i.shortAddress);putU16LE(out+10,i.fieldFlags);putU16LE(out+12,uint16_t(i.temperatureCentiC));putU16LE(out+14,i.humidityCentiPct);out[16]=i.soilMoisturePct;out[17]=i.batteryPct;out[18]=i.waterWarning;out[19]=i.lqi;out[20]=uint8_t(i.rssiDbm);return kSensorReportPayloadBytes;}
+inline bool parseSensorReport(const uint8_t*p,size_t n,SensorReportData&o){if(!p||n!=kSensorReportPayloadBytes)return false;memcpy(o.ieee,p,8);o.shortAddress=getU16LE(p+8);o.fieldFlags=getU16LE(p+10);o.temperatureCentiC=int16_t(getU16LE(p+12));o.humidityCentiPct=getU16LE(p+14);o.soilMoisturePct=p[16];o.batteryPct=p[17];o.waterWarning=p[18];o.lqi=p[19];o.rssiDbm=int8_t(p[20]);return true;}
+inline size_t serializeInfrastructureReport(const InfrastructureReportData&i,uint8_t*out,size_t cap){if(cap<kInfrastructureReportPayloadBytes)return 0;memcpy(out,i.ieee,8);putU16LE(out+8,i.shortAddress);out[10]=i.flags;out[11]=i.deviceType;out[12]=i.lqi;out[13]=uint8_t(i.rssiDbm);return kInfrastructureReportPayloadBytes;}
+inline bool parseInfrastructureReport(const uint8_t*p,size_t n,InfrastructureReportData&o){if(!p||n!=kInfrastructureReportPayloadBytes)return false;memcpy(o.ieee,p,8);o.shortAddress=getU16LE(p+8);o.flags=p[10];o.deviceType=p[11];o.lqi=p[12];o.rssiDbm=int8_t(p[13]);return true;}
+inline void formatIeee(const uint8_t ieee[8],char*out,size_t outSize){static const char hex[]="0123456789ABCDEF";if(!out||outSize<24)return;size_t p=0;for(int i=7;i>=0;--i){out[p++]=hex[(ieee[i]>>4)&0xf];out[p++]=hex[ieee[i]&0xf];if(i)out[p++]=':';}out[p]=0;}
+} // namespace plantlink
