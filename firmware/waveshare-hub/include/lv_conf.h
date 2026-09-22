@@ -29,6 +29,13 @@
 #define LV_USE_FLEX 1
 #define LV_USE_GRID 1
 #define LV_USE_THEME_DEFAULT 1
+
+// alpha.13: the retained alpha.11 coredump stopped inside LVGL's default
+// theme transition path during rapid navigation. Disable that transition
+// engine at compile time rather than injecting a null transition descriptor
+// into every button at runtime (the alpha.12 experiment boot-looped).
+#define LV_THEME_DEFAULT_TRANSITION_TIME 0
+
 #define LV_BUILD_EXAMPLES 0
 #define LV_USE_DEMO_WIDGETS 0
 
