@@ -5,8 +5,6 @@
  *
  * Modified by ESP PLANTS in 2026: RGB VSYNC notification synchronization
  * uses counting task notifications and bounded waits to prevent LVGL deadlock.
- * External LVGL locks are bounded/coalesced and stage diagnostics identify
- * rapid-input/display stalls without stopping PlantLink or the Arduino loop.
  */
 #include <Arduino.h>
 #include <ESP_Panel_Library.h>
@@ -16,27 +14,10 @@
 
 #define LVGL_PORT_BUFFER_NUM_MAX (2)
 #define LVGL_PORT_RGB_VSYNC_TIMEOUT_MS (100)
-#define LVGL_PORT_EXTERNAL_LOCK_TIMEOUT_MS (25)
-#define LVGL_PORT_EXTERNAL_LOCK_MIN_INTERVAL_MS (100)
-#define LVGL_PORT_LOCK_DIAGNOSTIC_INTERVAL_MS (1000)
 
 static const char *TAG = "lvgl_port";
 static SemaphoreHandle_t lvgl_mux = nullptr; // LVGL mutex
 static TaskHandle_t lvgl_task_handle = nullptr;
-static const char * volatile lvgl_debug_stage = "init";
-static volatile uint32_t lvgl_debug_heartbeat = 0;
-static uint32_t lvgl_last_external_lock_ms = 0;
-static uint32_t lvgl_last_lock_diagnostic_ms = 0;
-
-static inline void lvglDebugStage(const char *stage)
-{
-    lvgl_debug_stage = stage;
-}
-
-static inline void lvglDebugBeat(void)
-{
-    ++lvgl_debug_heartbeat;
-}
 
 ESP_IOExpander *expander = NULL;
 
@@ -282,15 +263,10 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
             prepareRgbVsyncWait();
 
             /* Switch the current RGB frame buffer to `next_fb` */
-            lvglDebugStage("flush-draw");
             lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)next_fb);
-            lvglDebugBeat();
 
             /* Wait for frame completion, but never hold the LVGL mutex forever. */
-            lvglDebugStage("flush-vsync");
             waitForRgbVsync();
-            lvglDebugBeat();
-            lvglDebugStage("timer-handler");
 
             /* Synchronously update the dirty area for another frame buffer */
             flush_dirty_copy(flush_get_next_buf(lcd), color_map, &dirty_area);
@@ -325,15 +301,10 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
                 prepareRgbVsyncWait();
 
                 /* Switch the current RGB frame buffer to `next_fb` */
-                lvglDebugStage("flush-draw");
                 lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)next_fb);
-                lvglDebugBeat();
 
                 /* Wait for frame completion, but never hold the LVGL mutex forever. */
-                lvglDebugStage("flush-vsync");
                 waitForRgbVsync();
-                lvglDebugBeat();
-                lvglDebugStage("timer-handler");
 
                 if (probe_result == FLUSH_PROBE_PART_COPY)
                 {
@@ -366,15 +337,10 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
         prepareRgbVsyncWait();
 
         /* Switch the current RGB frame buffer to `color_map` */
-        lvglDebugStage("flush-draw");
         lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)color_map);
-        lvglDebugBeat();
 
         /* Wait for frame completion, but never hold the LVGL mutex forever. */
-        lvglDebugStage("flush-vsync");
         waitForRgbVsync();
-        lvglDebugBeat();
-        lvglDebugStage("timer-handler");
     }
 
     lv_disp_flush_ready(drv);
@@ -395,15 +361,10 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
     prepareRgbVsyncWait();
 
     /* Switch the current RGB frame buffer to `color_map` */
-    lvglDebugStage("flush-draw");
     lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)color_map);
-    lvglDebugBeat();
 
     /* Wait for frame completion, but never hold the LVGL mutex forever. */
-    lvglDebugStage("flush-vsync");
     waitForRgbVsync();
-    lvglDebugBeat();
-    lvglDebugStage("timer-handler");
 
     lv_disp_flush_ready(drv);
 }
@@ -634,14 +595,8 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     ESP_PanelTouch *tp = (ESP_PanelTouch *)indev_drv->user_data;
     ESP_PanelTouchPoint point;
 
-    /* Keep a stage marker around the GT911/I2C transaction. If rapid input
-     * ever wedges the panel bus, the bounded external LVGL lock reports this
-     * exact stage instead of making PlantLink disappear with the UI. */
-    lvglDebugStage("touch-read");
-    lvglDebugBeat();
+    /* Read data from touch controller */
     int read_touch_result = tp->readPoints(&point, 1);
-    lvglDebugBeat();
-    lvglDebugStage("timer-handler");
     if (read_touch_result > 0)
     {
         data->point.x = point.x;
@@ -696,18 +651,11 @@ static void lvgl_port_task(void *arg)
     uint32_t task_delay_ms = LVGL_PORT_TASK_MAX_DELAY_MS;
     while (1)
     {
-        lvglDebugStage("mutex-lock");
         if (lvgl_port_lock(-1))
         {
-            lvglDebugStage("timer-handler");
-            lvglDebugBeat();
             task_delay_ms = lv_timer_handler();
-            lvglDebugBeat();
-            lvglDebugStage("mutex-unlock");
             lvgl_port_unlock();
         }
-        lvglDebugStage("sleep");
-        lvglDebugBeat();
         if (task_delay_ms > LVGL_PORT_TASK_MAX_DELAY_MS)
         {
             task_delay_ms = LVGL_PORT_TASK_MAX_DELAY_MS;
@@ -797,52 +745,8 @@ bool lvgl_port_lock(int timeout_ms)
 {
     ESP_PANEL_CHECK_NULL_RET(lvgl_mux, false, "LVGL mutex is not initialized");
 
-    const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
-    const bool is_lvgl_task = (current_task == lvgl_task_handle);
-    const uint32_t now = millis();
-
-    /* The library's LVGL task may wait for its own mutex as before. External
-     * callers (ESP PLANTS setup/refreshUi) must never wait forever: a display
-     * failure must not stop PlantLink, OTA service, or the Arduino loop.
-     *
-     * External -1 callers are also coalesced to at most 10 Hz. Rapid tab taps
-     * currently mark the whole dashboard dirty on every click; without this
-     * guard they can drive full dashboard refresh work every ~2 ms. */
-    if (!is_lvgl_task && timeout_ms < 0)
-    {
-        if (lvgl_last_external_lock_ms != 0 &&
-            (uint32_t)(now - lvgl_last_external_lock_ms) < LVGL_PORT_EXTERNAL_LOCK_MIN_INTERVAL_MS)
-        {
-            return false;
-        }
-    }
-
-    TickType_t timeout_ticks;
-    if (timeout_ms < 0)
-    {
-        timeout_ticks = is_lvgl_task ? portMAX_DELAY : pdMS_TO_TICKS(LVGL_PORT_EXTERNAL_LOCK_TIMEOUT_MS);
-    }
-    else
-    {
-        timeout_ticks = pdMS_TO_TICKS(timeout_ms);
-    }
-
-    if (xSemaphoreTakeRecursive(lvgl_mux, timeout_ticks) == pdTRUE)
-    {
-        if (!is_lvgl_task) lvgl_last_external_lock_ms = now;
-        return true;
-    }
-
-    if (!is_lvgl_task &&
-        (uint32_t)(now - lvgl_last_lock_diagnostic_ms) >= LVGL_PORT_LOCK_DIAGNOSTIC_INTERVAL_MS)
-    {
-        lvgl_last_lock_diagnostic_ms = now;
-        const char *stage = lvgl_debug_stage;
-        Serial.printf("[display] LVGL mutex timeout after %u ms stage=%s heartbeat=%lu; main loop continuing\n",
-                      LVGL_PORT_EXTERNAL_LOCK_TIMEOUT_MS, stage ? stage : "unknown",
-                      static_cast<unsigned long>(lvgl_debug_heartbeat));
-    }
-    return false;
+    const TickType_t timeout_ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    return (xSemaphoreTakeRecursive(lvgl_mux, timeout_ticks) == pdTRUE);
 }
 
 bool lvgl_port_unlock(void)

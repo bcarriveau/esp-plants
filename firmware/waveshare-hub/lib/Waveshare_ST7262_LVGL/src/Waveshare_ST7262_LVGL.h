@@ -80,7 +80,7 @@
  *      - 3: LCD double-buffer & LVGL direct-mode (recommended)
  *
  */
-#define LVGL_PORT_AVOID_TEARING_MODE (3)
+#define LVGL_PORT_AVOID_TEARING_MODE (2)
 
 #if LVGL_PORT_AVOID_TEARING_MODE != 0
 /**
