@@ -43,3 +43,4 @@ logs/
 /README-FIRST*.txt
 /COMMIT MESSAGE*.txt
 /ESP_PLANTS_*.zip
+crashdumps/
