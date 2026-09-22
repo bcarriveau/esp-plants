@@ -7,6 +7,7 @@
 #include <mbedtls/sha256.h>
 #include <algorithm>
 #include <cstring>
+#include <strings.h>
 #include "plantlink.h"
 #include "plantlink_ota.h"
 #include "update_policy.h"
@@ -24,7 +25,129 @@ void sendFrame(plantlink::MessageType t,const uint8_t*p,uint16_t n){uint8_t e[pl
 bool waitStatus(uint32_t before,uint32_t timeout,uint8_t &s,uint8_t&e,uint32_t&next){uint32_t start=millis();while(millis()-start<timeout){portENTER_CRITICAL(&mux);uint32_t now=eventCounter;s=lastStatus;e=lastError;next=nextOffset;portEXIT_CRITICAL(&mux);if(now!=before&&s)return true;delay(2);}return false;}
 uint32_t counter(){portENTER_CRITICAL(&mux);uint32_t c=eventCounter;portEXIT_CRITICAL(&mux);return c;}
 bool allowedUrl(const char*u){char host[96]{};return espplants_update_policy::parseAllowedHttpsUrl(u,host,sizeof(host));}
-bool getAsset(const char*url,uint8_t*dst,size_t cap,size_t&out,char*msg,size_t mc){char current[espplants_update_policy::kMaxRedirectUrlLength+1]{};copyText(current,sizeof(current),url);for(int redirects=0;redirects<=3;++redirects){if(!allowedUrl(current)){copyText(msg,mc,"H2 release URL was rejected");return false;}esp_http_client_config_t cfg{};cfg.url=current;cfg.method=HTTP_METHOD_GET;cfg.timeout_ms=12000;cfg.disable_auto_redirect=true;cfg.max_redirection_count=0;cfg.transport_type=HTTP_TRANSPORT_OVER_SSL;cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.skip_cert_common_name_check=false;cfg.buffer_size=2048;cfg.buffer_size_tx=2048;cfg.keep_alive_enable=false;esp_http_client_handle_t c=esp_http_client_init(&cfg);if(!c){copyText(msg,mc,"H2 HTTPS client allocation failed");return false;}esp_http_client_set_header(c,"Accept-Encoding","identity");if(esp_http_client_open(c,0)!=ESP_OK){esp_http_client_cleanup(c);copyText(msg,mc,"H2 HTTPS open failed");return false;}esp_http_client_fetch_headers(c);int code=esp_http_client_get_status_code(c);if(code==301||code==302||code==303||code==307||code==308){char *locationPtr=nullptr;esp_err_t got=esp_http_client_get_header(c,"Location",&locationPtr);char location[espplants_update_policy::kMaxRedirectUrlLength+1]{};if(got==ESP_OK&&locationPtr)copyText(location,sizeof(location),locationPtr);esp_http_client_close(c);esp_http_client_cleanup(c);if(got!=ESP_OK||!location[0]||redirects==3||!allowedUrl(location)){copyText(msg,mc,"H2 release redirect was rejected");return false;}copyText(current,sizeof(current),location);continue;}if(code!=200){esp_http_client_close(c);esp_http_client_cleanup(c);snprintf(msg,mc,"H2 release asset returned HTTP %d",code);return false;}out=0;uint32_t idle=millis();while(true){if(out==cap){esp_http_client_close(c);esp_http_client_cleanup(c);copyText(msg,mc,"H2 release asset exceeded size limit");return false;}int n=esp_http_client_read(c,reinterpret_cast<char*>(dst+out),std::min<size_t>(4096,cap-out));if(n>0){out+=n;idle=millis();continue;}if(n==0&&esp_http_client_is_complete_data_received(c))break;if(millis()-idle>15000){esp_http_client_close(c);esp_http_client_cleanup(c);copyText(msg,mc,"H2 release download stalled");return false;}delay(1);}esp_http_client_close(c);esp_http_client_cleanup(c);return true;}copyText(msg,mc,"H2 redirect limit exceeded");return false;}
+
+struct AssetHeaderState{
+  size_t totalBytes=0;
+  bool invalid=false;
+  char location[espplants_update_policy::kMaxRedirectUrlLength+1]{};
+};
+
+esp_err_t assetHeaderEvent(esp_http_client_event_t *event){
+  if(!event||!event->user_data)return ESP_OK;
+  AssetHeaderState &state=*static_cast<AssetHeaderState*>(event->user_data);
+  if(event->event_id!=HTTP_EVENT_ON_HEADER||!event->header_key||!event->header_value)
+    return state.invalid?ESP_FAIL:ESP_OK;
+  size_t updated=state.totalBytes;
+  if(!espplants_update_policy::accumulateHeaderBytes(
+         state.totalBytes,strlen(event->header_key),strlen(event->header_value),updated)){
+    state.invalid=true;
+    return ESP_FAIL;
+  }
+  state.totalBytes=updated;
+  if(strcasecmp(event->header_key,"Location")==0){
+    const char *value=event->header_value;
+    while(*value==' '||*value=='\t')++value;
+    if(!espplants_update_policy::redirectUrlLengthValid(value)){
+      state.invalid=true;
+      return ESP_FAIL;
+    }
+    copyText(state.location,sizeof(state.location),value);
+  }
+  return ESP_OK;
+}
+
+bool getAsset(const char*url,uint8_t*dst,size_t cap,size_t&out,char*msg,size_t mc){
+  char current[espplants_update_policy::kMaxRedirectUrlLength+1]{};
+  copyText(current,sizeof(current),url);
+  for(int redirects=0;redirects<=3;++redirects){
+    if(!allowedUrl(current)){copyText(msg,mc,"H2 release URL was rejected");return false;}
+
+    AssetHeaderState headers{};
+    esp_http_client_config_t cfg{};
+    cfg.url=current;
+    cfg.method=HTTP_METHOD_GET;
+    cfg.timeout_ms=12000;
+    cfg.disable_auto_redirect=true;
+    cfg.max_redirection_count=0;
+    cfg.transport_type=HTTP_TRANSPORT_OVER_SSL;
+    cfg.crt_bundle_attach=esp_crt_bundle_attach;
+    cfg.skip_cert_common_name_check=false;
+    cfg.buffer_size=2048;
+    cfg.buffer_size_tx=2048;
+    cfg.keep_alive_enable=false;
+    cfg.event_handler=assetHeaderEvent;
+    cfg.user_data=&headers;
+
+    esp_http_client_handle_t c=esp_http_client_init(&cfg);
+    if(!c){copyText(msg,mc,"H2 HTTPS client allocation failed");return false;}
+    esp_http_client_set_header(c,"Accept-Encoding","identity");
+    esp_http_client_set_header(c,"Connection","close");
+    if(esp_http_client_open(c,0)!=ESP_OK){
+      esp_http_client_cleanup(c);
+      copyText(msg,mc,"H2 HTTPS open failed");
+      return false;
+    }
+
+    const int64_t headerLength=esp_http_client_fetch_headers(c);
+    int code=esp_http_client_get_status_code(c);
+    if(headerLength<0||headers.invalid){
+      esp_http_client_close(c);
+      esp_http_client_cleanup(c);
+      copyText(msg,mc,"H2 release headers were invalid");
+      return false;
+    }
+
+    if(code==301||code==302||code==303||code==307||code==308){
+      const bool rejected=
+          redirects==3||
+          !headers.location[0]||
+          !allowedUrl(headers.location);
+      if(!rejected)copyText(current,sizeof(current),headers.location);
+      esp_http_client_close(c);
+      esp_http_client_cleanup(c);
+      if(rejected){
+        copyText(msg,mc,"H2 release redirect was rejected");
+        return false;
+      }
+      continue;
+    }
+
+    if(code!=200){
+      esp_http_client_close(c);
+      esp_http_client_cleanup(c);
+      snprintf(msg,mc,"H2 release asset returned HTTP %d",code);
+      return false;
+    }
+
+    out=0;
+    uint32_t idle=millis();
+    while(true){
+      if(out==cap){
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        copyText(msg,mc,"H2 release asset exceeded size limit");
+        return false;
+      }
+      int n=esp_http_client_read(
+          c,reinterpret_cast<char*>(dst+out),std::min<size_t>(4096,cap-out));
+      if(n>0){out+=n;idle=millis();continue;}
+      if(n==0&&esp_http_client_is_complete_data_received(c))break;
+      if(millis()-idle>15000){
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+        copyText(msg,mc,"H2 release download stalled");
+        return false;
+      }
+      delay(1);
+    }
+    esp_http_client_close(c);
+    esp_http_client_cleanup(c);
+    return true;
+  }
+  copyText(msg,mc,"H2 redirect limit exceeded");
+  return false;
+}
+
 bool hexDigest(const uint8_t*d,size_t n,uint8_t out[32]){if(n<64)return false;auto h=[](uint8_t c)->int{if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;};for(int i=0;i<32;++i){int a=h(d[i*2]),b=h(d[i*2+1]);if(a<0||b<0)return false;out[i]=uint8_t((a<<4)|b);}return true;}
 }
 void observePlantLinkFrame(const void *frame){if(frame)observer(*static_cast<const plantlink::Frame*>(frame));}
