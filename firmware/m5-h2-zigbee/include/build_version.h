@@ -1,5 +1,5 @@
 #pragma once
-#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.13"
+#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.14"
 #define ESP_PLANTS_H2_HARDWARE_ID "m5stack-unit-gateway-h2"
 #define ESP_PLANTS_H2_PRODUCT_ID "esp-plants-h2"
 #define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-" ESP_PLANTS_H2_VERSION

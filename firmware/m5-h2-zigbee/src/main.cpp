@@ -28,6 +28,8 @@ constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kCapturedApsBytes = 128;
 constexpr uint32_t kStatusIntervalMs = 1500;
 constexpr uint32_t kInfrastructureScanIntervalMs = 3000;
+constexpr uint32_t kRouterJoinSettleMs = 15000;
+constexpr uint32_t kRouterJoinActivityFreshMs = kInfrastructureScanIntervalMs + 1500;
 constexpr uint8_t kCoordinatorMaxChildren = 48;
 constexpr uint16_t kOverallNetworkSize = 96;
 
@@ -59,6 +61,8 @@ uint16_t nextSequence = 1;
 uint32_t lastStatusMs = 0;
 uint32_t lastInfrastructureScanMs = 0;
 uint32_t permitJoinUntilMs = 0;
+uint32_t lastRouterJoinActivityMs = 0;
+uint32_t deferredPermitCloseMs = 0;
 bool zigbeeReady = false;
 
 struct ApsEvent {
@@ -568,8 +572,10 @@ void serviceInfrastructureRegistry() {
   if (!zigbeeReady || now - lastInfrastructureScanMs < kInfrastructureScanIntervalMs) return;
   lastInfrastructureScanMs = now;
 
-  for (auto &node : infrastructure) {
-    if (node.used) node.online = false;
+  bool wasOnline[kMaxInfrastructure]{};
+  for (size_t i = 0; i < kMaxInfrastructure; ++i) {
+    wasOnline[i] = infrastructure[i].used && infrastructure[i].online;
+    if (infrastructure[i].used) infrastructure[i].online = false;
   }
 
   esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
@@ -584,11 +590,25 @@ void serviceInfrastructureRegistry() {
         findOrCreateInfrastructure(neighbor.ieee_addr, neighbor.short_addr, created);
     if (!node) continue;
 
+    const size_t slot = static_cast<size_t>(node - infrastructure);
+    const bool appearedDuringJoin =
+        permitJoinRemaining() > 0 &&
+        slot < kMaxInfrastructure &&
+        (created || !wasOnline[slot]);
+
     node->online = true;
     node->shortAddress = neighbor.short_addr;
     node->lqi = neighbor.lqi;
     node->rssi = neighbor.rssi;
     node->lastSeenMs = now;
+
+    if (appearedDuringJoin) {
+      lastRouterJoinActivityMs = now;
+      char ieeeText[24]{};
+      plantlink::formatIeee(node->ieee, ieeeText, sizeof(ieeeText));
+      Serial.printf("[zigbee] router join activity ieee=%s short=0x%04X; protecting settle window\n",
+                    ieeeText, node->shortAddress);
+    }
 
     if (created) {
       char ieeeText[24]{};
@@ -616,12 +636,26 @@ void handlePlantFrame(const plantlink::Frame &frame) {
       uint8_t seconds = frame.payload[0];
       if (seconds > 180) seconds = 180;
       if (seconds == 0) {
-        Zigbee.closeNetwork();
-        permitJoinUntilMs = 0;
-        Serial.println("[zigbee] permit join closed");
+        const uint32_t now = millis();
+        const bool routerStillSettling =
+            lastRouterJoinActivityMs != 0 &&
+            now - lastRouterJoinActivityMs <= kRouterJoinActivityFreshMs;
+
+        if (routerStillSettling) {
+          deferredPermitCloseMs = now + kRouterJoinSettleMs;
+          Serial.printf("[zigbee] permit join close deferred %lu ms for router settle\n",
+                        static_cast<unsigned long>(kRouterJoinSettleMs));
+        } else {
+          Zigbee.closeNetwork();
+          permitJoinUntilMs = 0;
+          deferredPermitCloseMs = 0;
+          Serial.println("[zigbee] permit join closed");
+        }
       } else {
         Zigbee.openNetwork(seconds);
         permitJoinUntilMs = millis() + static_cast<uint32_t>(seconds) * 1000u;
+        deferredPermitCloseMs = 0;
+        lastRouterJoinActivityMs = 0;
         Serial.printf("[zigbee] permit join open for %u seconds\n", seconds);
       }
       sendNetworkStatus();
@@ -657,6 +691,17 @@ void servicePlantLink() {
   }
 
   const uint32_t now = millis();
+
+  if (deferredPermitCloseMs != 0 &&
+      static_cast<int32_t>(now - deferredPermitCloseMs) >= 0) {
+    Zigbee.closeNetwork();
+    permitJoinUntilMs = 0;
+    deferredPermitCloseMs = 0;
+    lastRouterJoinActivityMs = 0;
+    Serial.println("[zigbee] deferred permit join close completed after router settle");
+    sendNetworkStatus();
+  }
+
   if (now - lastStatusMs >= kStatusIntervalMs) {
     lastStatusMs = now;
     zigbeeReady = Zigbee.connected();
@@ -731,6 +776,8 @@ void handleUsbConsoleCommand(char command) {
     case 'p':
       Zigbee.openNetwork(120);
       permitJoinUntilMs = millis() + 120000u;
+      deferredPermitCloseMs = 0;
+      lastRouterJoinActivityMs = 0;
       Serial.println("[console] Zigbee pairing OPEN for 120 seconds");
       sendNetworkStatus();
       break;
@@ -738,6 +785,8 @@ void handleUsbConsoleCommand(char command) {
     case 'c':
       Zigbee.closeNetwork();
       permitJoinUntilMs = 0;
+      deferredPermitCloseMs = 0;
+      lastRouterJoinActivityMs = 0;
       Serial.println("[console] Zigbee pairing CLOSED");
       sendNetworkStatus();
       break;
