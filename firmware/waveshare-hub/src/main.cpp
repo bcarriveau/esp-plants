@@ -415,6 +415,7 @@ void loadInfrastructureRegistry() {
   for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
     char key[12]{};
     infrastructureKey(slot, key);
+    if (!preferences.isKey(key)) continue;
     if (preferences.getBytesLength(key) != sizeof(PersistedInfrastructure)) continue;
 
     PersistedInfrastructure p{};
@@ -606,6 +607,7 @@ void loadRegistry() {
   for (size_t slot = 0; slot < kMaxSensors; ++slot) {
     char key[12]{};
     slotKey(slot, key);
+    if (!preferences.isKey(key)) continue;
     if (preferences.getBytesLength(key) != sizeof(PersistedPlant)) continue;
 
     PersistedPlant p{};

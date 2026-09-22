@@ -8,9 +8,12 @@
 #include <esp_crt_bundle.h>
 #include <esp_err.h>
 #include <esp_http_client.h>
+#include <esp_sntp.h>
+#include <esp_system.h>
 #include <stdarg.h>
 #include <strings.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include "build_version.h"
 #include "plants_ota_installer.h"
@@ -33,8 +36,15 @@ constexpr uint32_t kFailedCheckRetryMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWifiReconnectMs = 30UL * 1000UL;
 constexpr uint32_t kPortalConnectTimeoutMs = 20UL * 1000UL;
 constexpr uint32_t kPortalSuccessHoldMs = 10UL * 1000UL;
-constexpr uint32_t kInitialAutoCheckDelayMs = 15UL * 1000UL;
-constexpr uint32_t kSaneEpoch = 1700000000UL;
+// Match the proven Aircraft Radar network/update timing. Automatic release
+// checks are deliberately kept out of the noisy boot/network-settle window.
+constexpr uint32_t kInitialAutoCheckDelayMs = 5UL * 60UL * 1000UL;
+constexpr uint32_t kTimeSyncRetryMs = 15UL * 1000UL;
+constexpr uint32_t kTimePersistIntervalSeconds = 6UL * 60UL * 60UL;
+constexpr uint32_t kTimeSeedMinEpoch = 1704067200UL;  // 2024-01-01 UTC
+constexpr uint32_t kTimeSeedMaxEpoch = 4102444800UL;  // 2100-01-01 UTC
+constexpr char kTimeSeedKey[] = "last_ntp";
+constexpr uint32_t kSaneEpoch = kTimeSeedMinEpoch;
 constexpr uint32_t kMetadataTimeoutMs = 15000UL;
 constexpr uint32_t kMetadataIdleTimeoutMs = 10000UL;
 constexpr size_t kMaxReleaseListBytes = 96U * 1024U;
@@ -91,10 +101,17 @@ bool sawWifiConnected = false;
 bool reconnectSuppressed = false;
 bool autoCheckedThisBoot = false;
 bool waitingForClockNotice = false;
-uint32_t connectedSinceMs = 0;
+uint32_t bootStartedMs = 0;
 uint32_t lastReconnectAttemptMs = 0;
 uint32_t nextFailedCheckMs = 0;
 uint32_t lastCheckEpoch = 0;
+
+portMUX_TYPE timeMux = portMUX_INITIALIZER_UNLOCKED;
+bool ntpSynchronized = false;
+bool timePersistPending = false;
+uint32_t pendingNtpEpoch = 0;
+uint32_t lastPersistedNtpEpoch = 0;
+uint32_t lastTimeSyncKickMs = 0;
 
 void setStatus(const char *format, ...) {
   char text[sizeof(statusTextBuffer)]{};
@@ -107,8 +124,136 @@ void setStatus(const char *format, ...) {
   Serial.printf("[update] %s\n", statusTextBuffer);
 }
 
-bool clockReady() {
-  return time(nullptr) > static_cast<time_t>(kSaneEpoch);
+bool timeEpochSane(uint32_t epoch) {
+  return epoch >= kTimeSeedMinEpoch && epoch <= kTimeSeedMaxEpoch;
+}
+
+bool systemTimeUsable() {
+  const time_t current = time(nullptr);
+  return current >= 0 && static_cast<uint64_t>(current) <= UINT32_MAX &&
+         timeEpochSane(static_cast<uint32_t>(current));
+}
+
+bool timeSynchronizedThisBoot() {
+  portENTER_CRITICAL(&timeMux);
+  const bool synchronized = ntpSynchronized;
+  portEXIT_CRITICAL(&timeMux);
+  return synchronized;
+}
+
+bool secureTimeReady() {
+  // A seeded clock is useful for bootstrapping TLS, but update metadata does
+  // not run until SNTP has positively synchronized during this boot.
+  return timeSynchronizedThisBoot() && systemTimeUsable();
+}
+
+void noteTimeSyncKick() {
+  portENTER_CRITICAL(&timeMux);
+  lastTimeSyncKickMs = millis();
+  portEXIT_CRITICAL(&timeMux);
+}
+
+uint32_t lastTimeSyncKick() {
+  portENTER_CRITICAL(&timeMux);
+  const uint32_t kickedAt = lastTimeSyncKickMs;
+  portEXIT_CRITICAL(&timeMux);
+  return kickedAt;
+}
+
+void onTimeSynchronized(struct timeval *tv) {
+  if (!tv || tv->tv_sec < 0 || static_cast<uint64_t>(tv->tv_sec) > UINT32_MAX) return;
+  const uint32_t epoch = static_cast<uint32_t>(tv->tv_sec);
+  if (!timeEpochSane(epoch)) return;
+
+  portENTER_CRITICAL(&timeMux);
+  ntpSynchronized = true;
+  pendingNtpEpoch = epoch;
+  timePersistPending = true;
+  portEXIT_CRITICAL(&timeMux);
+}
+
+void configureTimeSync(const char *reason) {
+  noteTimeSyncKick();
+  sntp_set_time_sync_notification_cb(onTimeSynchronized);
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  Serial.printf("[time] SNTP started%s%s\n", reason ? ": " : "",
+                reason ? reason : "");
+}
+
+void restoreTimeSeed() {
+  if (!networkPreferences.isKey(kTimeSeedKey)) {
+    Serial.println("[time] seed: no saved NTP epoch yet");
+    return;
+  }
+  const uint32_t epoch = networkPreferences.getULong(kTimeSeedKey, 0);
+  if (!timeEpochSane(epoch)) {
+    Serial.println("[time] seed: saved NTP epoch is outside sanity bounds");
+    return;
+  }
+
+  portENTER_CRITICAL(&timeMux);
+  lastPersistedNtpEpoch = epoch;
+  portEXIT_CRITICAL(&timeMux);
+
+  if (systemTimeUsable()) {
+    Serial.println("[time] seed: system clock already usable");
+    return;
+  }
+
+  struct timeval seededTime{};
+  seededTime.tv_sec = static_cast<time_t>(epoch);
+  if (settimeofday(&seededTime, nullptr) != 0) {
+    Serial.println("[time] seed: settimeofday failed");
+    return;
+  }
+  Serial.printf("[time] seed: restored last successful NTP epoch %lu\n",
+                static_cast<unsigned long>(epoch));
+}
+
+bool shouldPersistTime(uint32_t epoch) {
+  portENTER_CRITICAL(&timeMux);
+  const uint32_t previous = lastPersistedNtpEpoch;
+  portEXIT_CRITICAL(&timeMux);
+  if (previous == 0) return true;
+  const uint32_t delta = epoch >= previous ? epoch - previous : previous - epoch;
+  return delta >= kTimePersistIntervalSeconds;
+}
+
+void persistTimeSeed(uint32_t epoch) {
+  if (!timeEpochSane(epoch) || !shouldPersistTime(epoch)) return;
+  const size_t written = networkPreferences.putULong(kTimeSeedKey, epoch);
+  if (written != sizeof(uint32_t)) {
+    Serial.println("[time] seed: NVS write failed");
+    return;
+  }
+  portENTER_CRITICAL(&timeMux);
+  lastPersistedNtpEpoch = epoch;
+  portEXIT_CRITICAL(&timeMux);
+  Serial.printf("[time] seed: saved NTP epoch %lu\n",
+                static_cast<unsigned long>(epoch));
+}
+
+void serviceTimeSync(bool connected) {
+  uint32_t synchronizedEpoch = 0;
+  bool persistPending = false;
+  portENTER_CRITICAL(&timeMux);
+  if (timePersistPending) {
+    synchronizedEpoch = pendingNtpEpoch;
+    timePersistPending = false;
+    persistPending = true;
+  }
+  portEXIT_CRITICAL(&timeMux);
+
+  if (persistPending) {
+    persistTimeSeed(synchronizedEpoch);
+    Serial.printf("[time] SNTP synchronized epoch=%lu\n",
+                  static_cast<unsigned long>(synchronizedEpoch));
+  }
+
+  if (!connected || secureTimeReady()) return;
+  const uint32_t lastKick = lastTimeSyncKick();
+  if (lastKick != 0 && millis() - lastKick < kTimeSyncRetryMs) return;
+  configureTimeSync("background retry");
 }
 
 String htmlEscape(const String &value) {
@@ -301,9 +446,25 @@ void stopSetupPortal() {
   Serial.println("[wifi] setup portal stopped");
 }
 
-void beginStationConnection() {
+void beginStationConnection(bool restartRadio = false) {
   if (!savedSsid.length()) return;
-  WiFi.mode(setupPortalRunning ? WIFI_AP_STA : WIFI_STA);
+
+  WiFi.setAutoReconnect(false);
+  if (restartRadio && !setupPortalRunning) {
+    // Same cold-start station-radio bring-up used by Aircraft Radar to clear
+    // stale TLS/socket state before the first secure request.
+    Serial.println("[wifi] startup hard station-radio bring-up");
+    WiFi.disconnect(true, false);
+    delay(250);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+  } else {
+    WiFi.mode(setupPortalRunning ? WIFI_AP_STA : WIFI_STA);
+    WiFi.disconnect(false, false);
+    delay(100);
+    if (!setupPortalRunning) WiFi.setSleep(false);
+  }
+  WiFi.setAutoReconnect(true);
   WiFi.begin(savedSsid.c_str(), savedPassword.c_str());
   lastReconnectAttemptMs = millis();
   setStatus("Connecting to Wi-Fi...");
@@ -688,6 +849,10 @@ bool checkGithubRelease() {
     return false;
   }
 
+  bool sawManifestRelease = false;
+  bool manifestTransportFailed = false;
+  bool manifestRejected = false;
+
   for (JsonObject githubRelease : releases.as<JsonArray>()) {
     if (githubRelease["draft"] | false) continue;
     const String tag = githubRelease["tag_name"] | "";
@@ -701,12 +866,14 @@ bool checkGithubRelease() {
       }
     }
     if (!hasManifestAsset) continue;
+    sawManifestRelease = true;
 
     char manifestUrl[512]{};
     if (!makeManifestUrl(tag, manifestUrl, sizeof(manifestUrl))) continue;
     String manifestBody;
     if (!httpsGetText(manifestUrl, "application/octet-stream", kMaxManifestBytes,
                       manifestBody, code)) {
+      manifestTransportFailed = true;
       continue;
     }
 
@@ -714,6 +881,7 @@ bool checkGithubRelease() {
     String candidateVersion;
     String candidateAsset;
     if (!parseManifest(manifestBody, tag, candidate, candidateVersion, candidateAsset)) {
+      manifestRejected = true;
       continue;
     }
 
@@ -742,8 +910,19 @@ bool checkGithubRelease() {
     return true;
   }
 
+  if (manifestTransportFailed) {
+    setStatus("Secure GitHub release manifest download failed; will retry later");
+    return false;
+  }
+  if (manifestRejected) {
+    setStatus("Published Waveshare release manifest was rejected; nothing installed");
+    return false;
+  }
+
   snprintf(latestVersionText, sizeof(latestVersionText), "%s", ESP_PLANTS_WAVESHARE_VERSION);
-  setStatus("No compatible Waveshare update release is published yet");
+  setStatus(sawManifestRelease
+                ? "No compatible newer Waveshare release is available"
+                : "No Waveshare update release is published yet");
   rememberCheckTime();
   return true;
 }
@@ -780,9 +959,9 @@ void installTask(void *) {
 }
 
 bool shouldAutoCheck() {
-  if (!wifiConnected() || !clockReady() || checkTaskRunning || installTaskRunning) return false;
+  if (!wifiConnected() || !secureTimeReady() || checkTaskRunning || installTaskRunning) return false;
   if (espplants_ota_installer::restartState() != espplants_ota_installer::RestartState::IDLE) return false;
-  if (millis() - connectedSinceMs < kInitialAutoCheckDelayMs) return false;
+  if (millis() - bootStartedMs < kInitialAutoCheckDelayMs) return false;
   if (nextFailedCheckMs && static_cast<int32_t>(millis() - nextFailedCheckMs) < 0) return false;
 
   const time_t now = time(nullptr);
@@ -799,6 +978,7 @@ bool shouldAutoCheck() {
 void begin() {
   if (initialized) return;
   initialized = true;
+  bootStartedMs = millis();
 
   Serial.printf("[update] firmware=%s build=%s hardware=%s channel=%s updater=%u\n",
                 ESP_PLANTS_WAVESHARE_VERSION, kEmbeddedBuildId,
@@ -819,6 +999,9 @@ void begin() {
   savedPassword = networkPreferences.getString("pass", "");
   lastCheckEpoch = networkPreferences.getULong("last_chk", 0);
 
+  sntp_set_time_sync_notification_cb(onTimeSynchronized);
+  restoreTimeSeed();
+
   const uint64_t mac = ESP.getEfuseMac();
   snprintf(setupSsidText, sizeof(setupSsidText), "ESP-PLANTS-%04X",
            static_cast<unsigned>(mac & 0xffffu));
@@ -826,8 +1009,14 @@ void begin() {
            static_cast<unsigned>(mac & 0xffffffu));
 
   configurePortalRoutes();
-  if (savedSsid.length()) beginStationConnection();
-  else setStatus("Wi-Fi not configured - use SET UP WI-FI");
+  if (savedSsid.length()) {
+    const esp_reset_reason_t reason = esp_reset_reason();
+    const bool coldRadioReset =
+        reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
+    beginStationConnection(coldRadioReset);
+  } else {
+    setStatus("Wi-Fi not configured - use SET UP WI-FI");
+  }
 }
 
 void service() {
@@ -848,12 +1037,11 @@ void service() {
   const bool connected = WiFi.status() == WL_CONNECTED;
   if (connected && !sawWifiConnected) {
     sawWifiConnected = true;
-    connectedSinceMs = millis();
     strncpy(connectedSsid, WiFi.SSID().c_str(), sizeof(connectedSsid) - 1);
     strncpy(wifiAddressText, WiFi.localIP().toString().c_str(), sizeof(wifiAddressText) - 1);
     setStatus("Wi-Fi connected: %s", connectedSsid);
     Serial.printf("[wifi] IP %s\n", wifiAddressText);
-    configTime(0, 0, "pool.ntp.org", "time.cloudflare.com", "time.google.com");
+    configureTimeSync("Wi-Fi connected");
     waitingForClockNotice = false;
   } else if (!connected && sawWifiConnected) {
     sawWifiConnected = false;
@@ -893,14 +1081,16 @@ void service() {
     beginStationConnection();
   }
 
-  if (manualCheckRequested && connected && !clockReady()) {
+  serviceTimeSync(connected);
+
+  if (manualCheckRequested && connected && !secureTimeReady()) {
     if (!waitingForClockNotice) {
       waitingForClockNotice = true;
-      setStatus("Syncing internet time before secure GitHub check...");
+      setStatus("Waiting for confirmed SNTP time before secure GitHub check...");
     }
   }
 
-  if (manualCheckRequested && connected && clockReady() &&
+  if (manualCheckRequested && connected && secureTimeReady() &&
       !checkTaskRunning && !installTaskRunning &&
       espplants_ota_installer::restartState() == espplants_ota_installer::RestartState::IDLE) {
     manualCheckRequested = false;
@@ -919,7 +1109,7 @@ void service() {
     }
   }
 
-  if (installRequested && connected && clockReady() && hasUpdate &&
+  if (installRequested && connected && secureTimeReady() && hasUpdate &&
       !checkTaskRunning && !installTaskRunning &&
       espplants_ota_installer::restartState() == espplants_ota_installer::RestartState::IDLE) {
     installRequested = false;
@@ -1033,8 +1223,8 @@ void requestInstall() {
     setStatus("Wi-Fi disconnected; update not started");
     return;
   }
-  if (!clockReady()) {
-    setStatus("Secure update is waiting for internet time sync");
+  if (!secureTimeReady()) {
+    setStatus("Secure update is waiting for confirmed SNTP time sync");
     return;
   }
   if (!hasUpdate) {
