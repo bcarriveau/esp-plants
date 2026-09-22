@@ -8,12 +8,15 @@
 #include <esp_crt_bundle.h>
 #include <esp_err.h>
 #include <esp_http_client.h>
+#include <esp_heap_caps.h>
 #include <esp_sntp.h>
 #include <esp_system.h>
 #include <stdarg.h>
 #include <strings.h>
 #include <time.h>
 #include <sys/time.h>
+#include <freertos/idf_additions.h>
+#include <new>
 
 #include "build_version.h"
 #include "plants_ota_installer.h"
@@ -494,6 +497,46 @@ struct MetadataHeaderState {
   char location[kMaxRedirectUrlLength + 1U]{};
 };
 
+struct MetadataWorkspace {
+  MetadataHeaderState headers;
+  char currentUrl[kMaxRedirectUrlLength + 1U]{};
+};
+
+static_assert(sizeof(MetadataWorkspace) <= 9U * 1024U,
+              "Metadata HTTPS workspace exceeded bounded PSRAM budget");
+
+class MetadataWorkspaceGuard {
+ public:
+  MetadataWorkspaceGuard() {
+    workspace_ = static_cast<MetadataWorkspace *>(heap_caps_malloc(
+        sizeof(MetadataWorkspace), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (workspace_) new (workspace_) MetadataWorkspace{};
+  }
+
+  ~MetadataWorkspaceGuard() {
+    if (workspace_) {
+      workspace_->~MetadataWorkspace();
+      heap_caps_free(workspace_);
+    }
+  }
+
+  MetadataWorkspace *get() const { return workspace_; }
+
+ private:
+  MetadataWorkspace *workspace_ = nullptr;
+};
+
+void logHttpsMemory(const char *stage) {
+  Serial.printf(
+      "[update] HTTPS memory %s: internal=%u largest=%u psram=%u\n",
+      stage ? stage : "?",
+      static_cast<unsigned>(heap_caps_get_free_size(
+          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+      static_cast<unsigned>(heap_caps_get_largest_free_block(
+          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+      static_cast<unsigned>(ESP.getFreePsram()));
+}
+
 esp_err_t metadataEventHandler(esp_http_client_event_t *event) {
   if (!event || !event->user_data) return ESP_OK;
   MetadataHeaderState &state = *static_cast<MetadataHeaderState *>(event->user_data);
@@ -524,15 +567,25 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
   statusCode = -1;
   if (!initialUrl || !metadataHostAllowed(initialUrl)) return false;
 
-  char currentUrl[kMaxRedirectUrlLength + 1U]{};
-  snprintf(currentUrl, sizeof(currentUrl), "%s", initialUrl);
+  MetadataWorkspaceGuard workspaceGuard;
+  MetadataWorkspace *workspace = workspaceGuard.get();
+  if (!workspace) {
+    setStatus("GitHub HTTPS PSRAM workspace allocation failed");
+    return false;
+  }
+  snprintf(workspace->currentUrl, sizeof(workspace->currentUrl), "%s", initialUrl);
 
   for (uint8_t redirect = 0; redirect <= kMaxMetadataRedirects; ++redirect) {
-    if (!metadataHostAllowed(currentUrl)) return false;
+    if (!metadataHostAllowed(workspace->currentUrl)) return false;
 
-    MetadataHeaderState headers{};
+    workspace->headers = MetadataHeaderState{};
+    const size_t currentUrlLength = strlen(workspace->currentUrl);
+    const size_t transmitBufferBytes =
+        httpTransmitBufferBytes(currentUrlLength);
+    if (transmitBufferBytes == 0) return false;
+
     esp_http_client_config_t config{};
-    config.url = currentUrl;
+    config.url = workspace->currentUrl;
     config.user_agent = kUserAgent;
     config.method = HTTP_METHOD_GET;
     config.timeout_ms = static_cast<int>(kMetadataTimeoutMs);
@@ -540,13 +593,14 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     config.max_redirection_count = 0;
     config.transport_type = HTTP_TRANSPORT_OVER_SSL;
     config.buffer_size = 2048;
-    config.buffer_size_tx = static_cast<int>(httpTransmitBufferBytes(strlen(currentUrl)));
+    config.buffer_size_tx = static_cast<int>(transmitBufferBytes);
     config.keep_alive_enable = false;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.skip_cert_common_name_check = false;
     config.event_handler = metadataEventHandler;
-    config.user_data = &headers;
+    config.user_data = &workspace->headers;
 
+    logHttpsMemory("before TLS");
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) return false;
     if (accept) esp_http_client_set_header(client, "Accept", accept);
@@ -556,12 +610,15 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     bool opened = false;
     const esp_err_t openResult = esp_http_client_open(client, 0);
     if (openResult != ESP_OK) {
+      logHttpsMemory("TLS failed");
       esp_http_client_cleanup(client);
       return false;
     }
     opened = true;
+    logHttpsMemory("TLS connected");
+
     const int64_t length = esp_http_client_fetch_headers(client);
-    if (length < 0 || headers.invalid) {
+    if (length < 0 || workspace->headers.invalid) {
       esp_http_client_close(client);
       esp_http_client_cleanup(client);
       return false;
@@ -572,14 +629,16 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
                                 statusCode == 303 || statusCode == 307 ||
                                 statusCode == 308;
     if (redirectStatus) {
-      if (redirect >= kMaxMetadataRedirects || !headers.location[0] ||
-          !metadataHostAllowed(headers.location) ||
-          strlen(headers.location) >= sizeof(currentUrl)) {
+      if (redirect >= kMaxMetadataRedirects ||
+          !workspace->headers.location[0] ||
+          !metadataHostAllowed(workspace->headers.location) ||
+          strlen(workspace->headers.location) >= sizeof(workspace->currentUrl)) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return false;
       }
-      snprintf(currentUrl, sizeof(currentUrl), "%s", headers.location);
+      snprintf(workspace->currentUrl, sizeof(workspace->currentUrl), "%s",
+               workspace->headers.location);
       esp_http_client_close(client);
       esp_http_client_cleanup(client);
       continue;
@@ -602,13 +661,15 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     uint32_t lastDataMs = millis();
     bool ok = true;
     while (!esp_http_client_is_complete_data_received(client)) {
-      const int got = esp_http_client_read(client, reinterpret_cast<char *>(buffer), sizeof(buffer));
+      const int got = esp_http_client_read(
+          client, reinterpret_cast<char *>(buffer), sizeof(buffer));
       if (got > 0) {
         if (body.length() + static_cast<size_t>(got) > maximumBytes) {
           ok = false;
           break;
         }
-        body.concat(reinterpret_cast<const char *>(buffer), static_cast<unsigned int>(got));
+        body.concat(reinterpret_cast<const char *>(buffer),
+                    static_cast<unsigned int>(got));
         lastDataMs = millis();
       } else if (got == 0) {
         if (esp_http_client_is_complete_data_received(client)) break;
@@ -619,7 +680,8 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
         delay(10);
       } else {
         const int socketError = esp_http_client_get_errno(client);
-        if (socketError == EAGAIN || socketError == EWOULDBLOCK || socketError == ETIMEDOUT) {
+        if (socketError == EAGAIN || socketError == EWOULDBLOCK ||
+            socketError == ETIMEDOUT) {
           if (millis() - lastDataMs < kMetadataIdleTimeoutMs) continue;
         }
         ok = false;
@@ -932,7 +994,21 @@ void checkTask(void *) {
   const bool ok = checkGithubRelease();
   if (!ok) nextFailedCheckMs = millis() + kFailedCheckRetryMs;
   checkTaskRunning = false;
-  vTaskDelete(nullptr);
+  vTaskDeleteWithCaps(xTaskGetCurrentTaskHandle());
+}
+
+bool startCheckTask(const char *failureMessage) {
+  // Certificate verification needs scarce internal DRAM. Put the disposable
+  // metadata task stack in PSRAM so MbedTLS has room for RSA/X.509 work.
+  // The OTA install task intentionally stays on an internal stack because
+  // PSRAM may be unavailable while flash writes are in progress.
+  const BaseType_t result = xTaskCreateWithCaps(
+      checkTask, "espplants-update-check", 16384, nullptr, 1, nullptr,
+      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (result == pdPASS) return true;
+  checkTaskRunning = false;
+  setStatus("%s", failureMessage);
+  return false;
 }
 
 void installProgress(uint32_t receivedBytes, uint32_t packageBytes) {
@@ -1096,17 +1172,11 @@ void service() {
     manualCheckRequested = false;
     waitingForClockNotice = false;
     checkTaskRunning = true;
-    if (xTaskCreate(checkTask, "espplants-update-check", 16384, nullptr, 1, nullptr) != pdPASS) {
-      checkTaskRunning = false;
-      setStatus("Could not start update-check task");
-    }
+    startCheckTask("Could not start update-check task");
   } else if (shouldAutoCheck()) {
     autoCheckedThisBoot = true;
     checkTaskRunning = true;
-    if (xTaskCreate(checkTask, "espplants-update-check", 16384, nullptr, 1, nullptr) != pdPASS) {
-      checkTaskRunning = false;
-      setStatus("Could not start automatic update-check task");
-    }
+    startCheckTask("Could not start automatic update-check task");
   }
 
   if (installRequested && connected && secureTimeReady() && hasUpdate &&
