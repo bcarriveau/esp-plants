@@ -826,7 +826,7 @@ bool startZigbee() {
   zbGateway.setManufacturerAndModel("ESP PLANTS", "PlantGateway-H2");
   Zigbee.addEndpoint(&zbGateway);
   Zigbee.setDebugMode(true);
-  Zigbee.setRebootOpenNetwork(0);
+  Zigbee.setRebootOpenNetwork(30);
 
   // ESP PLANTS supports up to 32 plant sensors plus infrastructure. Grow the
   // stack tables before esp_zb_init(), then allow substantial direct-child
@@ -835,7 +835,7 @@ bool startZigbee() {
   esp_zb_cfg_t coordinatorConfig = ZIGBEE_DEFAULT_COORDINATOR_CONFIG();
   coordinatorConfig.nwk_cfg.zczr_cfg.max_children = kCoordinatorMaxChildren;
 
-  if (!Zigbee.begin(&coordinatorConfig)) {
+  if (!Zigbee.begin(&coordinatorConfig, false)) {
     Serial.println("[zigbee] FAILED to start coordinator");
     return false;
   }

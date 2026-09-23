@@ -150,6 +150,9 @@ bool pairReplacing = false;
 int pairTargetSlot = -1;
 int pairFoundSlot = -1;
 uint32_t pairStartedMs = 0;
+// Alpha.18 permit-join stale-status guard: ignore a queued pre-request zero
+// briefly while waiting for the H2 to acknowledge a new nonzero join window.
+uint32_t permitJoinGuardUntilMs = 0;
 
 lv_obj_t *homePage = nullptr;
 lv_obj_t *allPage = nullptr;
@@ -703,6 +706,7 @@ void sendHello() {
 void requestJoin(uint8_t seconds) {
   sendFrame(plantlink::MessageType::PermitJoin, &seconds, 1);
   permitJoinRemaining = seconds;
+  permitJoinGuardUntilMs = seconds ? millis() + 3000u : 0;
   uiDirty = true;
   Serial.printf("[plantlink] permit join requested: %u s\n", seconds);
 }
@@ -2858,7 +2862,19 @@ void handleNetworkStatus(const plantlink::Frame &frame) {
   networkReady = frame.payload[0] != 0;
   zigbeeChannel = frame.payload[1];
   h2SensorCount = frame.payload[2];
-  permitJoinRemaining = frame.payload[3];
+  const uint8_t reportedPermitJoin = frame.payload[3];
+  const bool joinGuardActive =
+      permitJoinGuardUntilMs != 0 &&
+      static_cast<int32_t>(permitJoinGuardUntilMs - millis()) > 0;
+  if (reportedPermitJoin > 0) {
+    permitJoinRemaining = reportedPermitJoin;
+    permitJoinGuardUntilMs = 0;
+  } else if (!joinGuardActive || permitJoinRemaining == 0) {
+    permitJoinRemaining = 0;
+    permitJoinGuardUntilMs = 0;
+  } else {
+    Serial.println("[plantlink] ignored stale permit-join=0 while awaiting H2 acknowledgement");
+  }
   h2InfrastructureCount = frame.payloadLength >= 5 ? frame.payload[4] : 0;
   uiDirty = true;
 }

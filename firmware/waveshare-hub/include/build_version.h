@@ -1,12 +1,12 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.17"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.18"
 #define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_PRODUCT_ID "esp-plants-waveshare"
 #define ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL "alpha"
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Captures and validates GitHub H2 release redirects through bounded HTTPS header handling."
+  "Guards first-click Zigbee pairing status and improves router rejoin after H2 reboot."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif
