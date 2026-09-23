@@ -826,7 +826,7 @@ bool startZigbee() {
   zbGateway.setManufacturerAndModel("ESP PLANTS", "PlantGateway-H2");
   Zigbee.addEndpoint(&zbGateway);
   Zigbee.setDebugMode(true);
-  Zigbee.setRebootOpenNetwork(30);
+  Zigbee.setRebootOpenNetwork(0);
 
   // ESP PLANTS supports up to 32 plant sensors plus infrastructure. Grow the
   // stack tables before esp_zb_init(), then allow substantial direct-child
@@ -871,6 +871,13 @@ void setup() {
   }
 
   startZigbee();
+
+  // Alpha.20 one-shot post-start router rejoin window. This runs exactly once
+  // per H2 boot, after the restored coordinator reports ready.
+  if (zigbeeReady) {
+    Zigbee.openNetwork(30);
+    Serial.println("[zigbee] one-shot router rejoin window open for 30 seconds");
+  }
   sendNetworkStatus();
   printUsbConsoleHelp();
 }
