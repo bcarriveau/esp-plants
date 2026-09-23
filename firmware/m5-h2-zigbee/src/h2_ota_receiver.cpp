@@ -12,7 +12,7 @@
 
 namespace {
 constexpr uart_port_t kUart=UART_NUM_1;
-constexpr uint32_t kMaxFirmware=0xEC000u;
+constexpr uint32_t kMaxFirmware=0xE0000u;
 
 struct FirmwareIdentityBlock {
   char marker[sizeof(ESP_PLANTS_H2_DISTRIBUTION_MARKER)];
