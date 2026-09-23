@@ -10,6 +10,7 @@
 #include "freertos/queue.h"
 
 #include "plantlink.h"
+#include "build_version.h"
 #include "zg303z_tuya.h"
 
 // Arduino-ESP32 registers this APS handler internally for binding-table housekeeping.
@@ -169,7 +170,7 @@ void sendHeartbeat() {
 }
 
 void sendHelloAck() {
-  static constexpr char kBuild[] = "m5-h2-zigbee/0.1-dev";
+  static constexpr char kBuild[] = ESP_PLANTS_H2_BUILD_ID;
   sendFrame(plantlink::MessageType::HelloAck,
             reinterpret_cast<const uint8_t *>(kBuild), sizeof(kBuild) - 1,
             plantlink::FlagResponse);

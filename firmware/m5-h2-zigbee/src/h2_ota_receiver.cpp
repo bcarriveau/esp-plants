@@ -12,10 +12,8 @@
 
 namespace {
 constexpr uart_port_t kUart=UART_NUM_1;
-constexpr uint32_t kMaxFirmware=0xC0000u;
+constexpr uint32_t kMaxFirmware=0xEC000u;
 
-// Phase 2 release identity must exist as literal bytes in firmware.bin.
-// The release packager and receiver both validate these exact strings.
 struct FirmwareIdentityBlock {
   char marker[sizeof(ESP_PLANTS_H2_DISTRIBUTION_MARKER)];
   char build[sizeof(ESP_PLANTS_H2_BUILD_ID)];
