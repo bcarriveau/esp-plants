@@ -136,6 +136,8 @@ uint8_t zigbeeChannel = 0;
 uint8_t h2SensorCount = 0;
 uint8_t h2InfrastructureCount = 0;
 uint8_t permitJoinRemaining = 0;
+// Alpha.21 H2 firmware identity display. Populated only from H2 HelloAck.
+char h2BuildId[96]{};
 int selectedSensor = -1;
 int manualHomeSensor = -1;
 uint32_t manualHomeUntilMs = 0;
@@ -212,6 +214,7 @@ uint8_t updateQrEncodedBuffer[kSetupQrEncodeBufferBytes]{};
 char updateQrPayload[128]{};
 lv_obj_t *updateCurrentVersion = nullptr;
 lv_obj_t *updateLatestVersion = nullptr;
+lv_obj_t *updateH2Version = nullptr;
 lv_obj_t *updateStatus = nullptr;
 lv_obj_t *updateCheckButton = nullptr;
 lv_obj_t *updateCheckLabel = nullptr;
@@ -2259,11 +2262,21 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_width(updateLatestVersion, 150);
   lv_label_set_long_mode(updateLatestVersion, LV_LABEL_LONG_DOT);
 
+  // Alpha.21 H2 firmware identity display.  y=104, font 14 => bottom ~121;
+  // updateStatus begins at y=128, so the rows do not overlap.
+  updateH2Version = lv_label_create(software);
+  lv_label_set_text(updateH2Version, "H2 GATEWAY: unavailable");
+  lv_obj_set_style_text_font(updateH2Version, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(updateH2Version, lv_color_hex(0x9DB5A5), 0);
+  lv_obj_set_pos(updateH2Version, 20, 104);
+  lv_obj_set_width(updateH2Version, 326);
+  lv_label_set_long_mode(updateH2Version, LV_LABEL_LONG_DOT);
+
   updateStatus = lv_label_create(software);
   lv_label_set_text(updateStatus, "Connect Wi-Fi to check for updates.");
   lv_obj_set_style_text_font(updateStatus, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(updateStatus, lv_color_hex(0xA5C3AD), 0);
-  lv_obj_set_pos(updateStatus, 20, 120);
+  lv_obj_set_pos(updateStatus, 20, 128);
   lv_obj_set_width(updateStatus, 326);
   lv_obj_set_height(updateStatus, 60);
   lv_label_set_long_mode(updateStatus, LV_LABEL_LONG_WRAP);
@@ -2824,6 +2837,19 @@ void refreshUi() {
 
   snprintf(text, sizeof(text), "v%s", espplants_update::currentVersion());
   label(updateCurrentVersion, text);
+
+  if (!h2Online) {
+    label(updateH2Version, "H2 GATEWAY: unavailable");
+  } else if (strncmp(h2BuildId, "ESPPLANTS-H2-", 13) == 0 && h2BuildId[13]) {
+    snprintf(text, sizeof(text), "H2 GATEWAY: v%s", h2BuildId + 13);
+    label(updateH2Version, text);
+  } else if (h2BuildId[0]) {
+    snprintf(text, sizeof(text), "H2 GATEWAY: %s", h2BuildId);
+    label(updateH2Version, text);
+  } else {
+    label(updateH2Version, "H2 GATEWAY: reading version...");
+  }
+
   if (strcmp(espplants_update::latestVersion(), "--") == 0) {
     label(updateLatestVersion, "--");
   } else {
@@ -3054,7 +3080,10 @@ void handleFrame(const plantlink::Frame &frame) {
       char build[plantlink::kMaxPayloadBytes + 1]{};
       const size_t n = frame.payloadLength < sizeof(build) - 1 ? frame.payloadLength : sizeof(build) - 1;
       memcpy(build, frame.payload, n);
+      strncpy(h2BuildId, build, sizeof(h2BuildId) - 1);
+      h2BuildId[sizeof(h2BuildId) - 1] = '\0';
       Serial.printf("[plantlink] H2 hello: %s\n", build);
+      uiDirty = true;
       break;
     }
     case plantlink::MessageType::NetworkStatus: handleNetworkStatus(frame); break;
@@ -3070,7 +3099,10 @@ void servicePlantLink() {
   plantlink::Frame frame;
   while (Serial0.available()) if (decoder.feed(static_cast<uint8_t>(Serial0.read()), frame)) handleFrame(frame);
   const uint32_t now = millis();
-  if (!h2Online && now - lastHelloMs >= kHelloIntervalMs) { lastHelloMs = now; sendHello(); }
+  if ((!h2Online || !h2BuildId[0]) && now - lastHelloMs >= kHelloIntervalMs) {
+    lastHelloMs = now;
+    sendHello();
+  }
   if (h2Online && now - lastH2RxMs > kLinkTimeoutMs) {
     h2Online = false; networkReady = false; permitJoinRemaining = 0; uiDirty = true;
   }
