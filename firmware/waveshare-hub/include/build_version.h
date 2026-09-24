@@ -1,12 +1,12 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.28"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.29"
 #define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_PRODUCT_ID "esp-plants-waveshare"
 #define ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL "alpha"
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Polishes personality selection with persistent highlighting and aligned Settings captions."
+  "Cleans up personality and temperature layout while keeping the crash-safe selector."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif
