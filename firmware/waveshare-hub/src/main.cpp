@@ -41,7 +41,7 @@ constexpr size_t kSetupQrEncodeBufferBytes =
 static_assert(kSetupQrEncodeBufferBytes == 173U,
               "Unexpected ESP PLANTS setup QR encoder buffer size");
 
-enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3, Advanced = 4 };
+enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3, Advanced = 4, Personality = 5 };
 enum class RenameTarget : uint8_t { Plant = 0, Device = 1, Infrastructure = 2 };
 enum class PairDialogState : uint8_t {
   Hidden = 0,
@@ -205,6 +205,12 @@ lv_obj_t *settingsZigbee = nullptr;
 lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
 lv_obj_t *settingsTheme = nullptr;
+// Alpha.24 personality picker modal
+// Alpha.25 lazy personality modal startup guard
+// Alpha.26 personality settings page
+lv_obj_t *personalityPage = nullptr;
+lv_obj_t *themeChoiceButtons[6]{};
+espplants_phrases::Theme pendingTheme = espplants_phrases::Theme::MIXED;
 lv_obj_t *settingsPair = nullptr;
 lv_obj_t *settingsDeviceName = nullptr;
 lv_obj_t *updateModal = nullptr;
@@ -824,13 +830,17 @@ void showPage(Page page) {
                                              : lv_obj_add_flag(settingsPage, LV_OBJ_FLAG_HIDDEN);
   if (advancedPage) (page == Page::Advanced) ? lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_HIDDEN)
                                              : lv_obj_add_flag(advancedPage, LV_OBJ_FLAG_HIDDEN);
+  if (personalityPage) (page == Page::Personality) ? lv_obj_clear_flag(personalityPage, LV_OBJ_FLAG_HIDDEN)
+                                                       : lv_obj_add_flag(personalityPage, LV_OBJ_FLAG_HIDDEN);
 
   const lv_color_t active = lv_color_hex(0x1E3529);
   const lv_color_t idle = lv_color_hex(0x151F1A);
   if (navHome) lv_obj_set_style_bg_color(navHome, page == Page::Home ? active : idle, 0);
   if (navAll) lv_obj_set_style_bg_color(navAll, page == Page::All ? active : idle, 0);
   if (navPlant) lv_obj_set_style_bg_color(navPlant, page == Page::Plant ? active : idle, 0);
-  if (navSettings) lv_obj_set_style_bg_color(navSettings, page == Page::Settings ? active : idle, 0);
+  if (navSettings) lv_obj_set_style_bg_color(
+      navSettings,
+      (page == Page::Settings || page == Page::Personality) ? active : idle, 0);
   uiDirty = true;
 }
 
@@ -874,16 +884,51 @@ void unitEvent(lv_event_t *event) {
   uiDirty = true;
 }
 
+void refreshThemeDialogSelection() {
+  for (uint8_t i=0;i<6;++i) {
+    if (!themeChoiceButtons[i]) continue;
+    const bool selected=i==static_cast<uint8_t>(pendingTheme);
+    lv_obj_set_style_bg_color(themeChoiceButtons[i],
+                              lv_color_hex(selected ? 0x3F7A4E : 0x233029),0);
+    lv_obj_set_style_border_width(themeChoiceButtons[i],selected ? 2 : 1,0);
+    lv_obj_set_style_border_color(themeChoiceButtons[i],
+                                  lv_color_hex(selected ? 0x7BC18B : 0x405348),0);
+  }
+}
+
 void themeEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  uint8_t next=static_cast<uint8_t>(phraseTheme)+1u;
-  if (next>static_cast<uint8_t>(espplants_phrases::Theme::MIXED)) next=0;
-  phraseTheme=static_cast<espplants_phrases::Theme>(next);
-  preferences.putUChar("phrase_theme",next);
-  for (auto &sensor:sensors) sensor.phraseRotation=espplants_phrases::Rotation{};
-  Serial.printf("[settings] phrase theme=%s\n",
-                espplants_phrases::themeName(phraseTheme));
+  pendingTheme=phraseTheme;
+  refreshThemeDialogSelection();
+  showPage(Page::Personality);
+}
+
+void themeChoiceEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  const intptr_t value=reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
+  if (value<0 || value>static_cast<intptr_t>(espplants_phrases::Theme::MIXED)) return;
+  pendingTheme=static_cast<espplants_phrases::Theme>(value);
+  refreshThemeDialogSelection();
+}
+
+void themeCancelEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  pendingTheme=phraseTheme;
+  refreshThemeDialogSelection();
+  showPage(Page::Settings);
+}
+
+void themeSaveEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (pendingTheme!=phraseTheme) {
+    phraseTheme=pendingTheme;
+    preferences.putUChar("phrase_theme",static_cast<uint8_t>(phraseTheme));
+    for (auto &sensor:sensors) sensor.phraseRotation=espplants_phrases::Rotation{};
+    Serial.printf("[settings] phrase theme=%s\n",
+                  espplants_phrases::themeName(phraseTheme));
+  }
   uiDirty=true;
+  showPage(Page::Settings);
 }
 
 void startPairing(bool replacing, int targetSlot);
@@ -1879,7 +1924,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_set_pos(title, 22, 18);
 
   cap = lv_label_create(setup);
-  lv_label_set_text(cap, "PERSONALITY                 TEMP");
+  lv_label_set_text(cap, "PERSONALITY");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(cap, 22, 67);
@@ -1891,7 +1936,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_set_style_bg_color(unitButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(unitButton, unitEvent, LV_EVENT_CLICKED, nullptr);
   settingsUnit = lv_label_create(unitButton);
-  lv_obj_set_style_text_font(settingsUnit, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_font(settingsUnit, &lv_font_montserrat_14, 0);
   lv_obj_center(settingsUnit);
 
   lv_obj_t *themeButton = lv_btn_create(setup);
@@ -2463,6 +2508,79 @@ void buildRename(lv_obj_t *screen) {
 }
 
 
+
+void buildPersonality(lv_obj_t *screen) {
+  personalityPage=lv_obj_create(screen);
+  lv_obj_set_pos(personalityPage,0,66);
+  lv_obj_set_size(personalityPage,800,356);
+  lv_obj_set_style_border_width(personalityPage,0,0);
+  lv_obj_set_style_bg_opa(personalityPage,LV_OPA_TRANSP,0);
+  lv_obj_set_style_pad_all(personalityPage,0,0);
+  lv_obj_clear_flag(personalityPage,LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *p=card(personalityPage,14,10,772,334);
+
+  lv_obj_t *title=lv_label_create(p);
+  lv_label_set_text(title,"PLANT PERSONALITY");
+  lv_obj_set_style_text_font(title,&lv_font_montserrat_24,0);
+  lv_obj_set_style_text_color(title,lv_color_hex(0xE5ECE7),0);
+  lv_obj_set_pos(title,18,14);
+
+  lv_obj_t *hint=lv_label_create(p);
+  lv_label_set_text(hint,"Choose a phrase style, then tap SAVE.");
+  lv_obj_set_style_text_font(hint,&lv_font_montserrat_12,0);
+  lv_obj_set_style_text_color(hint,lv_color_hex(0x8DA695),0);
+  lv_obj_set_pos(hint,18,47);
+
+  static const char *const names[6]={
+    "CLASSIC","FUNNY","SARCASTIC","DRAMATIC","RUDE","MIXED - ALL"
+  };
+  for (uint8_t i=0;i<6;++i) {
+    lv_obj_t *button=lv_btn_create(p);
+    themeChoiceButtons[i]=button;
+    lv_obj_set_size(button,736,30);
+    lv_obj_set_pos(button,18,68+i*34);
+    lv_obj_set_style_radius(button,8,0);
+    lv_obj_set_style_shadow_width(button,0,0);
+    lv_obj_add_event_cb(button,themeChoiceEvent,LV_EVENT_CLICKED,
+                        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+    lv_obj_t *name=lv_label_create(button);
+    lv_label_set_text(name,names[i]);
+    lv_obj_set_style_text_font(name,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(name,lv_color_hex(0xE5ECE7),0);
+    lv_obj_center(name);
+  }
+
+  lv_obj_t *cancel=lv_btn_create(p);
+  lv_obj_set_size(cancel,350,42);
+  lv_obj_set_pos(cancel,18,278);
+  lv_obj_set_style_radius(cancel,10,0);
+  lv_obj_set_style_bg_color(cancel,lv_color_hex(0x233029),0);
+  lv_obj_set_style_border_width(cancel,1,0);
+  lv_obj_set_style_border_color(cancel,lv_color_hex(0x405348),0);
+  lv_obj_add_event_cb(cancel,themeCancelEvent,LV_EVENT_CLICKED,nullptr);
+  lv_obj_t *cancelLabel=lv_label_create(cancel);
+  lv_label_set_text(cancelLabel,"CANCEL");
+  lv_obj_set_style_text_font(cancelLabel,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(cancelLabel,lv_color_hex(0xE5ECE7),0);
+  lv_obj_center(cancelLabel);
+
+  lv_obj_t *save=lv_btn_create(p);
+  lv_obj_set_size(save,350,42);
+  lv_obj_set_pos(save,404,278);
+  lv_obj_set_style_radius(save,10,0);
+  lv_obj_set_style_bg_color(save,lv_color_hex(0x3F7A4E),0);
+  lv_obj_add_event_cb(save,themeSaveEvent,LV_EVENT_CLICKED,nullptr);
+  lv_obj_t *saveLabel=lv_label_create(save);
+  lv_label_set_text(saveLabel,"SAVE");
+  lv_obj_set_style_text_font(saveLabel,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(saveLabel,lv_color_hex(0xE5ECE7),0);
+  lv_obj_center(saveLabel);
+
+  pendingTheme=phraseTheme;
+  refreshThemeDialogSelection();
+}
+
 void buildPairDialog(lv_obj_t *screen) {
   pairModal = lv_obj_create(screen);
   lv_obj_set_pos(pairModal, 0, 0);
@@ -2547,6 +2665,7 @@ void buildUi() {
   buildPlant(screen);
   buildSettings(screen);
   buildAdvanced(screen);
+  buildPersonality(screen);
   buildNav(screen);
   buildRename(screen);
   buildPairDialog(screen);
@@ -2799,8 +2918,9 @@ void refreshUi() {
   else snprintf(text, sizeof(text), "H2 OFFLINE");
   label(settingsZigbee, text);
   snprintf(text, sizeof(text), "%u", static_cast<unsigned>(count)); label(settingsPlants, text);
-  label(settingsUnit, useFahrenheit ? "F" : "C");
-  label(settingsTheme, espplants_phrases::themeName(phraseTheme));
+  label(settingsUnit, useFahrenheit ? "TEMP °F" : "TEMP °C");
+  snprintf(text,sizeof(text),"%s  >",espplants_phrases::themeName(phraseTheme));
+  label(settingsTheme,text);
   if (permitJoinRemaining) snprintf(text, sizeof(text), "PAIR %us", permitJoinRemaining);
   else snprintf(text, sizeof(text), "ADD SENSOR");
   label(settingsPair, text);
