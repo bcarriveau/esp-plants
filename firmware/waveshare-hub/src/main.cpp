@@ -209,6 +209,7 @@ lv_obj_t *settingsTheme = nullptr;
 // Alpha.25 lazy personality modal startup guard
 // Alpha.26 personality settings page
 // Alpha.27 zero-allocation personality selector
+// Alpha.28 personality selection polish
 espplants_phrases::Theme pendingTheme = espplants_phrases::Theme::MIXED;
 lv_obj_t *settingsPair = nullptr;
 lv_obj_t *settingsDeviceName = nullptr;
@@ -891,6 +892,18 @@ static const char *kPersonalityMap[] = {
 
 bool personalityDialogActive = false;
 
+void refreshPersonalitySelection() {
+  if (!renameKeyboard) return;
+  lv_btnmatrix_set_one_checked(renameKeyboard,true);
+  for (uint16_t i=0;i<6;++i) {
+    lv_btnmatrix_set_btn_ctrl(renameKeyboard,i,LV_BTNMATRIX_CTRL_CHECKABLE);
+    if (i==static_cast<uint16_t>(pendingTheme))
+      lv_btnmatrix_set_btn_ctrl(renameKeyboard,i,LV_BTNMATRIX_CTRL_CHECKED);
+    else
+      lv_btnmatrix_clear_btn_ctrl(renameKeyboard,i,LV_BTNMATRIX_CTRL_CHECKED);
+  }
+}
+
 void themeEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   if (!renameModal || !renameKeyboard || !renameInput) return;
@@ -898,6 +911,8 @@ void themeEvent(lv_event_t *event) {
   pendingTheme=phraseTheme;
   personalityDialogActive=true;
   label(renameTitle,"PLANT PERSONALITY");
+  lv_obj_set_pos(renameTitle,18,14);
+  lv_obj_set_pos(renameHint,20,44);
 
   char hint[96]{};
   snprintf(hint,sizeof(hint),"Selected: %s. Tap SAVE to apply.",
@@ -909,6 +924,13 @@ void themeEvent(lv_event_t *event) {
   lv_obj_set_pos(renameKeyboard,18,82);
   lv_obj_set_size(renameKeyboard,764,380);
   lv_btnmatrix_set_map(renameKeyboard,kPersonalityMap);
+  lv_obj_set_style_bg_color(renameKeyboard,lv_color_hex(0x3F7A4E),
+                            LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_border_width(renameKeyboard,2,
+                                LV_PART_ITEMS | LV_STATE_CHECKED);
+  lv_obj_set_style_border_color(renameKeyboard,lv_color_hex(0x8DD39C),
+                                LV_PART_ITEMS | LV_STATE_CHECKED);
+  refreshPersonalitySelection();
   lv_obj_clear_flag(renameModal,LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
 }
@@ -1036,7 +1058,14 @@ void removeEvent(lv_event_t *event) {
 void closeRename() {
   if (personalityDialogActive) {
     personalityDialogActive=false;
+    lv_btnmatrix_set_one_checked(renameKeyboard,false);
+    lv_btnmatrix_clear_btn_ctrl_all(
+        renameKeyboard,
+        static_cast<lv_btnmatrix_ctrl_t>(
+            LV_BTNMATRIX_CTRL_CHECKABLE | LV_BTNMATRIX_CTRL_CHECKED));
     lv_obj_clear_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(renameTitle,18,8);
+    lv_obj_set_pos(renameHint,20,36);
     lv_obj_set_pos(renameKeyboard,18,158);
     lv_obj_set_size(renameKeyboard,764,304);
   }
@@ -1145,6 +1174,7 @@ void renameKeyboardEvent(lv_event_t *event) {
     else if (strcmp(key,"MIXED - ALL")==0) pendingTheme=espplants_phrases::Theme::MIXED;
     else return;
 
+    refreshPersonalitySelection();
     char hint[96]{};
     snprintf(hint,sizeof(hint),"Selected: %s. Tap SAVE to apply.",
              espplants_phrases::themeName(pendingTheme));
@@ -1950,11 +1980,17 @@ void buildSettings(lv_obj_t *screen) {
   lv_label_set_text(cap, "PERSONALITY");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 22, 67);
+  lv_obj_set_pos(cap, 112, 50);
+
+  lv_obj_t *tempCap = lv_label_create(setup);
+  lv_label_set_text(tempCap, "TEMP UNIT");
+  lv_obj_set_style_text_font(tempCap, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(tempCap, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(tempCap, 242, 50);
 
   lv_obj_t *unitButton = lv_btn_create(setup);
-  lv_obj_set_size(unitButton, 92, 46);
-  lv_obj_set_pos(unitButton, 242, 56);
+  lv_obj_set_size(unitButton, 92, 40);
+  lv_obj_set_pos(unitButton, 242, 66);
   lv_obj_set_style_radius(unitButton, 12, 0);
   lv_obj_set_style_bg_color(unitButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(unitButton, unitEvent, LV_EVENT_CLICKED, nullptr);
@@ -1963,8 +1999,8 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_center(settingsUnit);
 
   lv_obj_t *themeButton = lv_btn_create(setup);
-  lv_obj_set_size(themeButton, 120, 46);
-  lv_obj_set_pos(themeButton, 112, 56);
+  lv_obj_set_size(themeButton, 120, 40);
+  lv_obj_set_pos(themeButton, 112, 66);
   lv_obj_set_style_radius(themeButton, 12, 0);
   lv_obj_set_style_bg_color(themeButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(themeButton, themeEvent, LV_EVENT_CLICKED, nullptr);
