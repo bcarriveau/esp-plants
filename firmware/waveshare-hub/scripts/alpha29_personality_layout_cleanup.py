@@ -7,22 +7,25 @@ s=p.read_text(encoding="utf-8")
 if "Alpha.28 personality selection polish" not in s:
     raise RuntimeError("alpha.29 requires current alpha.28 source")
 
-if "Alpha.29 personality layout cleanup" in s:
-    Return()
-
-def replace_once(old,new,what):
+def replace_if_present(old,new):
     global s
-    if old not in s:
-        raise RuntimeError("alpha.29 anchor missing: "+what)
-    s=s.replace(old,new,1)
+    if old in s:
+        s=s.replace(old,new,1)
+        return True
+    return False
 
-s=s.replace(
-    "// Alpha.28 personality selection polish\n",
-    "// Alpha.28 personality selection polish\n// Alpha.29 personality layout cleanup\n",
-    1
-)
+def require_any(what,*needles):
+    if not any(n in s for n in needles):
+        raise RuntimeError("alpha.29 unexpected source near: "+what)
 
-old = '''  pendingTheme=phraseTheme;
+if "Alpha.29 personality layout cleanup" not in s:
+    s=s.replace(
+        "// Alpha.28 personality selection polish\n",
+        "// Alpha.28 personality selection polish\n"
+        "// Alpha.29 personality layout cleanup\n",
+        1)
+
+old_open='''  pendingTheme=phraseTheme;
   personalityDialogActive=true;
   label(renameTitle,"PLANT PERSONALITY");
   lv_obj_set_pos(renameTitle,18,14);
@@ -46,7 +49,7 @@ old = '''  pendingTheme=phraseTheme;
                                 LV_PART_ITEMS | LV_STATE_CHECKED);
   refreshPersonalitySelection();
 '''
-new = '''  pendingTheme=phraseTheme;
+new_open='''  pendingTheme=phraseTheme;
   personalityDialogActive=true;
   label(renameTitle,"PLANT PERSONALITY");
   lv_obj_set_pos(renameTitle,36,18);
@@ -71,57 +74,36 @@ new = '''  pendingTheme=phraseTheme;
                                 LV_PART_ITEMS | LV_STATE_CHECKED);
   refreshPersonalitySelection();
 '''
-replace_once(old,new,"themeEvent layout")
+replace_if_present(old_open,new_open)
+require_any("personality open layout",
+            "lv_obj_set_pos(renameKeyboard,36,94);",
+            "lv_obj_set_pos(renameKeyboard,18,82);")
 
-old = '''  if (personalityDialogActive) {
-    personalityDialogActive=false;
-    lv_btnmatrix_set_one_checked(renameKeyboard,false);
-    lv_btnmatrix_clear_btn_ctrl_all(
-        renameKeyboard,
-        static_cast<lv_btnmatrix_ctrl_t>(
-            LV_BTNMATRIX_CTRL_CHECKABLE | LV_BTNMATRIX_CTRL_CHECKED));
-    lv_obj_clear_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(renameTitle,18,8);
+restore_anchor='''    lv_obj_set_pos(renameTitle,18,8);
+    lv_obj_set_pos(renameHint,20,36);
+    lv_obj_set_pos(renameKeyboard,18,158);
+'''
+restore_new='''    lv_obj_set_pos(renameTitle,18,8);
     lv_obj_set_pos(renameHint,20,36);
     lv_obj_set_width(renameHint,520);
     lv_obj_set_pos(renameKeyboard,18,158);
-    lv_obj_set_size(renameKeyboard,764,304);
-  }
 '''
-new = '''  if (personalityDialogActive) {
-    personalityDialogActive=false;
-    lv_btnmatrix_set_one_checked(renameKeyboard,false);
-    lv_btnmatrix_clear_btn_ctrl_all(
-        renameKeyboard,
-        static_cast<lv_btnmatrix_ctrl_t>(
-            LV_BTNMATRIX_CTRL_CHECKABLE | LV_BTNMATRIX_CTRL_CHECKED));
-    lv_obj_clear_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(renameTitle,18,8);
-    lv_obj_set_pos(renameHint,20,36);
-    lv_obj_set_width(renameHint,520);
-    lv_obj_set_pos(renameKeyboard,18,158);
-    lv_obj_set_size(renameKeyboard,764,304);
-  }
-'''
-replace_once(old,new,"closeRename restore width")
+if restore_anchor in s:
+    s=s.replace(restore_anchor,restore_new,1)
+require_any("closeRename restore",
+            "lv_obj_set_pos(renameHint,20,36);\n    lv_obj_set_width(renameHint,520);")
 
-old = '''    refreshPersonalitySelection();
-    char hint[96]{};
-    snprintf(hint,sizeof(hint),"Selected: %s. Tap SAVE to apply.",
+old_hint='''    snprintf(hint,sizeof(hint),"Selected: %s. Tap SAVE to apply.",
              espplants_phrases::themeName(pendingTheme));
-    label(renameHint,hint);
-    return;
 '''
-new = '''    refreshPersonalitySelection();
-    char hint[96]{};
-    snprintf(hint,sizeof(hint),"Selected: %s. SAVE applies it.",
+new_hint='''    snprintf(hint,sizeof(hint),"Selected: %s. SAVE applies it.",
              espplants_phrases::themeName(pendingTheme));
-    label(renameHint,hint);
-    return;
 '''
-replace_once(old,new,"selection hint text")
+replace_if_present(old_hint,new_hint)
+require_any("selection hint",
+            'snprintf(hint,sizeof(hint),"Selected: %s. SAVE applies it.",')
 
-old = '''  cap = lv_label_create(setup);
+old_settings='''  cap = lv_label_create(setup);
   lv_label_set_text(cap, "PERSONALITY");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
@@ -137,7 +119,7 @@ old = '''  cap = lv_label_create(setup);
   lv_obj_set_size(unitButton, 92, 40);
   lv_obj_set_pos(unitButton, 242, 66);
 '''
-new = '''  cap = lv_label_create(setup);
+new_settings='''  cap = lv_label_create(setup);
   lv_label_set_text(cap, "PERSONALITY");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
@@ -153,24 +135,31 @@ new = '''  cap = lv_label_create(setup);
   lv_obj_set_size(unitButton, 92, 40);
   lv_obj_set_pos(unitButton, 242, 62);
 '''
-replace_once(old,new,"settings captions block")
+replace_if_present(old_settings,new_settings)
+require_any("settings caption geometry",
+            "lv_obj_set_pos(cap, 127, 44);")
 
-old = '''  lv_obj_t *themeButton = lv_btn_create(setup);
+old_theme='''  lv_obj_t *themeButton = lv_btn_create(setup);
   lv_obj_set_size(themeButton, 120, 40);
   lv_obj_set_pos(themeButton, 112, 66);
 '''
-new = '''  lv_obj_t *themeButton = lv_btn_create(setup);
+new_theme='''  lv_obj_t *themeButton = lv_btn_create(setup);
   lv_obj_set_size(themeButton, 120, 40);
   lv_obj_set_pos(themeButton, 112, 62);
 '''
-replace_once(old,new,"theme button y")
+replace_if_present(old_theme,new_theme)
+require_any("theme button geometry",
+            "lv_obj_set_pos(themeButton, 112, 62);")
 
-old = '''  label(settingsUnit, useFahrenheit ? "TEMP °F" : "TEMP °C");
+old_refresh='''  label(settingsUnit, useFahrenheit ? "TEMP °F" : "TEMP °C");
+  snprintf(text,sizeof(text),"%s  >",espplants_phrases::themeName(phraseTheme));
+  label(settingsTheme,text);
+'''
+new_refresh='''  label(settingsUnit, useFahrenheit ? "°F" : "°C");
   label(settingsTheme, espplants_phrases::themeName(phraseTheme));
 '''
-new = '''  label(settingsUnit, useFahrenheit ? "°F" : "°C");
-  label(settingsTheme, espplants_phrases::themeName(phraseTheme));
-'''
-replace_once(old,new,"settings button text")
+replace_if_present(old_refresh,new_refresh)
+require_any("settings refresh labels",
+            'label(settingsUnit, useFahrenheit ? "°F" : "°C");')
 
 p.write_text(s,encoding="utf-8")
