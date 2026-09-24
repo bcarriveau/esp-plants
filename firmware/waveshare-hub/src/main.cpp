@@ -5,6 +5,7 @@
 #include <src/extra/libs/qrcode/qrcodegen.h>
 
 #include "plantlink.h"
+#include "phrase_engine.h"
 #include "update_service.h"
 
 namespace {
@@ -69,7 +70,9 @@ struct PlantSensor {
   bool seenThisBoot = false;
   uint8_t ieee[8]{};
   uint16_t shortAddress = 0xffff;
-  uint16_t fieldFlags = 0;
+  uint16_t fieldFlags = 0;  // merged values known in RAM
+  uint16_t reportedFieldFlagsThisBoot = 0;
+  espplants_phrases::Rotation phraseRotation{};
   int16_t temperatureCentiC = 0;
   uint16_t humidityCentiPct = 0;
   uint8_t soilMoisturePct = 0;
@@ -528,7 +531,7 @@ size_t reportedCount() {
 
 bool hasFreshMoisture(const PlantSensor &sensor) {
   return sensor.used && sensor.seenThisBoot &&
-         (sensor.fieldFlags & plantlink::SensorHasSoilMoisture);
+         (sensor.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture);
 }
 
 int sensorSortRank(const PlantSensor &sensor) {
@@ -681,14 +684,15 @@ PlantSensor *findOrCreateSensor(const uint8_t ieee[8], uint16_t shortAddress,
   return nullptr;
 }
 
-const char *mood(const PlantSensor &s) {
+const char *mood(PlantSensor &s) {
   if (!s.seenThisBoot) return "Waiting for this plant to check in";
-  if ((s.fieldFlags & plantlink::SensorHasWaterWarning) && s.waterWarning) return "I'M THIRSTY!";
-  if (!(s.fieldFlags & plantlink::SensorHasSoilMoisture)) return "Waiting for a moisture reading";
-  if (s.soilMoisturePct <= 20) return "Dry - I could use a drink";
-  if (s.soilMoisturePct <= 40) return "Getting a little thirsty";
-  if (s.soilMoisturePct <= 70) return "Doing good";
-  return "Nice and moist";
+  if (!(s.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture))
+    return "Waiting for a moisture reading";
+  const bool warning=(s.reportedFieldFlagsThisBoot & plantlink::SensorHasWaterWarning) && s.waterWarning;
+  const auto state=espplants_phrases::stateFor(s.soilMoisturePct,warning);
+  const size_t slot=static_cast<size_t>(&s-sensors);
+  const uint32_t seed=static_cast<uint32_t>(slot*2654435761u)^static_cast<uint32_t>(s.soilMoisturePct*257u);
+  return espplants_phrases::select(s.phraseRotation,espplants_phrases::Theme::FUNNY,state,seed,false);
 }
 
 void sendFrame(plantlink::MessageType type, const uint8_t *payload = nullptr,
@@ -3046,12 +3050,24 @@ void handleSensorReport(const plantlink::Frame &frame) {
 
   s->seenThisBoot = true;
   s->shortAddress = report.shortAddress;
-  s->fieldFlags = report.fieldFlags;
-  s->temperatureCentiC = report.temperatureCentiC;
-  s->humidityCentiPct = report.humidityCentiPct;
-  s->soilMoisturePct = report.soilMoisturePct;
-  s->batteryPct = report.batteryPct;
-  s->waterWarning = report.waterWarning;
+
+  // Alpha.22 partial-report merge and phrase engine.
+  // ZG-303Z reports may contain only a subset of measurements.
+  const bool moistureReported=(report.fieldFlags & plantlink::SensorHasSoilMoisture)!=0;
+  s->fieldFlags |= report.fieldFlags;
+  s->reportedFieldFlagsThisBoot |= report.fieldFlags;
+  if (report.fieldFlags & plantlink::SensorHasTemperature) s->temperatureCentiC=report.temperatureCentiC;
+  if (report.fieldFlags & plantlink::SensorHasHumidity) s->humidityCentiPct=report.humidityCentiPct;
+  if (moistureReported) {
+    s->soilMoisturePct=report.soilMoisturePct;
+    const bool warning=(report.fieldFlags & plantlink::SensorHasWaterWarning) && report.waterWarning;
+    const auto state=espplants_phrases::stateFor(report.soilMoisturePct,warning);
+    const size_t phraseSlot=static_cast<size_t>(s-sensors);
+    const uint32_t seed=static_cast<uint32_t>(phraseSlot*2654435761u)^static_cast<uint32_t>(report.soilMoisturePct*257u);
+    (void)espplants_phrases::select(s->phraseRotation,espplants_phrases::Theme::FUNNY,state,seed,true);
+  }
+  if (report.fieldFlags & plantlink::SensorHasBattery) s->batteryPct=report.batteryPct;
+  if (report.fieldFlags & plantlink::SensorHasWaterWarning) s->waterWarning=report.waterWarning;
   s->lqi = report.lqi;
   s->rssi = report.rssiDbm;
   s->lastSeenMs = millis();

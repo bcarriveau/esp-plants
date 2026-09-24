@@ -1,12 +1,12 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.21"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.22"
 #define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_PRODUCT_ID "esp-plants-waveshare"
 #define ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL "alpha"
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Shows the actual H2 gateway firmware version reported over PlantLink."
+  "Merges partial ZG-303Z reports and adds rotating themed plant phrases."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif
