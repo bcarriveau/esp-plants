@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 namespace espplants_phrases {
-enum class Theme:uint8_t { CLASSIC=0,FUNNY=1,SARCASTIC=2,DRAMATIC=3,RUDE=4 };
+enum class Theme:uint8_t { CLASSIC=0,FUNNY=1,SARCASTIC=2,DRAMATIC=3,RUDE=4,MIXED=5 };
 enum class State:uint8_t { CRITICAL=0,VERY_DRY=1,DRY=2,GOOD=3,WET=4,VERY_WET=5 };
 struct Rotation { uint8_t state=0xff; uint16_t cursor=0,step=1,offset=0; };
 inline State stateFor(uint8_t m,bool warning){ if(warning||m<=10)return State::CRITICAL;if(m<=20)return State::VERY_DRY;if(m<=40)return State::DRY;if(m<=70)return State::GOOD;if(m<=85)return State::WET;return State::VERY_WET; }
@@ -438,10 +438,14 @@ inline Pool pool(Theme t,State s){static const Pool p[5][6]={
 inline uint16_t gcd16(uint16_t a,uint16_t b){while(b){uint16_t r=a%b;a=b;b=r;}return a;}
 inline uint16_t stepFor(uint16_t n,uint32_t seed){if(n<=2)return 1;uint16_t s=(seed%(n-1))+1;while(gcd16(s,n)!=1)s=(s%(n-1))+1;return s;}
 inline const char* select(Rotation&r,Theme t,State s,uint32_t seed,bool advance){
- Pool p=pool(t,s);if(!p.count)return "";
- uint8_t sid=(uint8_t)s;
- if(r.state!=sid){r.state=sid;r.cursor=0;r.offset=seed%p.count;r.step=stepFor(p.count,seed^0x9e3779b9u);}
- else if(advance){if(++r.cursor>=p.count){r.cursor=0;r.offset=(r.offset+1)%p.count;}}
- return p.items[(r.offset+r.cursor*r.step)%p.count];
+ const bool mixed=t==Theme::MIXED; Pool first=pool(mixed?Theme::CLASSIC:t,s);
+ const uint16_t count=mixed?static_cast<uint16_t>(first.count*5u):first.count;if(!count)return "";
+ const uint8_t rid=static_cast<uint8_t>((static_cast<uint8_t>(t)<<3)|static_cast<uint8_t>(s));
+ if(r.state!=rid){r.state=rid;r.cursor=0;r.offset=seed%count;r.step=stepFor(count,seed^0x9e3779b9u);}
+ else if(advance){if(++r.cursor>=count){r.cursor=0;r.offset=(r.offset+1)%count;}}
+ const uint16_t i=static_cast<uint16_t>((r.offset+r.cursor*r.step)%count);
+ if(!mixed)return first.items[i];
+ return pool(static_cast<Theme>(i/first.count),s).items[i%first.count];
 }
+inline const char* themeName(Theme t){static const char*const n[]={"CLASSIC","FUNNY","SARCASTIC","DRAMATIC","RUDE","MIXED"};uint8_t i=(uint8_t)t;return n[i<6?i:5];}
 } // namespace espplants_phrases

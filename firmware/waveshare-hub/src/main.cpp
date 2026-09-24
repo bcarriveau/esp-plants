@@ -134,6 +134,8 @@ uint32_t lastUiRefreshMs = 0;
 bool h2Online = false;
 bool networkReady = false;
 bool useFahrenheit = true;
+// Alpha.23 persistent phrase theme selector
+espplants_phrases::Theme phraseTheme = espplants_phrases::Theme::MIXED;
 bool uiDirty = true;
 uint8_t zigbeeChannel = 0;
 uint8_t h2SensorCount = 0;
@@ -202,6 +204,7 @@ lv_obj_t *settingsH2 = nullptr;
 lv_obj_t *settingsZigbee = nullptr;
 lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
+lv_obj_t *settingsTheme = nullptr;
 lv_obj_t *settingsPair = nullptr;
 lv_obj_t *settingsDeviceName = nullptr;
 lv_obj_t *updateModal = nullptr;
@@ -692,7 +695,7 @@ const char *mood(PlantSensor &s) {
   const auto state=espplants_phrases::stateFor(s.soilMoisturePct,warning);
   const size_t slot=static_cast<size_t>(&s-sensors);
   const uint32_t seed=static_cast<uint32_t>(slot*2654435761u)^static_cast<uint32_t>(s.soilMoisturePct*257u);
-  return espplants_phrases::select(s.phraseRotation,espplants_phrases::Theme::FUNNY,state,seed,false);
+  return espplants_phrases::select(s.phraseRotation,phraseTheme,state,seed,false);
 }
 
 void sendFrame(plantlink::MessageType type, const uint8_t *payload = nullptr,
@@ -869,6 +872,18 @@ void unitEvent(lv_event_t *event) {
   preferences.putBool("fahrenheit", useFahrenheit);
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
   uiDirty = true;
+}
+
+void themeEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  uint8_t next=static_cast<uint8_t>(phraseTheme)+1u;
+  if (next>static_cast<uint8_t>(espplants_phrases::Theme::MIXED)) next=0;
+  phraseTheme=static_cast<espplants_phrases::Theme>(next);
+  preferences.putUChar("phrase_theme",next);
+  for (auto &sensor:sensors) sensor.phraseRotation=espplants_phrases::Rotation{};
+  Serial.printf("[settings] phrase theme=%s\n",
+                espplants_phrases::themeName(phraseTheme));
+  uiDirty=true;
 }
 
 void startPairing(bool replacing, int targetSlot);
@@ -1864,7 +1879,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_set_pos(title, 22, 18);
 
   cap = lv_label_create(setup);
-  lv_label_set_text(cap, "DISPLAY TEMPERATURE");
+  lv_label_set_text(cap, "PERSONALITY                 TEMP");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(cap, 22, 67);
@@ -1878,6 +1893,19 @@ void buildSettings(lv_obj_t *screen) {
   settingsUnit = lv_label_create(unitButton);
   lv_obj_set_style_text_font(settingsUnit, &lv_font_montserrat_24, 0);
   lv_obj_center(settingsUnit);
+
+  lv_obj_t *themeButton = lv_btn_create(setup);
+  lv_obj_set_size(themeButton, 120, 46);
+  lv_obj_set_pos(themeButton, 112, 56);
+  lv_obj_set_style_radius(themeButton, 12, 0);
+  lv_obj_set_style_bg_color(themeButton, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(themeButton, themeEvent, LV_EVENT_CLICKED, nullptr);
+  settingsTheme = lv_label_create(themeButton);
+  lv_obj_set_style_text_font(settingsTheme, &lv_font_montserrat_12, 0);
+  lv_obj_set_width(settingsTheme, 104);
+  lv_obj_set_style_text_align(settingsTheme, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(settingsTheme, LV_LABEL_LONG_DOT);
+  lv_obj_center(settingsTheme);
 
   cap = lv_label_create(setup);
   lv_label_set_text(cap, "PLANT SENSORS");
@@ -2772,6 +2800,7 @@ void refreshUi() {
   label(settingsZigbee, text);
   snprintf(text, sizeof(text), "%u", static_cast<unsigned>(count)); label(settingsPlants, text);
   label(settingsUnit, useFahrenheit ? "F" : "C");
+  label(settingsTheme, espplants_phrases::themeName(phraseTheme));
   if (permitJoinRemaining) snprintf(text, sizeof(text), "PAIR %us", permitJoinRemaining);
   else snprintf(text, sizeof(text), "ADD SENSOR");
   label(settingsPair, text);
@@ -3060,11 +3089,14 @@ void handleSensorReport(const plantlink::Frame &frame) {
   if (report.fieldFlags & plantlink::SensorHasHumidity) s->humidityCentiPct=report.humidityCentiPct;
   if (moistureReported) {
     s->soilMoisturePct=report.soilMoisturePct;
-    const bool warning=(report.fieldFlags & plantlink::SensorHasWaterWarning) && report.waterWarning;
+    // Alpha.23: ONLY a soil-moisture report advances/selects a phrase.
+    // Temperature, humidity, battery, LQI/signal, etc. never touch it.
+    const bool warning=(s->reportedFieldFlagsThisBoot & plantlink::SensorHasWaterWarning) && s->waterWarning;
     const auto state=espplants_phrases::stateFor(report.soilMoisturePct,warning);
     const size_t phraseSlot=static_cast<size_t>(s-sensors);
-    const uint32_t seed=static_cast<uint32_t>(phraseSlot*2654435761u)^static_cast<uint32_t>(report.soilMoisturePct*257u);
-    (void)espplants_phrases::select(s->phraseRotation,espplants_phrases::Theme::FUNNY,state,seed,true);
+    const uint32_t seed=static_cast<uint32_t>(phraseSlot*2654435761u)^
+                        static_cast<uint32_t>(report.soilMoisturePct*257u)^millis();
+    (void)espplants_phrases::select(s->phraseRotation,phraseTheme,state,seed,true);
   }
   if (report.fieldFlags & plantlink::SensorHasBattery) s->batteryPct=report.batteryPct;
   if (report.fieldFlags & plantlink::SensorHasWaterWarning) s->waterWarning=report.waterWarning;
@@ -3140,6 +3172,13 @@ void setup() {
     preferences.begin("espplants", false);
   }
   useFahrenheit = preferences.getBool("fahrenheit", true);
+  {
+    const uint8_t savedTheme=preferences.getUChar(
+        "phrase_theme", static_cast<uint8_t>(espplants_phrases::Theme::MIXED));
+    phraseTheme=static_cast<espplants_phrases::Theme>(
+        savedTheme<=static_cast<uint8_t>(espplants_phrases::Theme::MIXED)
+            ? savedTheme : static_cast<uint8_t>(espplants_phrases::Theme::MIXED));
+  }
   String savedDeviceName = preferences.getString("device_name", "ESP PLANTS");
   savedDeviceName.toCharArray(deviceName, sizeof(deviceName));
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
