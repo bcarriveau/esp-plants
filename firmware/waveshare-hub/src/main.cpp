@@ -205,11 +205,8 @@ lv_obj_t *settingsZigbee = nullptr;
 lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
 lv_obj_t *settingsTheme = nullptr;
-// Alpha.24 personality picker modal
-// Alpha.25 lazy personality modal startup guard
-// Alpha.26 personality settings page
-// Alpha.27 zero-allocation personality selector
-// Alpha.28 personality selection polish
+// Personality selection reuses the existing rename modal/button matrix so
+// it does not add another LVGL object tree.
 espplants_phrases::Theme pendingTheme = espplants_phrases::Theme::MIXED;
 lv_obj_t *settingsPair = nullptr;
 lv_obj_t *settingsDeviceName = nullptr;
@@ -911,18 +908,20 @@ void themeEvent(lv_event_t *event) {
   pendingTheme=phraseTheme;
   personalityDialogActive=true;
   label(renameTitle,"PLANT PERSONALITY");
-  lv_obj_set_pos(renameTitle,18,14);
-  lv_obj_set_pos(renameHint,20,44);
+  lv_obj_set_pos(renameTitle,32,8);
+  lv_obj_set_pos(renameHint,32,39);
+  lv_obj_set_width(renameHint,700);
 
   char hint[96]{};
-  snprintf(hint,sizeof(hint),"Selected: %s. Tap SAVE to apply.",
+  snprintf(hint,sizeof(hint),"Selected: %s   SAVE to apply",
            espplants_phrases::themeName(pendingTheme));
   label(renameHint,hint);
 
   // Reuse the existing rename btnmatrix. No new LVGL objects are allocated.
+  // The selector starts 36 px below the 68 px header.
   lv_obj_add_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_pos(renameKeyboard,18,82);
-  lv_obj_set_size(renameKeyboard,764,380);
+  lv_obj_set_pos(renameKeyboard,50,104);
+  lv_obj_set_size(renameKeyboard,700,320);
   lv_btnmatrix_set_map(renameKeyboard,kPersonalityMap);
   lv_obj_set_style_bg_color(renameKeyboard,lv_color_hex(0x3F7A4E),
                             LV_PART_ITEMS | LV_STATE_CHECKED);
@@ -1066,6 +1065,7 @@ void closeRename() {
     lv_obj_clear_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(renameTitle,18,8);
     lv_obj_set_pos(renameHint,20,36);
+    lv_obj_set_width(renameHint,520);
     lv_obj_set_pos(renameKeyboard,18,158);
     lv_obj_set_size(renameKeyboard,764,304);
   }
@@ -1176,7 +1176,7 @@ void renameKeyboardEvent(lv_event_t *event) {
 
     refreshPersonalitySelection();
     char hint[96]{};
-    snprintf(hint,sizeof(hint),"Selected: %s. Tap SAVE to apply.",
+    snprintf(hint,sizeof(hint),"Selected: %s   SAVE to apply",
              espplants_phrases::themeName(pendingTheme));
     label(renameHint,hint);
     return;
@@ -1980,7 +1980,7 @@ void buildSettings(lv_obj_t *screen) {
   lv_label_set_text(cap, "PERSONALITY");
   lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 112, 50);
+  lv_obj_set_pos(cap, 22, 50);
 
   lv_obj_t *tempCap = lv_label_create(setup);
   lv_label_set_text(tempCap, "TEMP UNIT");
@@ -1999,14 +1999,14 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_center(settingsUnit);
 
   lv_obj_t *themeButton = lv_btn_create(setup);
-  lv_obj_set_size(themeButton, 120, 40);
-  lv_obj_set_pos(themeButton, 112, 66);
+  lv_obj_set_size(themeButton, 200, 40);
+  lv_obj_set_pos(themeButton, 22, 66);
   lv_obj_set_style_radius(themeButton, 12, 0);
   lv_obj_set_style_bg_color(themeButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(themeButton, themeEvent, LV_EVENT_CLICKED, nullptr);
   settingsTheme = lv_label_create(themeButton);
-  lv_obj_set_style_text_font(settingsTheme, &lv_font_montserrat_12, 0);
-  lv_obj_set_width(settingsTheme, 104);
+  lv_obj_set_style_text_font(settingsTheme, &lv_font_montserrat_14, 0);
+  lv_obj_set_width(settingsTheme, 180);
   lv_obj_set_style_text_align(settingsTheme, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_long_mode(settingsTheme, LV_LABEL_LONG_DOT);
   lv_obj_center(settingsTheme);
@@ -2520,6 +2520,7 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_set_style_radius(topBar, 0, 0);
   lv_obj_set_style_border_width(topBar, 0, 0);
   lv_obj_set_style_bg_color(topBar, lv_color_hex(0x0C2518), 0);
+  lv_obj_set_style_pad_all(topBar, 0, 0);
   lv_obj_clear_flag(topBar, LV_OBJ_FLAG_SCROLLABLE);
 
   renameTitle = lv_label_create(topBar);
@@ -2904,7 +2905,7 @@ void refreshUi() {
   else snprintf(text, sizeof(text), "H2 OFFLINE");
   label(settingsZigbee, text);
   snprintf(text, sizeof(text), "%u", static_cast<unsigned>(count)); label(settingsPlants, text);
-  label(settingsUnit, useFahrenheit ? "TEMP °F" : "TEMP °C");
+  label(settingsUnit, useFahrenheit ? "°F" : "°C");
   snprintf(text,sizeof(text),"%s  >",espplants_phrases::themeName(phraseTheme));
   label(settingsTheme,text);
   if (permitJoinRemaining) snprintf(text, sizeof(text), "PAIR %us", permitJoinRemaining);
@@ -3186,7 +3187,6 @@ void handleSensorReport(const plantlink::Frame &frame) {
   s->seenThisBoot = true;
   s->shortAddress = report.shortAddress;
 
-  // Alpha.22 partial-report merge and phrase engine.
   // ZG-303Z reports may contain only a subset of measurements.
   const bool moistureReported=(report.fieldFlags & plantlink::SensorHasSoilMoisture)!=0;
   s->fieldFlags |= report.fieldFlags;
@@ -3195,7 +3195,7 @@ void handleSensorReport(const plantlink::Frame &frame) {
   if (report.fieldFlags & plantlink::SensorHasHumidity) s->humidityCentiPct=report.humidityCentiPct;
   if (moistureReported) {
     s->soilMoisturePct=report.soilMoisturePct;
-    // Alpha.23: ONLY a soil-moisture report advances/selects a phrase.
+    // ONLY a soil-moisture report advances/selects a phrase.
     // Temperature, humidity, battery, LQI/signal, etc. never touch it.
     const bool warning=(s->reportedFieldFlagsThisBoot & plantlink::SensorHasWaterWarning) && s->waterWarning;
     const auto state=espplants_phrases::stateFor(report.soilMoisturePct,warning);
