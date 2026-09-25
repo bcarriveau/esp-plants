@@ -79,6 +79,78 @@
       "problemMatcher": []
     },
     {
+      "label": "ESP PLANTS: Build Waveshare 7B",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
+        "-e",
+        "waveshare_s3_touch_lcd_7b"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "ESP PLANTS: Clean Waveshare 7B",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
+        "-e",
+        "waveshare_s3_touch_lcd_7b",
+        "-t",
+        "clean"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Upload Waveshare 7B",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
+        "-e",
+        "waveshare_s3_touch_lcd_7b",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP PLANTS: Monitor Waveshare 7B",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "device",
+        "monitor",
+        "--project-dir",
+        "${workspaceFolder}\\firmware\\waveshare-hub"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "ESP PLANTS: Build H2",
       "type": "process",
       "command": "pio",
@@ -294,6 +366,24 @@
       "dependsOrder": "sequence",
       "dependsOn": [
         "ESP PLANTS: Clean Waveshare",
+        "ESP PLANTS: Clean H2"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Build Waveshare 7B + H2",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ESP PLANTS: Build Waveshare 7B",
+        "ESP PLANTS: Build H2"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP PLANTS: Clean Waveshare 7B + H2",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ESP PLANTS: Clean Waveshare 7B",
         "ESP PLANTS: Clean H2"
       ],
       "problemMatcher": []

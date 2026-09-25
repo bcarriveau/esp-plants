@@ -1,10 +1,7 @@
-// Hardware-proven panel configuration carried forward from Bill's
-// ESP Aircraft Radar project for the exact Waveshare ESP32-S3-Touch-LCD-7.
+// ESP PLANTS board configuration for Waveshare ESP32-S3-Touch-LCD-7B.
+// Geometry/timings follow Waveshare's official 1024x600 7B Arduino example.
+// This remains a bring-up target until Bill physically validates the board.
 #pragma once
-
-#ifdef ESP_PLANTS_WAVESHARE_7B
-#include "waveshare_panel_board_7b.h"
-#else
 
 #define I2C_MASTER_SCL_IO 9
 #define I2C_MASTER_SDA_IO 8
@@ -20,29 +17,30 @@
 #define ESP_PANEL_USE_CUSTOM_BOARD (1)
 
 #if ESP_PANEL_USE_CUSTOM_BOARD
-
 #define ESP_PANEL_USE_LCD (1)
 
 #if ESP_PANEL_USE_LCD
 #define ESP_PANEL_LCD_NAME ST7262
-#define ESP_PANEL_LCD_WIDTH (800)
-#define ESP_PANEL_LCD_HEIGHT (480)
-
+#define ESP_PANEL_LCD_WIDTH (1024)
+#define ESP_PANEL_LCD_HEIGHT (600)
 #define ESP_PANEL_LCD_BUS_SKIP_INIT_HOST (1)
 #define ESP_PANEL_LCD_BUS_TYPE (ESP_PANEL_BUS_TYPE_RGB)
 
-#define ESP_PANEL_LCD_RGB_CLK_HZ (16 * 1000 * 1000)
-#define ESP_PANEL_LCD_RGB_HPW (4)
-#define ESP_PANEL_LCD_RGB_HBP (8)
-#define ESP_PANEL_LCD_RGB_HFP (8)
-#define ESP_PANEL_LCD_RGB_VPW (4)
-#define ESP_PANEL_LCD_RGB_VBP (8)
-#define ESP_PANEL_LCD_RGB_VFP (8)
+#define ESP_PANEL_LCD_RGB_CLK_HZ (30 * 1000 * 1000)
+#define ESP_PANEL_LCD_RGB_HPW (162)
+#define ESP_PANEL_LCD_RGB_HBP (152)
+#define ESP_PANEL_LCD_RGB_HFP (48)
+#define ESP_PANEL_LCD_RGB_VPW (45)
+#define ESP_PANEL_LCD_RGB_VBP (13)
+#define ESP_PANEL_LCD_RGB_VFP (3)
 #define ESP_PANEL_LCD_RGB_PCLK_ACTIVE_NEG (1)
 #define ESP_PANEL_LCD_RGB_DATA_WIDTH (16)
 #define ESP_PANEL_LCD_RGB_PIXEL_BITS (16)
+
+// Conservative first bring-up: one PSRAM framebuffer. Waveshare's demo uses
+// two; ESP PLANTS will only increase this after memory/TLS/OTA stress testing.
 #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM (1)
-#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 20)
+#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 10)
 
 #define ESP_PANEL_LCD_RGB_IO_HSYNC (46)
 #define ESP_PANEL_LCD_RGB_IO_VSYNC (3)
@@ -77,7 +75,6 @@
 #endif
 
 #define ESP_PANEL_USE_TOUCH (1)
-
 #if ESP_PANEL_USE_TOUCH
 #define ESP_PANEL_TOUCH_NAME GT911
 #define ESP_PANEL_TOUCH_H_RES (ESP_PANEL_LCD_WIDTH)
@@ -95,12 +92,12 @@
 #define ESP_PANEL_TOUCH_INT_LEVEL (0)
 #endif
 
+// 7B CH422G/backlight support is intentionally gated until physical bring-up.
+// Waveshare documents I2C 0x24, IO2 backlight enable, PWM register 0x05.
 #define ESP_PANEL_USE_BACKLIGHT (0)
 #define ESP_PANEL_USE_EXPANDER (0)
 
 #define ESP_PANEL_BOARD_CUSTOM_FILE_VERSION_MAJOR 0
 #define ESP_PANEL_BOARD_CUSTOM_FILE_VERSION_MINOR 2
 #define ESP_PANEL_BOARD_CUSTOM_FILE_VERSION_PATCH 2
-
 #endif
-#endif // ESP_PLANTS_WAVESHARE_7B

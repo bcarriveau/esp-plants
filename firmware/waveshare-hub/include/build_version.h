@@ -1,6 +1,10 @@
 #pragma once
 #define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.31"
+#ifdef ESP_PLANTS_WAVESHARE_7B
+#define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
+#else
 #define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
+#endif
 #define ESP_PLANTS_WAVESHARE_PRODUCT_ID "esp-plants-waveshare"
 #define ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL "alpha"
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
