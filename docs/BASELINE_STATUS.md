@@ -1,76 +1,80 @@
 # Baseline status
 
-Repository version: `0.1.0-alpha.1`  
-Established: `2026-08-09`
+## Current product baseline
 
-This document separates what is present in source from what has been physically
-verified.
+The active development baseline is the `waveshare-zigbee` branch:
 
-## Imported firmware baselines
+```text
+HOBEIAN ZG-303Z
+      |
+    Zigbee
+      |
+M5Stack ESP32-H2
+      |
+ PlantLink UART
+      |
+Waveshare ESP32-S3 7-inch
+```
 
-### T5 hub
+The original Waveshare 7-inch target is the physically verified display baseline. The Waveshare 7B target exists in source but is not claimed as physically verified ESP PLANTS runtime hardware.
 
-Imported from the Phase 3B home-Wi-Fi / UDP setup/receiver project.
+The Waveshare and H2 are independently versioned firmware products. The root `VERSION` tracks the Waveshare release identity.
 
-Included source contains:
+## Current verified behavior
 
-- compile fixes for the duplicate constant problem,
-- live-plant IP field fix,
-- setup portal,
-- central plant naming,
-- ESP-NOW provisioning,
-- home-Wi-Fi normal mode,
-- UDP receiver/ACK,
-- e-paper/power handling.
+Repository history and current documentation establish physical verification on the original Waveshare 7-inch development hardware for:
 
-Previous development testing established that the T5 could join the configured
-home network. This repository packaging step did not recompile the T5 in the
-current runtime.
+- H2 Zigbee coordinator startup,
+- persistent Zigbee network behavior,
+- ZG-303Z commissioning,
+- IEEE-64 identity,
+- current ZG-303Z decoding,
+- soil moisture,
+- temperature,
+- air humidity,
+- battery,
+- PlantLink UART communication,
+- live sensor-data delivery to the Waveshare UI.
 
-### XIAO sensor
+This file does not extend those claims beyond what has actually been tested.
 
-Imported from the Phase 3E factory-style calibration project.
+## Current source status
 
-Its transport foundation was developed from the already working home-Wi-Fi/UDP
-sender path.
+The active source contains:
 
-Phase 3E additionally contains:
+- Waveshare 800x480 application/UI,
+- H2 Zigbee coordinator/translator,
+- authoritative PlantLink protocol in `shared/plantlink/plantlink.h`,
+- Waveshare Wi-Fi/setup behavior,
+- A/B Waveshare OTA package installation,
+- verified-HTTPS update retrieval,
+- H2-through-Waveshare OTA implementation and release metadata.
 
-- adaptive scheduling,
-- watering follow-up,
-- service-mode automatic sampling,
-- factory-style calibration storage/workflow.
+H2-through-Waveshare OTA is **implemented in source but not claimed as physically verified**.
 
-The Phase 3E project was structurally sanity-checked when generated, but the
-current environment does not contain the user's pioarduino toolchain and this
-repository packaging step does not claim a fresh compile or final physical
-verification.
+## Freshness rule
 
-## Protocol sync
+Known sensors may be restored by identity after a reboot, but pre-reboot readings are not treated as current. A sensor becomes current only after reporting during the present boot, and watering summaries must exclude stale values.
 
-At repository creation, both `plant_protocol.h` copies were byte-identical and
-used protocol v3.
+## Legacy baseline history
 
-Run the sync tool after any protocol edit.
+The repository also preserves the original LILYGO T5 4.7-inch S3 Pro + Seeed XIAO ESP32-C6 Wi-Fi/UDP implementation.
 
-## Source preservation
+`BASELINE_MANIFEST.md` records hashes for that original imported baseline. It is historical evidence and should remain intact.
 
-The core imported files are copied without intentional behavioral edits during
-GitHub packaging.
+Legacy T5/XIAO sources remain useful for comparison and history, but they are not the current product architecture.
 
-See `BASELINE_MANIFEST.md` for hashes.
+## Release gate
 
-## Stable-release gate
+Before a wider/stable release, require at minimum:
 
-Do not relabel this alpha baseline as stable until:
-
-- T5 builds,
-- XIAO builds,
-- provisioning passes,
-- normal UDP + ACK passes,
-- service mode passes,
-- calibration passes,
-- watering follow-up passes,
-- deep-sleep timer/button wake passes,
-- T5 naming persistence passes,
-- power/shutdown behavior passes.
+- clean Waveshare 7 build,
+- clean H2 build,
+- repository tests pass,
+- release assets produced from the release tooling,
+- update identity/hash checks validated,
+- sensor registry/freshness behavior verified,
+- persistence verified across normal update,
+- long-duration H2/Zigbee stability testing,
+- explicit physical verification of H2-through-Waveshare OTA before claiming it,
+- separate physical verification of Waveshare 7B before claiming 7B support as proven.

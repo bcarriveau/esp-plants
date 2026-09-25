@@ -1,93 +1,79 @@
 # Roadmap
 
-This is a direction document, not a promise that every item belongs in the next
-release.
+This document describes direction for the active Waveshare/H2/ZG-303Z product line. It is not a promise that every item belongs in the next release.
 
 ## Near term
 
-### Verify Phase 3E baseline
+### Prove the active hardware matrix
 
-- compile current XIAO project locally,
-- physically exercise calibration,
-- confirm saved endpoints across restart,
-- verify watering-watch behavior after calibration,
-- confirm adaptive sleep timing in serial logs.
+- keep the original Waveshare 7-inch target as the hardware-proven baseline,
+- physically verify the Waveshare 7B ESP PLANTS runtime before labeling it proven,
+- verify long-duration H2 coordinator stability with sleepy ZG-303Z sensors,
+- exercise reboot/rejoin behavior without presenting stale readings as current.
 
-### Strengthen T5 display product behavior
+### Complete release/update verification
 
-- build the multi-plant e-paper dashboard around the proven receiver/setup
-  foundation,
-- keep refresh frequency appropriate for e-paper,
-- make last-seen/battery/state clearly readable,
-- avoid animations and unnecessary redraws.
+The source contains the Waveshare A/B updater and the H2-through-Waveshare Phase 2 path.
 
-### Improve setup diagnostics
+Next validation work:
 
-Potential setup-page additions:
+- build a complete release package from clean source,
+- confirm manifest/product/hardware/build/hash validation,
+- verify inactive-slot Waveshare installation and restart behavior,
+- physically verify H2 firmware transfer over PlantLink,
+- confirm H2-first / Waveshare-second ordering,
+- confirm Zigbee network and all user configuration survive the update,
+- verify recovery behavior for interrupted/failed updates.
 
-- last sensor IP,
-- last seen,
-- last moisture,
-- battery,
-- provisioning status,
-- calibration status/version if exposed later.
+Do not label H2-through-Waveshare OTA physically verified until these tests are actually performed.
 
-## Configuration evolution
+### Wi-Fi / setup reliability
 
-Potential centrally managed settings:
+Continue hardening the current Waveshare flow:
 
-- dry/almost-dry/normal/wet thresholds,
-- meaningful-change percent,
-- local check intervals,
-- heartbeat interval,
-- watering rise threshold.
+- nearby SSID scan/selection,
+- on-screen QR-assisted phone setup,
+- clear CONNECTING / SUCCESS / FAILED states,
+- editable retry after failure,
+- disconnect without credential erasure,
+- deliberate Forget Wi-Fi confirmation,
+- no replacement of known-good credentials until a new connection succeeds.
 
-Preferred architecture:
+### Sensor-scale behavior
 
-- edit from T5,
-- store the user-facing configuration centrally,
-- send machine configuration explicitly to each XIAO,
-- keep plant name T5-only.
-
-If wire configuration is added, design an explicit config packet rather than
-overloading the current ACK field.
-
-## Security
-
-Before production/family release:
-
-- authenticate provisioning,
-- encrypt credential transfer,
-- define re-pair/reset behavior,
-- document trust model.
+- continue validating ALL SENSORS with 10+ devices,
+- verify waiting/not-yet-reported state after reboot,
+- keep `WHO NEEDS WATER?` limited to fresh current-boot moisture reports,
+- validate router/repeater registry behavior as the Zigbee mesh grows.
 
 ## Reliability
 
-- long-duration battery test,
-- router reboot recovery,
-- T5 reboot recovery,
-- sensor reboot recovery,
-- network DHCP/subnet change behavior,
-- multiple AP/mesh-node behavior,
-- packet-loss statistics,
-- stale-sensor indication on T5.
+- prolonged Waveshare + H2 soak testing,
+- Zigbee coordinator reboot recovery,
+- sensor rejoin behavior,
+- power-cycle recovery,
+- Wi-Fi router/AP outage recovery,
+- memory/heap stability during UI navigation and update checks,
+- repeated update-check and failed-update recovery.
 
-## Calibration / sensing
+## Security
 
-- gather several real watering/drying cycles,
-- compare raw millivolts and percentages,
-- decide whether linear calibration is sufficient,
-- consider optional per-sensor state thresholds,
-- avoid trying to force readings to match another manufacturer's arbitrary
-  percentage scale.
+- document the physical trust boundary of PlantLink UART,
+- keep verified HTTPS and identity/hash validation mandatory for OTA,
+- keep permit join deliberate and bounded,
+- define a private vulnerability-reporting path before wider distribution,
+- threat-model release signing/authenticity improvements beyond transport TLS/hash checks if the product moves toward broader deployment.
 
 ## Future convenience
 
-Possible additions after the local core is solid:
+Possible work after the active core is stable:
 
-- T5-hosted firmware upload/OTA workflow,
-- export/import T5 plant configuration,
-- per-sensor firmware/version display,
-- optional local API.
+- export/import Waveshare configuration,
+- improved local diagnostics,
+- per-device firmware/version display,
+- H2 update/recovery UX refinements,
+- optional local API that does not introduce a required cloud dependency.
 
-No cloud dependency should become mandatory.
+## Legacy line
+
+T5/XIAO work remains preserved for historical/reference purposes. New active-product roadmap items should not be written as if the T5/XIAO Wi-Fi/UDP architecture is current.

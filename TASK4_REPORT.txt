@@ -1,0 +1,29 @@
+ESP PLANTS CLEANUP — TASK 4 OF 5
+Repository/docs/test hygiene package
+
+Base branch: waveshare-zigbee
+Base commit: 3fabbf053096b36d7f013a86617411945680efc9
+Base commit message: H2: Bump to alpha.22
+
+Scope:
+- Documentation/repository hygiene only
+- No firmware runtime behavior change
+- No UI change
+- No Zigbee/sensor behavior change
+- No platformio.ini replacement
+- Existing Waveshare upload_port = COM11 preserved
+
+Key corrections:
+- Removed broken README reference to nonexistent tools/build_all.ps1.
+- Removed obsolete docs/checklist references to nonexistent tools/check_protocol_sync.py.
+- Reframed current docs around Waveshare ESP32-S3 + M5Stack H2 + ZG-303Z.
+- Labeled T5/XIAO as legacy while preserving historical baseline material.
+- Rewrote SECURITY.md around PlantLink UART, H2 Zigbee ownership, Waveshare Wi-Fi, verified HTTPS/A-B OTA, and the unverified status of H2-through-Waveshare OTA.
+- Replaced alpha.12/alpha.13 version-pinned transition tests with invariant-based coverage.
+- Removed package-layout assertions from crash-diagnostics tests.
+- Removed hard-coded Waveshare/H2 alpha numbers from version-identity tests.
+- Marked stale release/ H2 binaries for deletion.
+- Marked CHANGELOG-NEW-SECTION.md staging debris for deletion.
+- Preserved BASELINE_MANIFEST.md and README_DIAGNOSTIC_PACKAGE.md as useful project/history evidence rather than deleting history.
+- Did not claim Waveshare 7B runtime verification.
+- Did not claim H2-through-Waveshare OTA physical verification.

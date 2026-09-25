@@ -1,0 +1,20 @@
+ESP PLANTS TASK 4 — INTENDED DELETIONS
+
+Delete these repository paths when applying this package:
+
+CHANGELOG-NEW-SECTION.md
+release/esp-plants-h2-0.2.0-alpha.14.bin
+release/esp-plants-h2-0.2.0-alpha.14.bin.sha256
+release/esp-plants-h2-0.2.0-alpha.15.bin
+release/esp-plants-h2-0.2.0-alpha.15.bin.sha256
+release/esp-plants-h2-0.2.0-alpha.18.bin
+release/esp-plants-h2-0.2.0-alpha.18.bin.sha256
+tests/test_alpha12_button_transition_guard.py
+tests/test_alpha13_transition_hotfix.py
+
+Reason:
+- CHANGELOG-NEW-SECTION.md is a temporary changelog staging artifact whose content belongs in project history, not as a second root changelog fragment.
+- release/ alpha.14/alpha.15/alpha.18 H2 binaries are stale generated release outputs and can be mistaken for current firmware.
+- alpha.12/alpha.13 transition tests pin historical versions/package layouts; tests/test_transition_guards.py replaces them with current invariants.
+
+No firmware runtime source is deleted by this package.

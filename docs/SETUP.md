@@ -1,163 +1,88 @@
-# Setup and provisioning
+# Setup and development
 
-## 1. Build the T5 hub
+## 1. Open the repository root
 
-Open only:
+Use the repository root as the permanent VS Code workspace.
 
-```text
-firmware/t5-hub
+Do not open each firmware project as a separate workspace. The firmware projects remain independent PlatformIO build roots under one workspace.
+
+## 2. Build the active product
+
+The normal active-product pair is:
+
+- `firmware/waveshare-hub`
+- `firmware/m5-h2-zigbee`
+
+Use root VS Code tasks, or run PlatformIO directly.
+
+Windows examples:
+
+```powershell
+$pio = "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe"
+
+& $pio run -d ".\firmware\waveshare-hub"
+& $pio run -d ".\firmware\m5-h2-zigbee"
 ```
 
-in VS Code / PlatformIO.
+The current Waveshare 7 developer environment retains `upload_port = COM11`.
 
-Build and flash it.
+## 3. Connect Waveshare and H2
 
-The T5 and XIAO projects intentionally use different toolchains; do not turn the
-repository root into one combined PlatformIO project.
+The active architecture is direct PlantLink UART between the Waveshare and M5Stack H2.
 
-## 2. Enter T5 setup mode
+The H2 owns Zigbee. The Waveshare owns UI, user configuration, Wi-Fi, and updates.
 
-Use the T5 function/side button to enter setup mode.
+Do not substitute the legacy T5/XIAO Wi-Fi/UDP path when setting up the active product.
 
-The T5 creates a local network named similar to:
+## 4. Form/use the Zigbee network
 
-```text
-PlantMonitor-xxxx
-```
+Use the Waveshare Settings/Add Sensor flow to request permit join through PlantLink.
 
-The setup address is:
+The H2 is the coordinator. ZG-303Z sensors join the H2 Zigbee network and are identified persistently by IEEE-64 address.
 
-```text
-http://192.168.4.1
-```
+Network reset should only occur through an intentional reset action; normal reboot/update must not erase Zigbee state.
 
-The setup password is generated/stored by the T5.
+## 5. Sensor freshness after reboot
 
-## 3. Save home Wi-Fi
+Known sensor identities/names may be restored immediately on the Waveshare.
 
-From the setup page:
+Until a sensor reports during the current boot, it must remain waiting/not-yet-reported and must not contribute stale values to current watering summaries.
 
-1. enter the home Wi-Fi SSID,
-2. enter the Wi-Fi password,
-3. save.
+## 6. Wi-Fi setup
 
-The T5 persists these values in NVS.
+Wi-Fi is configured on the Waveshare for setup/update functions.
 
-The password is not intended to be displayed back as a convenience value.
+The current source supports the local setup/update service and QR-based Wi-Fi assistance. A failed replacement connection must return to an editable state and must not destroy previously working credentials.
 
-## 4. Build the XIAO sensor
+Disconnect and Forget Wi-Fi are separate behaviors.
 
-Open only:
-
-```text
-firmware/xiao-soil-sensor
-```
-
-Build and flash it.
-
-An XIAO with no saved network configuration enters its bounded nearby
-provisioning window.
-
-## 5. Provision a sensor
-
-Keep the XIAO near the T5 while the T5 is in setup mode.
-
-The T5 should discover the sensor by stable sensor ID.
+## 7. Release builds
 
 Use:
 
 ```text
-Send Wi-Fi to Sensor
+tools\make-waveshare-release.cmd
 ```
 
-for the selected sensor.
+The script builds:
 
-The T5 sends the saved home-Wi-Fi configuration over the provisioning channel.
+1. H2 distribution firmware,
+2. Waveshare distribution package and manifest.
 
-The XIAO stores the configuration in NVS and restarts.
+Generated release assets belong in `release/` and must match the current firmware identities/hashes.
 
-## 6. Return the T5 to normal mode
+Do not manually rename old firmware binaries into a new release.
 
-Finish setup / return the T5 to home Wi-Fi.
+## 8. Waveshare 7B
 
-Normal expected network behavior:
+Build the 7B target explicitly:
 
-```text
-XIAO joins home Wi-Fi
-XIAO sends UDP v3 reading
-T5 receives on UDP 42100
-T5 returns application ACK
+```powershell
+& $pio run -d ".\firmware\waveshare-hub" -e waveshare_s3_touch_lcd_7b
 ```
 
-The T5 does not require a fixed IP because the sensor uses LAN broadcast for the
-reading and learns the ACK source dynamically.
+A successful source/build target does not prove runtime behavior. ESP PLANTS 7B hardware verification must be recorded separately after physical testing.
 
-## 7. Rename the plant
+## Legacy product setup
 
-Use the T5 setup page to assign the discovered sensor a human-readable plant
-name.
-
-The mapping is stored on the T5.
-
-Changing a plant name should not require:
-
-- reflashing the XIAO,
-- changing the protocol,
-- changing sensor code.
-
-## 8. Calibrate the physical probe
-
-Calibration is optional until you are ready to establish real dry/wet endpoints.
-
-See [CALIBRATION.md](CALIBRATION.md).
-
-## Normal use
-
-### Scheduled unattended wake
-
-The XIAO wakes, measures locally, and only starts Wi-Fi when a report condition
-is met.
-
-### Manual top-button wake
-
-The XIAO enters a two-minute green-LED service mode with 5-second live sampling.
-
-This is the preferred mode while physically moving, watering, wiping, or
-calibrating the sensor.
-
-## Resetting XIAO Wi-Fi provisioning
-
-Do not use the old "hold during boot" behavior.
-
-Current behavior:
-
-1. wake the sensor normally,
-2. while it is already awake in green service mode,
-3. deliberately hold the top button for 10 seconds,
-4. firmware erases saved home-Wi-Fi provisioning,
-5. sensor returns to provisioning behavior.
-
-## Troubleshooting
-
-### XIAO sends but receives no ACK
-
-Check that:
-
-- the T5 is in normal home-Wi-Fi mode,
-- the T5 is not still in its local setup/provisioning AP mode,
-- both devices are on the same LAN/broadcast domain,
-- UDP port 42100 is not blocked by network isolation.
-
-### Serial port disappears after a reading
-
-A native-USB ESP32-C6 can disappear from the host when it enters deep sleep.
-That alone is not proof of a crash.
-
-Use a service/debug mode when continuous serial visibility is required.
-
-### Sensor is stable but appears quiet
-
-That is expected in adaptive mode. A stable scheduled wake can measure and
-return to sleep without turning Wi-Fi on.
-
-The heartbeat prevents indefinite silence.
+The T5/XIAO setup flow remains in the repository for the legacy product line. It is not the active setup path described by this document.

@@ -1,167 +1,157 @@
 # Repository working rules
 
-These rules are part of the project baseline and should be followed by coding
-agents and contributors.
+These rules are part of the project baseline for coding agents and contributors.
 
 ## Source of truth
 
-1. Current repository files.
-2. Current intended Git branch.
-3. Confirmed hardware test results and logs.
-4. Historical notes.
+Use this order:
 
-Never overwrite newer repository work with older chat/context material.
+1. current repository files,
+2. current intended Git branch,
+3. confirmed hardware test results/logs,
+4. historical notes.
 
-## PlatformIO separation
+For current ESP PLANTS development, inspect `waveshare-zigbee` before answering or editing. Never overwrite newer repository work with older chat/context material.
 
-The T5 and XIAO firmware are intentionally separate PlatformIO projects.
+## Active and legacy product lines
 
-Do not create one combined root PlatformIO environment and do not make them
-share a PlatformIO package directory.
-
-Reason: the T5 and XIAO currently require different ESP32 Arduino platform /
-toolchain generations.
-
-## Protocol discipline
-
-`firmware/t5-hub/include/plant_protocol.h` and
-`firmware/xiao-soil-sensor/include/plant_protocol.h` must remain byte-identical.
-
-Run:
-
-```bash
-python tools/check_protocol_sync.py
-```
-
-If the wire layout changes:
-
-1. update both copies,
-2. increment `PROTOCOL_VERSION` when compatibility requires it,
-3. document the exact packet/layout change in `docs/PROTOCOL.md`,
-4. add a CHANGELOG entry,
-5. verify both firmware builds before hardware testing.
-
-Do not casually reuse reserved fields for incompatible semantics.
-
-## Naming architecture
-
-Plant names belong on the T5.
-
-Do not add plant-name strings to XIAO firmware, provisioning packets, or
-hard-coded sensor definitions unless the architecture is explicitly changed.
-
-The sensor should remain identified by stable sensor ID.
-
-## Sensor calibration
-
-Physical dry/wet calibration belongs on the XIAO because it describes the
-individual probe.
-
-Do not tie calibration to a plant name.
-
-Do not write calibration to flash on every sample. NVS is for deliberate
-calibration/configuration; transient adaptive history belongs in RTC-retained
-state.
-
-## Transport architecture
-
-Normal telemetry:
+The active product line is:
 
 ```text
-XIAO -> home Wi-Fi/router/mesh -> UDP -> T5 -> application ACK
+ZG-303Z -> Zigbee -> M5Stack ESP32-H2 -> PlantLink UART -> Waveshare ESP32-S3
 ```
 
-Provisioning:
+The Waveshare and H2 are separate PlatformIO projects.
+
+`firmware/t5-hub` and `firmware/xiao-soil-sensor` are preserved legacy product-line sources. Do not apply their Wi-Fi/UDP/ESP-NOW/e-paper assumptions to the current Waveshare/H2 product unless explicitly comparing or maintaining legacy code.
+
+## Active ownership boundary
+
+### Waveshare ESP32-S3
+
+Owns:
+
+- 800x480 UI
+- plant names and Zigbee sensor assignments
+- user configuration
+- current-boot freshness state
+- Wi-Fi
+- update experience
+- persistent user data
+
+### M5Stack ESP32-H2
+
+Owns:
+
+- Zigbee coordinator/network
+- permit join and device handling
+- ZG-303Z Zigbee/Tuya translation
+- Zigbee persistence
+- normalized PlantLink reporting
+
+Identify Zigbee sensors permanently by IEEE-64 address. A 16-bit Zigbee network address is transient.
+
+## PlantLink discipline
+
+The authoritative PlantLink protocol definition is:
 
 ```text
-T5 setup mode -> nearby ESP-NOW -> XIAO
+shared/plantlink/plantlink.h
 ```
 
-Do not switch normal telemetry back to direct ESP-NOW without an explicit
-architecture decision.
+`shared/plantlink_protocol.h` is only a compatibility forwarding include and must not redeclare protocol constants, payload sizes, message IDs, or capabilities.
 
-## Product constraints
+Protocol changes must:
 
-- standalone/local-first
-- no required Home Assistant
-- no required MQTT
-- no required cloud account
-- no required fixed T5 IP
-- e-paper behavior must avoid unnecessary refreshes
-- sensor battery behavior must avoid unnecessary Wi-Fi use
+1. update the authoritative PlantLink definition,
+2. preserve compatibility unless an intentional protocol break is documented,
+3. update `docs/PLANTLINK_PROTOCOL.md`,
+4. update relevant tests,
+5. update `CHANGELOG.md` when behavior or compatibility changes,
+6. verify both Waveshare and H2 builds before claiming compilation success.
 
-## Hardware changes
+Do not refer to the removed `tools/check_protocol_sync.py`; that belonged to the legacy duplicated T5/XIAO protocol workflow.
 
-Do not guess pin mappings.
+## Source-editing rule
 
-Before changing pin assignments, power sequencing, PMU behavior, e-paper bus
-details, sensor excitation, ADC behavior, or wake sources:
+Prefer direct edits to real source files.
 
-1. inspect the current code,
-2. inspect the relevant board/source documentation when necessary,
-3. prefer physically observed behavior when a board revision differs,
-4. document the reason.
+Do not use pre-build injector/patch scripts to mutate application source, UI layouts, headers, or runtime behavior. Build output must not depend on a one-time source mutation.
 
 ## Change discipline
 
-For a behavior change:
+Preserve first. Add second. Redesign only when explicitly requested.
 
-- keep the change narrow,
-- preserve unrelated work,
-- update `CHANGELOG.md`,
-- update affected documentation,
-- update tests/checklists where appropriate,
-- clearly distinguish "compiled" from "structurally inspected",
-- clearly distinguish "hardware verified" from "not yet physically verified."
+For a narrow fix:
 
-Do not claim a build passed unless a build actually ran.
+- change only what is required,
+- preserve unrelated UI and behavior,
+- preserve H2/Zigbee behavior unless necessary,
+- preserve persistence formats unless migration is intentionally designed,
+- preserve local build/upload settings,
+- do not claim a build passed unless it actually ran,
+- do not claim hardware verification unless it physically occurred.
 
-Do not tag a stable release until `docs/RELEASE_CHECKLIST.md` passes.
+## PlatformIO and workspace
 
-## Waveshare / Zigbee development
+The repository root is the permanent VS Code workspace.
 
-The `waveshare-zigbee` branch is the isolated development line for the
-Waveshare ESP32-S3 7-inch hub plus M5Stack ESP32-H2 Zigbee coprocessor.
+Keep Waveshare, H2, T5, and XIAO as independent PlatformIO projects under that workspace. Root `.vscode/tasks.json` is the control layer for local Build/Clean/Upload/Monitor tasks.
 
-- Preserve the existing `firmware/t5-hub` and
-  `firmware/xiao-soil-sensor` hardware-proven baseline unless a change is
-  explicitly intended to apply to those products too.
-- Keep the Waveshare and H2 as separate firmware projects. Do not create a
-  combined root PlatformIO environment.
-- The Waveshare ESP32-S3 owns the UI, plant names, user configuration,
-  history, Wi-Fi, and update experience.
-- The ESP32-H2 owns the Zigbee network, pairing, Zigbee device handling, and
-  ZG-303Z-specific Zigbee/Tuya translation.
-- Identify Zigbee sensors by their 64-bit IEEE address. A 16-bit Zigbee network
-  address is transient and must never be used as the permanent plant identity.
-- Home Assistant, MQTT, Zigbee2MQTT, and cloud services must not be required
-  for normal operation.
-- Persist user configuration separately from application firmware so a normal
-  firmware update does not erase plant names, assignments, thresholds, Wi-Fi
-  settings, or other personal configuration.
-- Persist the H2 Zigbee network across normal firmware updates. Network reset
-  must be a deliberate user action.
-- Do not guess Waveshare connector pin order, GPIO mapping, voltage, or H2
-  wiring. Verify against current board/module documentation and then verify on
-  hardware before marking it proven.
+Do not silently remove established developer upload configuration. In particular, the current Waveshare 7 environment retains:
 
-## VS Code workspace rule
+```text
+upload_port = COM11
+```
 
-The repository root is the one permanent VS Code workspace.
+unless the owner explicitly changes it.
 
-Do not require contributors to open each firmware directory as a separate VS
-Code workspace. Build/upload/monitor helpers should target the desired
-subproject from the repository root. Independent firmware projects and
-toolchains remain isolated underneath that single workspace.
+## Waveshare UI rule
 
-## GitHub automation rule
+Existing working layouts are locked unless redesign is explicitly requested.
 
-Firmware builds, tests, uploads, and release packaging are local/manual unless the
-project owner explicitly asks for GitHub automation.
+For any 800x480 Waveshare UI change, verify bounds mathematically and keep the reserved bottom navigation area intact. A new feature is not successful if it damages an existing working layout.
 
-- Do not add GitHub Actions firmware builds or CI workflows.
-- Do not re-create `.github/workflows/build.yml`.
-- PlatformIO build/upload/monitor commands belong in the single root VS Code
-  workspace and local helper tasks.
-- GitHub is source control and release hosting for this project, not a remote
-  firmware build service.
+## Persistence
+
+Normal updates must preserve:
+
+- plant names,
+- device name,
+- Zigbee sensor assignments,
+- repeater/router records,
+- Wi-Fi credentials,
+- user settings,
+- intentionally persistent plant data.
+
+Do not casually change stored record structures. If a schema changes, preserve backward compatibility or add migration logic.
+
+## Wi-Fi and OTA
+
+The Waveshare owns Wi-Fi and release/update behavior.
+
+Waveshare OTA uses the ESP PLANTS package format, A/B app partitions, verified HTTPS, identity checks, package/firmware SHA-256, ESP32-S3 image validation, inactive-slot writes, and final boot-partition activation only after complete validation.
+
+The source contains H2-through-Waveshare OTA support. Treat it as implemented but **not physically verified** unless current repository evidence and actual hardware testing establish otherwise.
+
+## Hardware changes
+
+Do not guess connector pin order, GPIOs, voltages, power sequencing, or board behavior.
+
+Before hardware-critical changes:
+
+1. inspect current source,
+2. inspect relevant board/module documentation,
+3. prefer physically observed behavior when revisions differ,
+4. document the reason,
+5. verify on hardware before labeling it proven.
+
+The Waveshare 7B target exists, but do not claim 7B runtime verification until it is physically tested.
+
+## GitHub rule
+
+Firmware builds, tests, uploads, and release packaging are local/manual unless the owner explicitly requests GitHub automation.
+
+Do not add GitHub Actions firmware builds or treat GitHub as a remote firmware build service.
+
+GitHub is read-only for assistant work unless the owner explicitly requests a write.

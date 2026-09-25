@@ -1,203 +1,119 @@
 # Architecture
 
-## Goals
+## Active product
 
-The project is designed to behave like a standalone appliance rather than a
-Home Assistant accessory.
+ESP PLANTS is a standalone local appliance built around:
 
-Core goals:
+```text
+HOBEIAN ZG-303Z Zigbee sensors
+          |
+        Zigbee
+          |
+M5Stack ESP32-H2 Gateway Unit
+          |
+     PlantLink UART
+          |
+Waveshare ESP32-S3 800x480 display
+```
 
-- central e-paper display,
-- multiple battery soil sensors,
-- easy plant renaming,
-- local setup,
-- reliable whole-house range using existing Wi-Fi infrastructure,
-- low sensor battery consumption,
-- no cloud dependency.
+No Home Assistant, MQTT, Zigbee2MQTT, or cloud service is required for normal monitoring.
 
 ## Component responsibilities
 
-### T5 hub
+### Waveshare ESP32-S3
 
-The T5 owns:
+Owns:
 
-- plant-name mapping,
-- home-Wi-Fi configuration for itself,
-- local setup page,
-- nearby sensor provisioning,
-- UDP receiving,
-- application ACKs,
-- display state,
-- persistent list of known sensors.
+- LVGL UI
+- plant names and sensor assignments
+- user preferences
+- sensor freshness/current-boot presentation
+- Wi-Fi
+- local setup/update UX
+- release/update orchestration
+- persistent user configuration
 
-### XIAO sensor
+### M5Stack ESP32-H2
 
-Each XIAO owns:
+Owns:
 
-- stable sensor identity,
-- physical soil/battery measurement,
-- its own Wi-Fi credentials,
-- its own dry/wet calibration,
-- adaptive wake/report decisions,
-- deep-sleep behavior,
-- top-button service behavior.
+- Zigbee coordinator/network
+- permit join
+- ZG-303Z device handling
+- Zigbee/Tuya normalization
+- Zigbee persistence
+- IEEE-64 device identity
+- PlantLink reports to the Waveshare
 
-The sensor does **not** own the human-readable plant name.
+### ZG-303Z
 
-## Normal telemetry path
+The sensor remains a stock Zigbee endpoint. It reports plant/environment values to the H2; it does not require household Wi-Fi.
 
-The XIAO performs a cheap local check first.
+## PlantLink boundary
+
+PlantLink is the framed UART boundary between H2 and Waveshare.
+
+The authoritative protocol definition is:
 
 ```text
-deep sleep
-   |
-   v
-wake CPU
-   |
-   v
-start soil excitation
-   |
-   v
-take averaged soil + battery reading
-   |
-   v
-compare with RTC-retained history
-   |
-   +---- no meaningful report ----> deep sleep
-   |
-   +---- report needed
-             |
-             v
-        join home Wi-Fi
-             |
-             v
-        UDP broadcast reading
-             |
-             v
-        T5 validates packet
-             |
-             v
-        T5 sends ACK
-             |
-             v
-        XIAO deep sleeps
+shared/plantlink/plantlink.h
 ```
 
-This separation between a **local check** and a **network report** is one of the
-main battery-saving design decisions.
+Current messages include link/heartbeat, Zigbee network state, permit join, device/infrastructure reports, normalized sensor reports, raw Zigbee diagnostics, command results, and H2 OTA messages.
 
-## Adaptive reporting
+## Sensor identity and freshness
 
-Report triggers currently include:
+The permanent identity is the Zigbee IEEE-64 address.
 
-- no previous successful report,
-- >=4 percentage-point change since the last successful report,
-- moisture-state change,
-- >=8 percentage-point upward jump interpreted as watering,
-- heartbeat age >=6 hours.
+A sensor's Zigbee 16-bit short address is transient and must not be used as the persistent plant key.
 
-The adaptive state is RTC-retained across deep sleep rather than written to NVS
-on every wake.
-
-## Watering watch
-
-A watering event needs higher temporal resolution than a stable plant.
-
-Current policy:
-
-1. detect an upward rise of >=8 points,
-2. send the changed reading,
-3. next local check after 5 minutes,
-4. then 10-minute follow-ups,
-5. exit after two sufficiently stable follow-ups or the follow-up cap,
-6. resume ordinary 15/30-minute local checks.
-
-Water hitting the probe during manual service mode also arms this watch.
-
-## Manual service mode
-
-GPIO2 button wake means a person is physically interacting with the sensor.
-
-The sensor therefore:
-
-- turns on the green LED,
-- remains awake for two minutes of inactivity,
-- takes/sends readings every 5 seconds,
-- allows manual fresh-read presses,
-- supports triple-press calibration,
-- supports deliberate long-hold Wi-Fi reset.
-
-This is intentionally more active than unattended battery mode.
-
-## Provisioning path
-
-Unprovisioned XIAO:
-
-1. starts ESP-NOW provisioning mode,
-2. stays available for a bounded window,
-3. sends discovery/beacon information.
-
-T5 setup mode:
-
-1. leaves home Wi-Fi,
-2. starts its local setup AP,
-3. uses ESP-NOW channel 1,
-4. discovers nearby unprovisioned sensors,
-5. sends saved home-Wi-Fi credentials to the selected sensor,
-6. receives provisioning acknowledgement.
-
-The XIAO stores the credentials and reboots into normal home-Wi-Fi operation.
-
-## Why the router/mesh is used
-
-Direct ESP-NOW was useful for proving the radio/protocol path but was not chosen
-as the normal whole-house transport because fringe placement made return ACK
-reliability dependent on T5 location.
-
-The home Wi-Fi/router/mesh already exists to solve house coverage. The plant
-system uses that infrastructure while remaining an otherwise standalone local
-application.
+The Waveshare may restore known sensor identity and user names at boot, but readings are not current until that sensor reports during the current boot. This prevents stale pre-reboot values from entering `WHO NEEDS WATER?` and similar summaries.
 
 ## Persistence
 
-### T5 NVS
+Normal firmware updates must preserve user data and Zigbee network state.
 
-Stores product/setup configuration including:
+Waveshare persistent data includes plant names, device name, sensor assignments, Wi-Fi credentials, and user settings.
 
-- setup password,
-- home-Wi-Fi credentials,
-- known sensor records,
-- plant names.
+H2 persistent data includes the Zigbee network/coordinator state required to avoid unnecessary re-pairing.
 
-### XIAO NVS
+Transient readings/history should not be persisted unless intentionally designed.
 
-Separate records currently store:
+## Wi-Fi
 
-- network provisioning configuration,
-- physical calibration.
+Wi-Fi exists on the Waveshare for setup and updates.
 
-### XIAO RTC-retained state
+Setup behavior is designed to support SSID scanning/selection and QR-assisted phone setup, while keeping known-good credentials until a replacement connection succeeds.
 
-Stores transient adaptive state across deep sleep:
+Disconnect and Forget Wi-Fi are separate actions: disconnect suppresses reconnect without erasing credentials; Forget Wi-Fi deliberately erases them.
 
-- previous observed moisture,
-- previous successfully reported moisture,
-- watering-watch state,
-- heartbeat age accounting,
-- planned sleep duration.
+## OTA
 
-## Scale
+### Waveshare
 
-The T5 currently allows up to 16 persisted plant records.
+The Waveshare updater uses an ESP PLANTS `.plantsota` package and manifest with:
 
-Protocol identity is based on a stable `uint32_t sensor_id`.
+- product/hardware/build identity,
+- package and firmware SHA-256,
+- ESP32-S3 image validation,
+- certificate-verified HTTPS,
+- bounded downloads/redirects,
+- A/B app partitions,
+- inactive-slot writes,
+- final boot-partition activation after successful validation.
 
-## Future configuration direction
+### H2 through Waveshare
 
-If plant-specific thresholds or timing are added later, the preferred design is:
+Current source contains the Phase 2 path that transfers an H2 distribution image over PlantLink. The release flow builds H2 first and records its metadata/hash in the Waveshare manifest.
 
-- configure them centrally from the T5,
-- send explicit machine settings to the XIAO,
-- keep the human-readable name T5-only.
+This path is **implemented in source but not claimed as physically verified**.
 
-That preserves the "rename once" architecture.
+## Waveshare 7B
+
+The 7B is a separate PlatformIO hardware target that shares the ESP PLANTS application where practical.
+
+The original Waveshare 7-inch hardware remains the physically verified runtime baseline. Do not infer 7B runtime verification from successful source integration alone.
+
+## Legacy architecture
+
+`firmware/t5-hub` and `firmware/xiao-soil-sensor` preserve the older T5/XIAO Wi-Fi/UDP/ESP-NOW architecture. That history remains useful, but it is not the active product architecture.

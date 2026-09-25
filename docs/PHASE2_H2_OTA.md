@@ -1,20 +1,72 @@
-# Phase 2 — H2 firmware over PlantLink
+# Phase 2 — H2 firmware through the Waveshare
 
-Base: `waveshare-zigbee` commit `7896a8de1b65a12021ba55bbe99b9586545c16e7` (Waveshare alpha.10).
+## Status
 
-Alpha.11 adds an H2 OTA receiver using the existing H2 A/B app partitions. Begin carries protocol, image size, SHA-256 and expected build ID. Chunks carry a 32-bit offset plus at most 248 firmware bytes. The H2 validates the incoming ESP image against the running H2 chip ID, streams SHA-256, requires the expected build ID and distribution marker, calls `esp_ota_end`, and changes the boot partition only after all checks pass.
+The current `waveshare-zigbee` source contains the Phase 2 H2 OTA implementation.
 
-`Update All` ordering is H2 first, Waveshare second. If the H2 does not answer the Phase 2 begin command, the display update is stopped and the unit requires the one-time H2 USB bootstrap. Once alpha.11 H2 is installed, subsequent release H2 binaries are transferred over PlantLink.
+The release flow builds an H2 distribution image first, records its identity/hash metadata in the Waveshare manifest, and lets the Waveshare transfer that image over PlantLink before installing its own update.
 
-The H2 release image is a controlled GitHub release asset with a SHA-256 sidecar. The Waveshare downloads both over verified HTTPS, verifies the binary SHA-256, transfers it stop-and-wait over PlantLink, waits for the H2 to reboot and report the expected build, and only then enters the existing Waveshare A/B installer.
+**Implementation in source is not the same as physical verification. This repository does not claim the H2-through-Waveshare path is hardware-verified yet.**
 
-No Zigbee/NVS/user-data partition is erased. No sensor registry or UI geometry is changed by this package.
+## H2 update model
 
-## First Phase 2 installation
+The H2 uses its A/B application layout.
 
-1. Build the alpha.11 H2 release environment and USB-flash the H2 once.
-2. Build/upload all four release assets produced by `tools/make-waveshare-release.cmd`.
-3. Update the Waveshare to alpha.11 using the existing updater path.
-4. From then on, normal release installation updates H2 first over PlantLink and the Waveshare second.
+PlantLink OTA messages carry the begin/chunk/end/status/abort flow. The receiver validates the incoming image before activation, including the expected build/distribution identity and ESP image compatibility. It writes the inactive application partition and changes the boot partition only after successful completion.
 
-Hardware verification is still required on the actual Waveshare + M5Stack H2 pair.
+No normal H2 OTA flow should erase Zigbee/NVS state.
+
+## Waveshare orchestration
+
+The Waveshare release installer performs the H2 stage before its own application stage.
+
+Expected release order:
+
+1. obtain current release manifest over verified HTTPS,
+2. validate intended H2 metadata,
+3. download/verify the H2 release asset,
+4. transfer H2 firmware over PlantLink,
+5. wait for H2 reboot/expected build,
+6. only then proceed with the normal Waveshare A/B `.plantsota` install.
+
+If the H2 stage fails, the Waveshare application stage must not proceed as if `Update All` succeeded.
+
+## Release tooling
+
+Use:
+
+```text
+tools\make-waveshare-release.cmd
+```
+
+It builds the H2 release environment before the Waveshare release environment.
+
+Current release output includes:
+
+```text
+esp-plants-h2-<H2_VERSION>.bin
+esp-plants-h2-<H2_VERSION>.bin.sha256
+esp-plants-waveshare-<WAVESHARE_VERSION>.plantsota
+esp-plants-waveshare.manifest.json
+```
+
+Do not use historical binaries left from an older alpha as the current H2 release.
+
+## Physical verification still required
+
+A hardware verification pass should prove:
+
+- complete H2 transfer over PlantLink,
+- correct inactive-slot selection,
+- image/hash/build/distribution validation,
+- H2 reboot into the intended build,
+- Zigbee network persistence,
+- Waveshare stage blocked on H2 failure,
+- Waveshare stage allowed after H2 success,
+- all Waveshare user configuration preserved.
+
+Record the exact hardware/build identities used when this is tested. Do not backfill a verification claim from source inspection alone.
+
+## Historical note
+
+Earlier alpha-specific Phase 2 bring-up notes described the one-time bootstrap concept. Those version-specific instructions are no longer the current release procedure; current behavior and release identities must come from the live branch source and release tooling.

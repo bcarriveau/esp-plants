@@ -1,116 +1,85 @@
 # Hardware
 
-## LILYGO T5 hub
+## Active ESP PLANTS hardware
 
-Target family:
+### Waveshare ESP32-S3 Touch LCD 7
 
-- LILYGO T5 4.7-inch S3 Pro / H752-01 style board
+Role: user-facing application/display controller.
+
 - ESP32-S3
-- 960×540 ED047TC1-class e-paper panel
-- PSRAM
-- PMU / e-paper power circuitry
-- capacitive touch hardware available on the board, although the current
-  receiver/setup baseline is centered on display + function-button behavior
+- 800x480 touch display
+- LVGL UI
+- Wi-Fi for setup/update functions
+- PlantLink UART connection to the H2
+- current physically verified Waveshare ESP PLANTS baseline
 
-### Current T5 source pin/constants
+Do not change connector pin order, GPIO mapping, voltage, panel timing, or power behavior from assumption. Inspect the current board headers/source and verify physical hardware before marking a change proven.
 
-The current firmware defines:
+### Waveshare ESP32-S3 Touch LCD 7B
 
-| Function | Pin / address |
-|---|---|
-| I2C SDA | GPIO39 |
-| I2C SCL | GPIO40 |
-| PCA9535 | `0x20` |
-| BQ25896 | `0x6B` |
-| TPS65185 | `0x68` |
-| EPD CKH | GPIO4 |
-| EPD D0 | GPIO5 |
-| EPD D1 | GPIO6 |
-| EPD D2 | GPIO7 |
-| EPD D7 | GPIO8 |
-| touch reset | GPIO9 |
-| backlight | GPIO11 |
-| EPD D3 | GPIO15 |
-| EPD D4 | GPIO16 |
-| EPD D5 | GPIO17 |
-| EPD D6 | GPIO18 |
-| EPD STH | GPIO41 |
-| EPD LE | GPIO42 |
-| EPD STV | GPIO45 |
-| EPD CKV | GPIO48 |
+Role: alternate display hardware target sharing the ESP PLANTS application.
 
-The function button in the current source is read through the PCA9535 as P1.2.
+The repository has a dedicated `waveshare_s3_touch_lcd_7b` PlatformIO environment and board-specific boundary.
 
-**Do not treat GPIO48 as a spare input in this codebase.** It is assigned to
-the e-paper CKV line.
+**Runtime verification on ESP PLANTS 7B hardware is not claimed yet.**
 
-Board revisions and physical button labeling can be confusing. Verify physical
-behavior before changing power/button code.
+### M5Stack ESP32-H2 Thread/Zigbee Gateway Unit
 
-## Seeed XIAO ESP32-C6 Soil Moisture Monitor
+Role: Zigbee coordinator/translator.
 
-Current verified firmware mapping:
+Current project responsibilities:
 
-| Function | GPIO |
-|---|---:|
-| battery ADC | 0 |
-| soil ADC | 1 |
-| top button, active-low | 2 |
-| factory LOW | 3 |
-| factory HIGH | 14 |
-| yellow LED | 18 |
-| green LED | 19 |
-| red LED | 20 |
-| sensor excitation PWM | 21 |
+- ESP32-H2 native 802.15.4 radio
+- Zigbee coordinator role
+- ZG-303Z commissioning/device handling
+- Zigbee persistence
+- Grove/UART PlantLink connection to the Waveshare
+- USB serial diagnostics/development
+- H2 A/B application partitions used by the Phase 2 OTA implementation
 
-Sensor excitation:
+Current firmware source documents H2 PlantLink UART on RX GPIO23 / TX GPIO24.
 
-- 200 kHz
-- 7-bit PWM configuration
-- approximately 68% duty
+### HOBEIAN ZG-303Z
 
-The firmware avoids relying on a permanently powered probe. It starts the
-excitation when the sensor wakes and measures.
+Role: battery-powered Zigbee plant sensor.
 
-## ADC / calibration
+The physically verified current data path includes:
 
-Soil:
+- soil moisture,
+- temperature,
+- air humidity,
+- battery,
+- IEEE-64 identity,
+- current project Zigbee/Tuya decoding.
 
-- 10 normal soil samples per measurement
-- percentage calculated from the active dry/wet endpoints
+ZG-303Z firmware variants may not share identical Tuya datapoint layouts; keep raw diagnostics available and do not generalize one observed mapping without evidence.
 
-Battery:
+## Development upload target
 
-- 16 ADC samples
-- current simple mapping:
-  - 1200 mV = 0%
-  - 1500 mV = 100%
+The current Waveshare 7 developer environment preserves:
 
-These battery endpoints are product calibration values, not a claim about the
-raw battery-cell terminal voltage.
+```text
+upload_port = COM11
+```
 
-## Power behavior
+This is a local development configuration and should not be silently removed while editing `platformio.ini`.
 
-### XIAO
+## Hardware verification rules
 
-Deep sleep enables both:
+A source/build target is not the same as physical verification.
 
-- timer wake,
-- GPIO2 top-button wake.
+For hardware-sensitive changes:
 
-### T5
+1. inspect current source,
+2. inspect current vendor/board documentation when necessary,
+3. build the intended firmware,
+4. verify on the actual hardware,
+5. record what was physically tested.
 
-The current receiver uses the board PMU shutdown path for deliberate power-off.
-Do not replace real PMU shutdown with deep sleep and call it equivalent; the two
-behaviors have different wake semantics.
+Do not claim Waveshare 7B runtime verification or H2-through-Waveshare OTA hardware verification until those tests actually occur.
 
-## Hardware change rule
+## Legacy hardware
 
-Pin assignments and power sequencing are hardware-critical.
+The repository retains the LILYGO T5 4.7-inch S3 Pro hub and Seeed XIAO ESP32-C6 soil-sensor implementation as a legacy product line.
 
-Any change should include:
-
-1. source/documentation evidence,
-2. a build,
-3. actual-board verification,
-4. a CHANGELOG note when user-visible behavior changes.
+Its detailed pin/calibration/power information belongs to that legacy source/history and should not be used as the active Waveshare/H2 hardware description.

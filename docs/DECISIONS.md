@@ -1,81 +1,87 @@
 # Design decisions
 
-This file records architectural decisions so future changes do not accidentally
-undo the reasons behind the current design.
+This file records architectural decisions so future changes do not accidentally undo the reasons behind the current design.
 
-## D001 - Separate T5 and XIAO PlatformIO projects
+## D001 - Waveshare and H2 are separate firmware projects
 
-**Decision:** Keep them as separate build roots.
+**Decision:** Keep `firmware/waveshare-hub` and `firmware/m5-h2-zigbee` as independent PlatformIO projects inside one root VS Code workspace.
 
-**Reason:** They require different ESP32 Arduino/toolchain generations. A
-combined project previously caused package/toolchain collisions.
+**Reason:** They are different chips with different responsibilities and toolchain/platform requirements.
 
-**Consequence:** Shared protocol code is duplicated and must be synchronization
-checked.
+**Consequence:** They can be built/versioned independently while sharing the PlantLink boundary.
 
-## D002 - Plant names live only on the T5
+## D002 - H2 owns Zigbee
 
-**Decision:** Sensors send stable IDs, not human plant names.
+**Decision:** The M5Stack ESP32-H2 is the Zigbee coordinator and owns network state, permit join, device handling, and ZG-303Z translation.
 
-**Reason:** A rename should happen once. The user should not have to edit names
-in sensor firmware, hub code, and external entities.
+**Reason:** Zigbee radio/protocol responsibility belongs on the H2 rather than the Waveshare application controller.
 
-**Consequence:** T5 NVS is authoritative for `sensor_id -> plant_name`.
+**Consequence:** H2 Zigbee persistence must survive normal firmware updates and network reset must remain deliberate.
 
-## D003 - Normal telemetry uses home Wi-Fi / UDP
+## D003 - Waveshare owns user-facing state
 
-**Decision:** Use the household router/mesh for normal sensor range.
+**Decision:** The Waveshare owns plant names, sensor assignments, display settings, Wi-Fi, UI state, and the update experience.
 
-**Reason:** Direct ESP-NOW worked for the proof of concept but fringe placement
-made reliable bidirectional communication too dependent on hub location.
+**Reason:** Human-facing configuration belongs with the application/UI controller rather than the radio coprocessor.
 
-**Consequence:** The product remains local but benefits from existing whole-home
-network coverage.
+**Consequence:** Normal OTA must preserve that state outside application-image replacement.
 
-## D004 - ESP-NOW remains for nearby provisioning
+## D004 - Zigbee identity is IEEE-64
 
-**Decision:** Keep ESP-NOW for short-range local setup.
+**Decision:** Persist sensor identity by 64-bit IEEE address, not 16-bit network address.
 
-**Reason:** It allows a sensor with no Wi-Fi configuration to receive credentials
-without adding a separate screen or keyboard to the sensor.
+**Reason:** Zigbee short addresses can change.
 
-**Consequence:** Provisioning security must be hardened before production.
+**Consequence:** Sensor assignments remain stable across normal Zigbee address churn.
 
-## D005 - Sensor decides whether Wi-Fi is worth turning on
+## D005 - PlantLink has one authoritative definition
 
-**Decision:** Local measurement occurs before Wi-Fi startup.
+**Decision:** `shared/plantlink/plantlink.h` is the authoritative core protocol definition.
 
-**Reason:** Wi-Fi dominates the cost of a routine wake. Stable plants should not
-pay that cost every local check.
+**Reason:** Duplicate protocol definitions drift.
 
-**Consequence:** Sensor retains enough adaptive state across deep sleep to make
-the report decision.
+**Consequence:** `shared/plantlink_protocol.h` is only a compatibility forwarding include; it must not redeclare message IDs, capabilities, or payload limits.
 
-## D006 - Watering causes temporary higher sampling density
+## D006 - Sensor freshness is per boot
 
-**Decision:** After detecting a watering rise, follow up in 5 minutes and then
-10-minute intervals until settled.
+**Decision:** Restored sensor identity is not equivalent to a fresh reading.
 
-**Reason:** A probe can become immediately wet when water reaches it, then settle
-to a lower representative value. A normal 30-minute WET interval would hide that
-important settling behavior.
+**Reason:** Sleepy sensors may not report immediately after a reboot, and stale readings must not be presented as current.
 
-## D007 - Calibration lives on the physical sensor
+**Consequence:** Watering/current-status summaries only use sensors that have actually reported during the current boot.
 
-**Decision:** Store dry/wet endpoints on the XIAO.
+## D007 - Wi-Fi belongs to the Waveshare
 
-**Reason:** Calibration describes the individual probe/electronics, not the
-plant's human name.
+**Decision:** The active Zigbee sensors do not use the household Wi-Fi path.
 
-**Consequence:** Calibration survives plant renames and T5 display changes.
+**Reason:** The H2 provides direct Zigbee communication. Wi-Fi is needed for Waveshare setup/update functions, not normal ZG-303Z telemetry.
 
-## D008 - T5 ACK scheduling field remains compatibility-only for now
+**Consequence:** The current product has no Home Assistant/MQTT/Zigbee2MQTT/cloud dependency.
 
-**Decision:** Keep the v3 ACK field but do not let it override Phase 3D+ sensor
-adaptive scheduling.
+## D008 - OTA is product-specific and A/B
 
-**Reason:** Avoid a gratuitous protocol change while the smarter sensor-side
-scheduler is being proven.
+**Decision:** Waveshare OTA uses the ESP PLANTS package/manifest format with A/B app partitions and inactive-slot writes.
 
-**Future:** If T5-configurable timing is added, introduce an explicit
-configuration design rather than relying on ambiguous legacy behavior.
+**Reason:** Arbitrary raw firmware flashing is not an acceptable customer update path.
+
+**Consequence:** Updates validate product/hardware/build identity, hashes, ESP32-S3 image structure, HTTPS certificates, and only activate the new partition after successful validation.
+
+## D009 - H2 update is coordinated by Waveshare
+
+**Decision:** Release tooling builds H2 first, the manifest carries H2 metadata, and the Waveshare source contains the PlantLink H2 update path before its own app update.
+
+**Reason:** Normal customer updates should eventually avoid separate H2 USB access.
+
+**Consequence:** The implementation can be tested as one release flow, but it must not be described as physically verified until hardware testing proves it.
+
+## D010 - Waveshare 7B shares the application, not the proof status
+
+**Decision:** Keep the 7B as a dedicated hardware target behind board-specific code while sharing the application/UI where practical.
+
+**Reason:** Avoid product/UI forks while isolating hardware differences.
+
+**Consequence:** The original Waveshare 7 remains the proven baseline; 7B runtime support is not labeled proven until physically tested.
+
+## Historical decisions
+
+Earlier T5/XIAO decisions remain represented by their source history and `BASELINE_MANIFEST.md`. They are legacy-product decisions, not rules for new Waveshare/H2 implementation work.

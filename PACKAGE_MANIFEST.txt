@@ -1,0 +1,33 @@
+ESP PLANTS TASK 4 PACKAGE MANIFEST
+Base SHA: 3fabbf053096b36d7f013a86617411945680efc9
+
+Replacement/addition files:
+c71c547557b42b1df7e915e1ec5159b975777ffda283c75a8be81db057496933  AGENTS.md
+0263ef2b6210f79831c9937baa4201ffcb8dec7039fc8735ead6478f6a657cab  DELETE_THESE_FILES.txt
+2f3524ea2787e73244f2a311ba0fabf41a738d9f5f58d99fd951df31c867d8bd  README.md
+25816fbd7a518210c2eb092f2077f52a5e46297823abe58883264619a94eed7b  SECURITY.md
+8486f2622a92b5b9f415c5f80c3e4b192915ec527746c19b2a108bf3e9950cf4  TASK4_REPORT.txt
+d1713de4fe529284469594fad725db6f43e93c169995c2d730fc353e18b3a968  docs/ARCHITECTURE.md
+a6770adb2b6b9101114ba74426fe1c616be0badfc3be98a921d227c672e54b30  docs/BASELINE_STATUS.md
+20434886f9422b9da1ef564138973724382af44a673e0e4ed666018da534c245  docs/DECISIONS.md
+a9bb2d299bf5c5f2ba3fdda69ecacd42d6a67b2ba6c106741c8f088712799c3d  docs/HARDWARE.md
+2f30aefad0f5d61816ce05d3fdb6b42a92991778398cf61d8dbd84fbd8e76eb4  docs/PHASE2_H2_OTA.md
+c1d453ae8496c0f9dece520ecb93091c4b77937f7880e06c10b0a3a99bd0f318  docs/RELEASE_CHECKLIST.md
+f5d31e05dee81f1f6bfe511c550ee4943c1aee04250ae252fe028ea3105f32a8  docs/ROADMAP.md
+b4c00819e50492d551e505d5f8a0263b309ec8b6a9af4de3e9559919fa6ac70e  docs/SETUP.md
+72df12f8a618caf345f055eec09a5b8cf42446f4417ec38a4903d3719a3724ae  docs/TESTING.md
+047ab9ee180e57fe605f4ff63048ef6ac6d1a577a87d57c8f6d99c132c5b8e6b  release/README.md
+1bcf613ed978019485b44133591074686b46fd1c66c4d5b8dc3019766eb5983d  tests/test_crash_diagnostics.py
+f330f60d55f17c340969374a5245584407a5ef9ec8a3809c58b773d61fc498db  tests/test_transition_guards.py
+5a03a5bc980cb4b55af68c285c6fcb1c6b68a439a5b4c369f99675fb0fe699f1  tests/test_version_identity.py
+
+Intended deletions:
+- CHANGELOG-NEW-SECTION.md
+- release/esp-plants-h2-0.2.0-alpha.14.bin
+- release/esp-plants-h2-0.2.0-alpha.14.bin.sha256
+- release/esp-plants-h2-0.2.0-alpha.15.bin
+- release/esp-plants-h2-0.2.0-alpha.15.bin.sha256
+- release/esp-plants-h2-0.2.0-alpha.18.bin
+- release/esp-plants-h2-0.2.0-alpha.18.bin.sha256
+- tests/test_alpha12_button_transition_guard.py
+- tests/test_alpha13_transition_hotfix.py
