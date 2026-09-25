@@ -1,10 +1,11 @@
 from __future__ import annotations
-import argparse,hashlib,json,re,shutil,struct
+import argparse,hashlib,json,re,struct
 from pathlib import Path
 from typing import NamedTuple
 PACKAGE_MAGIC=b"ESP-PLANTS-OTA"; PACKAGE_HARDWARE_ID=b"WAVESHARE-ESP32-S3-LCD-7"; PACKAGE_PRODUCT_ID=b"ESP-PLANTS-WAVESHARE"; FORMAT_VERSION=1; HEADER_SIZE=512; ESP_IMAGE_MAGIC=0xE9; ESP32_S3_CHIP_ID=9
 HEADER_STRUCT=struct.Struct("<16sHH32s32s96sI32s296s"); MANIFEST_ASSET_NAME="esp-plants-waveshare.manifest.json"; MAX_MANIFEST_BYTES=2048; DISTRIBUTION_FIRMWARE_MARKER=b"ESP-PLANTS-DISTRIBUTION-BUILD"; H2_DISTRIBUTION_MARKER=b"ESP-PLANTS-H2-DISTRIBUTION-BUILD"; DISTRIBUTION_BUILD_FLAG="ESP_PLANTS_DISTRIBUTION_BUILD"; MIN_FIRMWARE_BYTES=64*1024; MAX_PACKAGE_BYTES=7*1024*1024; H2_MAX_BYTES=0xE0000
 class BuildIdentity(NamedTuple): version:str; hardware:str; product:str; channel:str; build_id:str; updater_version:int; release_notes:str
+class H2BuildIdentity(NamedTuple): version:str; hardware:str; product:str; build_id:str
 class PackageMetadata(NamedTuple): package_size:int; package_sha256:str; firmware_size:int; firmware_sha256:str; build_id:str
 def _fixed(v:bytes,n:int,f:str)->bytes:
     if len(v)>=n: raise ValueError(f"{f} must be shorter than {n} bytes")
@@ -19,6 +20,8 @@ def _int(t,n):
     return int(m.group(1))
 def read_build_identity(p:Path)->BuildIdentity:
     t=p.read_text();v=_str(t,"ESP_PLANTS_WAVESHARE_VERSION");return BuildIdentity(v,_str(t,"ESP_PLANTS_WAVESHARE_HARDWARE_ID"),_str(t,"ESP_PLANTS_WAVESHARE_PRODUCT_ID"),_str(t,"ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL"),f"ESPPLANTS-WAVESHARE-{v}",_int(t,"ESP_PLANTS_WAVESHARE_UPDATER_VERSION"),_str(t,"ESP_PLANTS_WAVESHARE_RELEASE_NOTES"))
+def read_h2_build_identity(p:Path)->H2BuildIdentity:
+    t=p.read_text();v=_str(t,"ESP_PLANTS_H2_VERSION");return H2BuildIdentity(v,_str(t,"ESP_PLANTS_H2_HARDWARE_ID"),_str(t,"ESP_PLANTS_H2_PRODUCT_ID"),f"ESPPLANTS-H2-{v}")
 def validate_firmware(f:bytes):
     if len(f)<MIN_FIRMWARE_BYTES or f[0]!=ESP_IMAGE_MAGIC: raise ValueError("invalid ESP application image")
     if struct.unpack_from("<H",f,12)[0]!=ESP32_S3_CHIP_ID: raise ValueError("firmware is not ESP32-S3")
@@ -30,20 +33,21 @@ def create_package(f:bytes,i:BuildIdentity)->bytes:
     return p
 def metadata(p:bytes,i:BuildIdentity)->PackageMetadata:
     f=p[512:];return PackageMetadata(len(p),hashlib.sha256(p).hexdigest(),len(f),hashlib.sha256(f).hexdigest(),i.build_id)
-def h2_asset(repo:Path,i:BuildIdentity,release:Path):
+def h2_asset(repo:Path,release:Path):
+    identity=read_h2_build_identity(repo/"firmware"/"m5-h2-zigbee"/"include"/"build_version.h")
     src=repo/"firmware"/"m5-h2-zigbee"/".pio"/"build"/"m5_gateway_h2_release"/"firmware.bin"
     if not src.is_file(): raise ValueError(f"H2 release firmware missing: {src}")
-    data=src.read_bytes(); build=f"ESPPLANTS-H2-{i.version}".encode()
+    data=src.read_bytes(); build=identity.build_id.encode()
     if len(data)<MIN_FIRMWARE_BYTES or len(data)>H2_MAX_BYTES or data[0]!=ESP_IMAGE_MAGIC: raise ValueError("H2 firmware size/image invalid")
     if H2_DISTRIBUTION_MARKER not in data or build not in data: raise ValueError("H2 firmware lacks distribution/build identity")
-    name=f"esp-plants-h2-{i.version}.bin"; out=release/name; out.write_bytes(data); digest=hashlib.sha256(data).hexdigest(); (release/(name+".sha256")).write_text(digest+"  "+name+"\n",encoding="ascii")
-    return {"product":"esp-plants-h2","hardware":"m5stack-unit-gateway-h2","version":i.version,"build_id":build.decode(),"protocol":1,"asset":name,"firmware_size":len(data),"firmware_sha256":digest}
+    name=f"esp-plants-h2-{identity.version}.bin"; out=release/name; out.write_bytes(data); digest=hashlib.sha256(data).hexdigest(); (release/(name+".sha256")).write_text(digest+"  "+name+"\n",encoding="ascii")
+    return {"product":identity.product,"hardware":identity.hardware,"version":identity.version,"build_id":identity.build_id,"protocol":1,"asset":name,"firmware_size":len(data),"firmware_sha256":digest}
 def create_manifest(i,m,a,h2):
     d={"schema":1,"tag":f"v{i.version}","product":i.product,"hardware":i.hardware,"channel":i.channel,"version":i.version,"build_id":m.build_id,"asset":a,"package_size":m.package_size,"package_sha256":m.package_sha256,"firmware_size":m.firmware_size,"firmware_sha256":m.firmware_sha256,"min_updater":i.updater_version,"notes":i.release_notes,"h2":h2};b=(json.dumps(d,separators=(",",":"),sort_keys=True)+"\n").encode("ascii")
     if len(b)>MAX_MANIFEST_BYTES: raise ValueError("manifest exceeds firmware limit")
     return b
 def write_release_assets(fw:Path,hdr:Path,release:Path):
-    i=read_build_identity(hdr);p=create_package(fw.read_bytes(),i);m=metadata(p,i);release.mkdir(parents=True,exist_ok=True);a=f"esp-plants-waveshare-{i.version}.plantsota";(release/a).write_bytes(p);h2=h2_asset(hdr.parents[3],i,release);(release/MANIFEST_ASSET_NAME).write_bytes(create_manifest(i,m,a,h2));return release/a,release/MANIFEST_ASSET_NAME,m
+    i=read_build_identity(hdr);p=create_package(fw.read_bytes(),i);m=metadata(p,i);release.mkdir(parents=True,exist_ok=True);a=f"esp-plants-waveshare-{i.version}.plantsota";(release/a).write_bytes(p);h2=h2_asset(hdr.parents[3],release);(release/MANIFEST_ASSET_NAME).write_bytes(create_manifest(i,m,a,h2));return release/a,release/MANIFEST_ASSET_NAME,m
 def _enabled(env): return "ESP_PLANTS_DISTRIBUTION_BUILD" in str(env.get("BUILD_FLAGS",[]))
 def _post(source,target,env):
     if not _enabled(env): raise RuntimeError("distribution build required")
