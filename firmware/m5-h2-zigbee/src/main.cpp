@@ -11,6 +11,7 @@
 
 #include "plantlink.h"
 #include "build_version.h"
+#include "h2_ota_receiver.h"
 #include "zg303z_tuya.h"
 
 // Arduino-ESP32 registers this APS handler internally for binding-table housekeeping.
@@ -33,6 +34,12 @@ constexpr uint32_t kRouterJoinSettleMs = 15000;
 constexpr uint32_t kRouterJoinActivityFreshMs = kInfrastructureScanIntervalMs + 1500;
 constexpr uint8_t kCoordinatorMaxChildren = 48;
 constexpr uint16_t kOverallNetworkSize = 96;
+constexpr uint32_t kH2Capabilities =
+    plantlink::CapabilityZigbeeCoordinator |
+    plantlink::CapabilityZg303zDecoder |
+    plantlink::CapabilityRawZigbeeLog |
+    plantlink::CapabilityInfrastructureRegistry |
+    plantlink::CapabilityH2Ota;
 
 HardwareSerial PlantUart(1);
 
@@ -161,11 +168,7 @@ void sendNetworkStatus() {
 void sendHeartbeat() {
   uint8_t payload[8]{};
   plantlink::putU32LE(payload, millis());
-  uint32_t caps = plantlink::CapabilityZigbeeCoordinator |
-                  plantlink::CapabilityZg303zDecoder |
-                  plantlink::CapabilityRawZigbeeLog |
-                  plantlink::CapabilityInfrastructureRegistry;
-  plantlink::putU32LE(payload + 4, caps);
+  plantlink::putU32LE(payload + 4, kH2Capabilities);
   sendFrame(plantlink::MessageType::Heartbeat, payload, sizeof(payload));
 }
 
@@ -627,9 +630,12 @@ void serviceInfrastructureRegistry() {
 }
 
 void handlePlantFrame(const plantlink::Frame &frame) {
+  if (espplants_h2_ota::handlePlantLinkFrame(frame)) return;
+
   switch (frame.type) {
     case plantlink::MessageType::Hello:
       sendHelloAck();
+      sendHeartbeat();
       break;
 
     case plantlink::MessageType::PermitJoin: {
