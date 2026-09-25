@@ -253,7 +253,6 @@ void sendRawEvent(const ApsEvent &event) {
   sendFrame(plantlink::MessageType::RawZigbeeEvent, payload, static_cast<uint16_t>(offset));
 }
 
-
 SensorState *findSensorByIeee(const uint8_t ieee[8]) {
   if (!ieee || ieeeIsZero(ieee)) return nullptr;
   for (auto &sensor : sensors) {
@@ -334,23 +333,24 @@ void removeDeviceByIeee(const uint8_t ieee[8]) {
     shortAddress = esp_zb_address_short_by_ieee(lookup);
   }
 
-  if (shortAddress != 0xffff) {
-    esp_zb_zdo_mgmt_leave_req_param_t leaveReq{};
-    memcpy(leaveReq.device_address, ieee, sizeof(leaveReq.device_address));
-    leaveReq.dst_nwk_addr = shortAddress;
-    leaveReq.remove_children = 0;
-    leaveReq.rejoin = 0;
-
-    esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zdo_device_leave_req(&leaveReq, leaveRequestCallback, nullptr);
-    esp_zb_lock_release();
-
-    Serial.printf("[zigbee] sent leave request ieee=%s short=0x%04X\n",
-                  ieeeText, shortAddress);
-  } else {
-    Serial.printf("[zigbee] remove requested for ieee=%s but no short address is known\n",
+  if (shortAddress == 0xffff) {
+    Serial.printf("[zigbee] rejected remove for ieee=%s because no joined/known short address exists\n",
                   ieeeText);
+    return;
   }
+
+  esp_zb_zdo_mgmt_leave_req_param_t leaveReq{};
+  memcpy(leaveReq.device_address, ieee, sizeof(leaveReq.device_address));
+  leaveReq.dst_nwk_addr = shortAddress;
+  leaveReq.remove_children = 0;
+  leaveReq.rejoin = 0;
+
+  esp_zb_lock_acquire(portMAX_DELAY);
+  esp_zb_zdo_device_leave_req(&leaveReq, leaveRequestCallback, nullptr);
+  esp_zb_lock_release();
+
+  Serial.printf("[zigbee] sent leave request ieee=%s short=0x%04X\n",
+                ieeeText, shortAddress);
 
   if (sensor) {
     *sensor = SensorState{};
@@ -634,12 +634,17 @@ void handlePlantFrame(const plantlink::Frame &frame) {
 
   switch (frame.type) {
     case plantlink::MessageType::Hello:
+      espplants_h2_ota::noteControllerHello(frame);
       sendHelloAck();
       sendHeartbeat();
       break;
 
     case plantlink::MessageType::PermitJoin: {
-      if (frame.payloadLength < 1) break;
+      if (frame.payloadLength != 1) {
+        Serial.printf("[zigbee] ignored PermitJoin with invalid payload length=%u\n",
+                      frame.payloadLength);
+        break;
+      }
       uint8_t seconds = frame.payload[0];
       if (seconds > 180) seconds = 180;
       if (seconds == 0) {
@@ -679,8 +684,8 @@ void handlePlantFrame(const plantlink::Frame &frame) {
       break;
 
     case plantlink::MessageType::FactoryResetNetwork:
-      // Destructive reset is intentionally NOT wired to the first UI build.
-      // A future implementation will require an explicit confirmation token.
+      // Destructive reset remains deliberately unimplemented. Do not add a
+      // network wipe here without a separate, explicit confirmation design.
       Serial.println("[zigbee] ignored unconfirmed factory reset command");
       break;
 
@@ -721,10 +726,15 @@ void servicePlantLink() {
 
 void printUsbConsoleHelp() {
   Serial.println("[console] commands:");
-  Serial.println("  p = open Zigbee pairing for 120 seconds");
-  Serial.println("  c = close Zigbee pairing");
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
+  Serial.println("  p = open Zigbee pairing for 120 seconds (development only)");
+  Serial.println("  c = close Zigbee pairing (development only)");
+#endif
   Serial.println("  s = print Zigbee/network/sensor/repeater status");
   Serial.println("  h or ? = show this help");
+#if !defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
+  Serial.println("[console] distribution build: network-changing console commands disabled");
+#endif
 }
 
 void printUsbConsoleStatus() {
@@ -781,21 +791,29 @@ void handleUsbConsoleCommand(char command) {
 
   switch (command) {
     case 'p':
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
       Zigbee.openNetwork(120);
       permitJoinUntilMs = millis() + 120000u;
       deferredPermitCloseMs = 0;
       lastRouterJoinActivityMs = 0;
       Serial.println("[console] Zigbee pairing OPEN for 120 seconds");
       sendNetworkStatus();
+#else
+      Serial.println("[console] pairing command disabled in distribution build");
+#endif
       break;
 
     case 'c':
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
       Zigbee.closeNetwork();
       permitJoinUntilMs = 0;
       deferredPermitCloseMs = 0;
       lastRouterJoinActivityMs = 0;
       Serial.println("[console] Zigbee pairing CLOSED");
       sendNetworkStatus();
+#else
+      Serial.println("[console] pairing command disabled in distribution build");
+#endif
       break;
 
     case 's':
@@ -826,13 +844,20 @@ void serviceUsbConsole() {
     handleUsbConsoleCommand(command);
   }
 }
+
 bool startZigbee() {
   Serial.println("[zigbee] configuring ESP32-H2 as native coordinator");
   Serial.printf("[zigbee] Tuya EF00 client cluster: %s\n",
                 zbGateway.tuyaClientReady() ? "registered" : "FAILED");
   zbGateway.setManufacturerAndModel("ESP PLANTS", "PlantGateway-H2");
   Zigbee.addEndpoint(&zbGateway);
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
   Zigbee.setDebugMode(true);
+  Serial.println("[zigbee] development debug mode enabled");
+#else
+  Zigbee.setDebugMode(false);
+  Serial.println("[zigbee] distribution debug mode disabled");
+#endif
   Zigbee.setRebootOpenNetwork(0);
 
   // ESP PLANTS supports up to 32 plant sensors plus infrastructure. Grow the
@@ -879,12 +904,11 @@ void setup() {
 
   startZigbee();
 
-  // Alpha.20 one-shot post-start router rejoin window. This runs exactly once
-  // per H2 boot, after the restored coordinator reports ready.
-  if (zigbeeReady) {
-    Zigbee.openNetwork(30);
-    Serial.println("[zigbee] one-shot router rejoin window open for 30 seconds");
-  }
+  // Reboot/OTA does not open commissioning. Joining is opened only by the
+  // explicit Waveshare Add Sensor/Add Repeater path (or development console).
+  permitJoinUntilMs = 0;
+  deferredPermitCloseMs = 0;
+  lastRouterJoinActivityMs = 0;
   sendNetworkStatus();
   printUsbConsoleHelp();
 }

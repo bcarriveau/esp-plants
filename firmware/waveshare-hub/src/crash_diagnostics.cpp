@@ -28,6 +28,12 @@ constexpr uint32_t kDiagStackBytes = 4096u;
 constexpr UBaseType_t kDiagPriority = 1;
 constexpr BaseType_t kDiagCore = 0;
 
+#if defined(ESP_PLANTS_DIAGNOSTIC_PANIC)
+constexpr bool kAggressivePanicEnabled = true;
+#else
+constexpr bool kAggressivePanicEnabled = false;
+#endif
+
 enum class MainPhase : uint32_t {
   Unknown = 0, Loop = 1, UpdateService = 2, UiLockWait = 3,
   UiLockHeld = 4, UiUnlock = 5,
@@ -147,12 +153,19 @@ void printBootDiagnostics() {
   }
   printHeapLine("boot");
   printCoreDumpState();
-  Serial.printf("[diag] stall policy: warn=%lus repeat=%lus force-coredump=%lus (UPDATE_SERVICE is exempt)\n",
-                static_cast<unsigned long>(kLoopWarnMs / 1000u),
-                static_cast<unsigned long>(kLoopSecondWarnMs / 1000u),
-                static_cast<unsigned long>(kLoopForceDumpMs / 1000u));
+  if (kAggressivePanicEnabled) {
+    Serial.printf("[diag] stall policy: warn=%lus repeat=%lus diagnostic-panic=%lus (UPDATE_SERVICE is exempt)\n",
+                  static_cast<unsigned long>(kLoopWarnMs / 1000u),
+                  static_cast<unsigned long>(kLoopSecondWarnMs / 1000u),
+                  static_cast<unsigned long>(kLoopForceDumpMs / 1000u));
+  } else {
+    Serial.printf("[diag] stall policy: warn=%lus repeat=%lus production-safe logging only; automatic diagnostic panic disabled\n",
+                  static_cast<unsigned long>(kLoopWarnMs / 1000u),
+                  static_cast<unsigned long>(kLoopSecondWarnMs / 1000u));
+  }
 }
 
+#if defined(ESP_PLANTS_DIAGNOSTIC_PANIC)
 void forceDiagnosticPanic(uint32_t stalledMs, MainPhase phase) {
   ++rtcBreadcrumb.forcedDumpCount;
   rtcBreadcrumb.lastPhase = static_cast<uint32_t>(phase);
@@ -163,6 +176,7 @@ void forceDiagnosticPanic(uint32_t stalledMs, MainPhase phase) {
   printHeapLine("pre-panic");
   Serial.flush(); delay(25); abort();
 }
+#endif
 
 void monitorTaskMain(void *) {
   delay(kStartupQuietMs);
@@ -191,11 +205,18 @@ void monitorTaskMain(void *) {
       }
       if (age >= kLoopSecondWarnMs && warningLevel < 2u) {
         warningLevel = 2u;
-        Serial.printf("[diag] STALL CONTINUES: %lums phase=%s; next step is automatic coredump panic at %lus\n",
-                      static_cast<unsigned long>(age), phaseName(phase),
-                      static_cast<unsigned long>(kLoopForceDumpMs / 1000u));
+        if (kAggressivePanicEnabled && phase != MainPhase::UpdateService) {
+          Serial.printf("[diag] STALL CONTINUES: %lums phase=%s; diagnostic build will panic at %lus\n",
+                        static_cast<unsigned long>(age), phaseName(phase),
+                        static_cast<unsigned long>(kLoopForceDumpMs / 1000u));
+        } else {
+          Serial.printf("[diag] STALL CONTINUES: %lums phase=%s; automatic panic is disabled for this build/phase\n",
+                        static_cast<unsigned long>(age), phaseName(phase));
+        }
       }
+#if defined(ESP_PLANTS_DIAGNOSTIC_PANIC)
       if (age >= kLoopForceDumpMs && phase != MainPhase::UpdateService) forceDiagnosticPanic(age, phase);
+#endif
     } else warningLevel = 0;
     const uint32_t lvglLast = lvglHandlerLastCompletedAtMs;
     if (lvglLast && now - lvglLast > 5000u && !lvglHandlerActive) {

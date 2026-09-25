@@ -11,7 +11,10 @@ constexpr size_t kChunkDataBytes=248;
 constexpr size_t kBeginBytes=133;
 constexpr size_t kStatusBytes=6;
 constexpr size_t kBuildIdBytes=96;
+// Explicit H2 OTA intent marker carried in Hello payload bytes 4..7.
+// This is a short-lived physical-link/session confirmation, not cryptographic authentication.
+constexpr uint32_t kAuthorizeIntentMagic=0x3241544Fu;  // LE bytes: "OTA2"
 enum class Status:uint8_t{Ready=1,Receiving=2,Verified=3,Rebooting=4,Aborted=5,Error=0x80};
-enum class Error:uint8_t{None=0,Busy,Metadata,Partition,Sequence,Write,Image,Digest,Build,End};
+enum class Error:uint8_t{None=0,Busy,Metadata,Partition,Sequence,Write,Image,Digest,Build,End,Unauthorized};
 
 }  // namespace plantlink_ota

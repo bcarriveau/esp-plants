@@ -1,5 +1,5 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.31"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.32"
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
 #else
@@ -10,7 +10,7 @@
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Consolidates personality UI into source, restores COM11 upload targeting, and removes source-mutating pre-build injectors."
+  "Hardens H2 commissioning, release diagnostics, and the Waveshare-to-H2 OTA authorization/version path."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif

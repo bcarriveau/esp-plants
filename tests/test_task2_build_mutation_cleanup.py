@@ -47,9 +47,7 @@ def test_no_prebuild_source_mutators_are_active():
         for match in re.finditer(r"^\s*((?:pre|post):[^\s;]+)\s*$", text, re.MULTILINE):
             active.append((pio.relative_to(ROOT).as_posix(), match.group(1)))
 
-    assert active == [
-        ("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT)
-    ]
+    assert active == [("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT)]
 
 
 def test_dead_injectors_are_gone():
@@ -66,17 +64,19 @@ def test_obsolete_root_mutators_are_gone():
         assert not (ROOT / name).exists()
 
 
-def test_h2_rejoin_and_identity_behavior_is_in_real_source():
+def test_h2_commissioning_and_identity_behavior_is_in_real_source():
     source = (ROOT / "firmware/m5-h2-zigbee/src/main.cpp").read_text(encoding="utf-8")
     for token in (
         '#include "build_version.h"',
         "Zigbee.setRebootOpenNetwork(0);",
         "Zigbee.begin(&coordinatorConfig, false)",
-        "Alpha.20 one-shot post-start router rejoin window",
-        "Zigbee.openNetwork(30);",
+        "case plantlink::MessageType::PermitJoin:",
+        "Zigbee.openNetwork(seconds);",
         "static constexpr char kBuild[] = ESP_PLANTS_H2_BUILD_ID;",
     ):
         assert token in source
+    assert "Zigbee.openNetwork(30);" not in source
+    assert "one-shot router rejoin window" not in source
 
 
 def test_waveshare_injected_behavior_is_in_real_source():

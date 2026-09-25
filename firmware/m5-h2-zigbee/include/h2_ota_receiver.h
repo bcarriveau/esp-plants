@@ -4,8 +4,9 @@
 
 namespace espplants_h2_ota {
 
-// Called by the H2's single PlantLink dispatcher after a frame has been decoded.
-// Returns true when the frame is an H2 OTA command and was consumed here.
+// Only a Hello carrying the explicit H2 OTA intent marker arms the next
+// H2OtaBegin frame. Ordinary startup/link Hello frames do not authorize OTA.
+void noteControllerHello(const plantlink::Frame &frame);
 bool handlePlantLinkFrame(const plantlink::Frame &frame);
 
 }  // namespace espplants_h2_ota
