@@ -28,26 +28,33 @@ def font_width(px, text):
     return total
 
 
-def test_centered_warning_and_route_bounds():
+def test_warning_positions_are_restored_and_route_bounds_are_separate():
     source = (ROOT / "firmware/waveshare-hub/src/main.cpp").read_text(encoding="utf-8")
     badge_width = font_width(20, "WATER ME!") + 28
     assert badge_width == 146
-    # LVGL large-display card padding = 24; card origin on screen = (14,76).
-    for card_width, route_x, route_width, badge in (
-        (500, 312, 140, "homeWarning"), (772, 500, 224, "detailWarning")
-    ):
-        content_width = card_width - 48
-        badge_right = (content_width + badge_width) // 2
-        assert badge_right < route_x
-        assert route_x + route_width <= content_width
-        assert 24 + 272 + 22 + 16 <= 334  # badge, including vertical padding
-        assert 24 + 292 + 15 <= 334       # route fixed height
-        assert 76 + 334 < 422             # navigation starts at 422
-        assert f"lv_obj_align({badge}, LV_ALIGN_TOP_MID, 0, 272);" in source
+
+    # Existing alpha.38 warning geometry is locked. Route labels fit around it.
+    assert "lv_obj_set_pos(homeWarning, 24, 278);" in source
+    assert "lv_obj_set_pos(detailWarning, 600, 272);" in source
+    assert "lv_obj_align(homeWarning, LV_ALIGN_TOP_MID" not in source
+    assert "lv_obj_align(detailWarning, LV_ALIGN_TOP_MID" not in source
+
+    home_route_x, home_route_width = 312, 140
+    detail_route_x, detail_route_width = 350, 220
+    assert 24 + badge_width < home_route_x
+    assert detail_route_x + detail_route_width < 600
+    assert home_route_x + home_route_width <= 500
+    assert detail_route_x + detail_route_width <= 772
+    assert 292 + 15 <= 334
+    assert 76 + 334 < 422  # card ends before navigation begins
+
     assert "homeRoute = routeLabel(featured, 312, 292, 140);" in source
-    assert "detailRoute = routeLabel(p, 500, 292, 224);" in source
-    assert font_width(12, "VIA: KITCHEN REPEATER") <= 224
-    assert "lv_label_set_long_mode(obj, LV_LABEL_LONG_DOT);" in source
+    assert "detailRoute = routeLabel(p, 350, 292, 220);" in source
+    assert "lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);" in source
+    assert "labelIfChanged(homeRoute, routeText);" in source
+    assert "labelIfChanged(detailRoute, routeText);" in source
+    assert 'label(homeRoute, "");' not in source
+    assert 'label(detailRoute, "");' not in source
 
 
 def test_topology_refresh_cannot_refresh_measurements_or_pair_sensors():
