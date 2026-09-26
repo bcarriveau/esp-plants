@@ -866,15 +866,19 @@ bool makeManifestUrl(const String &tag, char *destination, size_t capacity) {
 
 bool parseManifest(const String &body, const String &githubTag,
                    espplants_ota_installer::Release &release,
-                   String &versionOut, String &assetOut) {
+                   String &versionOut, String &assetOut,
+                   bool &identityMismatch) {
+  identityMismatch = false;
   if (body.length() > kMaxManifestBytes) {
-    setStatus("Release manifest exceeds the supported size");
+    Serial.printf("[update] Skipping release %s: manifest exceeds supported size\n",
+                  githubTag.c_str());
     return false;
   }
   JsonDocument doc(&psramAllocator);
   const DeserializationError error = deserializeJson(doc, body);
   if (error) {
-    setStatus("Release manifest is invalid JSON");
+    Serial.printf("[update] Skipping release %s: manifest is invalid JSON\n",
+                  githubTag.c_str());
     return false;
   }
 
@@ -898,11 +902,14 @@ bool parseManifest(const String &body, const String &githubTag,
       hardware != ESP_PLANTS_WAVESHARE_HARDWARE_ID ||
       channel != ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL ||
       minimumUpdater > ESP_PLANTS_WAVESHARE_UPDATER_VERSION) {
-    setStatus("Release manifest is incompatible with this ESP PLANTS display");
+    identityMismatch = true;
+    Serial.printf("[update] Skipping historical release %s: incompatible product/hardware/channel/updater\n",
+                  githubTag.c_str());
     return false;
   }
   if (tag != githubTag || normalizedVersion(tag.c_str()) != normalizedVersion(version.c_str())) {
-    setStatus("Release tag and manifest version do not match");
+    Serial.printf("[update] Skipping release %s: tag/manifest version mismatch\n",
+                  githubTag.c_str());
     return false;
   }
   SemVersion parsed;
@@ -911,7 +918,8 @@ bool parseManifest(const String &body, const String &githubTag,
       !boundedPrintableAscii(buildId.c_str(), kMaxBuildIdLength) ||
       !packageLayoutValid(packageSize, firmwareSize) ||
       !lowerHexDigest(packageSha.c_str()) || !lowerHexDigest(firmwareSha.c_str())) {
-    setStatus("Release manifest contains invalid package metadata");
+    Serial.printf("[update] Skipping release %s: invalid package metadata\n",
+                  githubTag.c_str());
     return false;
   }
 
@@ -925,7 +933,8 @@ bool parseManifest(const String &body, const String &githubTag,
                   sizeof(candidate.packageSha256)) ||
       !hexToBytes(firmwareSha.c_str(), candidate.firmwareSha256,
                   sizeof(candidate.firmwareSha256))) {
-    setStatus("Release SHA-256 metadata is invalid");
+    Serial.printf("[update] Skipping release %s: invalid SHA-256 metadata\n",
+                  githubTag.c_str());
     return false;
   }
 
@@ -997,8 +1006,10 @@ bool checkGithubRelease() {
     espplants_ota_installer::Release candidate{};
     String candidateVersion;
     String candidateAsset;
-    if (!parseManifest(manifestBody, tag, candidate, candidateVersion, candidateAsset)) {
-      manifestRejected = true;
+    bool identityMismatch = false;
+    if (!parseManifest(manifestBody, tag, candidate, candidateVersion, candidateAsset,
+                       identityMismatch)) {
+      if (!identityMismatch) manifestRejected = true;
       continue;
     }
 

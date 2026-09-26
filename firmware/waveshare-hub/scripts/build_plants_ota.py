@@ -19,7 +19,7 @@ def _int(t,n):
     if not m: raise ValueError(f"{n} was not found")
     return int(m.group(1))
 def read_build_identity(p:Path)->BuildIdentity:
-    t=p.read_text();v=_str(t,"ESP_PLANTS_WAVESHARE_VERSION");return BuildIdentity(v,_str(t,"ESP_PLANTS_WAVESHARE_HARDWARE_ID"),_str(t,"ESP_PLANTS_WAVESHARE_PRODUCT_ID"),_str(t,"ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL"),f"ESPPLANTS-WAVESHARE-{v}",_int(t,"ESP_PLANTS_WAVESHARE_UPDATER_VERSION"),_str(t,"ESP_PLANTS_WAVESHARE_RELEASE_NOTES"))
+    t=p.read_text();v=_str(t,"ESP_PLANTS_WAVESHARE_VERSION");return BuildIdentity(v,_str(t,"ESP_PLANTS_WAVESHARE_7_HARDWARE_ID"),_str(t,"ESP_PLANTS_WAVESHARE_PRODUCT_ID"),_str(t,"ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL"),f"ESPPLANTS-WAVESHARE-{v}",_int(t,"ESP_PLANTS_WAVESHARE_UPDATER_VERSION"),_str(t,"ESP_PLANTS_WAVESHARE_RELEASE_NOTES"))
 def read_h2_build_identity(p:Path)->H2BuildIdentity:
     t=p.read_text();v=_str(t,"ESP_PLANTS_H2_VERSION");return H2BuildIdentity(v,_str(t,"ESP_PLANTS_H2_HARDWARE_ID"),_str(t,"ESP_PLANTS_H2_PRODUCT_ID"),f"ESPPLANTS-H2-{v}")
 def validate_firmware(f:bytes):

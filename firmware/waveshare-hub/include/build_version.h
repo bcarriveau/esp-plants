@@ -1,16 +1,18 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.32"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.33"
+#define ESP_PLANTS_WAVESHARE_7_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
+#define ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
 #ifdef ESP_PLANTS_WAVESHARE_7B
-#define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
+#define ESP_PLANTS_WAVESHARE_HARDWARE_ID ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID
 #else
-#define ESP_PLANTS_WAVESHARE_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
+#define ESP_PLANTS_WAVESHARE_HARDWARE_ID ESP_PLANTS_WAVESHARE_7_HARDWARE_ID
 #endif
 #define ESP_PLANTS_WAVESHARE_PRODUCT_ID "esp-plants-waveshare"
 #define ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL "alpha"
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Hardens H2 commissioning, release diagnostics, and the Waveshare-to-H2 OTA authorization/version path."
+  "Fixes Waveshare 7 release-manifest hardware identity, keeps historical incompatible manifests out of live update status, and targets H2 alpha.24 for OTA validation."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif
