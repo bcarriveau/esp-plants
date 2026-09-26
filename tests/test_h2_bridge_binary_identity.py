@@ -13,11 +13,11 @@ def test_bridge_header_has_explicit_alpha23_build_identity():
     assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-0.2.0-alpha.23"' in bridge
 
 
-def test_normal_h2_identity_remains_alpha24():
+def test_normal_h2_identity_is_alpha25():
     source = HEADER.read_text(encoding="utf-8")
     normal = source.split("#else", 1)[1].split("#endif", 1)[0]
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.24"' in normal
-    assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-0.2.0-alpha.24"' in normal
+    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.25"' in normal
+    assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-0.2.0-alpha.25"' in normal
 
 
 def test_bridge_environment_still_selects_compatibility_variant():
@@ -30,6 +30,6 @@ def test_bridge_environment_still_selects_compatibility_variant():
 def test_binary_identity_is_contiguous_retained_release_data():
     source = RECEIVER.read_text(encoding="utf-8")
     assert "__attribute__((used, retain)) static const char kFirmwareIdentity[]" in source
-    assert 'ESP_PLANTS_H2_BINARY_MARKER "\\0" ESP_PLANTS_H2_BINARY_BUILD_ID' in source
+    assert 'ESP_PLANTS_H2_BINARY_MARKER "\0" ESP_PLANTS_H2_BINARY_BUILD_ID' in source
     assert '#define ESP_PLANTS_H2_BINARY_MARKER "ESP-PLANTS-H2-DISTRIBUTION-BUILD"' in source
     assert '#define ESP_PLANTS_H2_BINARY_BUILD_ID "ESPPLANTS-H2-0.2.0-alpha.23"' in source

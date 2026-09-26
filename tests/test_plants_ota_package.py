@@ -35,10 +35,10 @@ class PlantsOtaPackageTests(unittest.TestCase):
         return {
             "product": "esp-plants-h2",
             "hardware": "m5stack-unit-gateway-h2",
-            "version": "0.2.0-alpha.24",
-            "build_id": "ESPPLANTS-H2-0.2.0-alpha.24",
+            "version": "0.2.0-alpha.25",
+            "build_id": "ESPPLANTS-H2-0.2.0-alpha.25",
             "protocol": 1,
-            "asset": "esp-plants-h2-0.2.0-alpha.24.bin",
+            "asset": "esp-plants-h2-0.2.0-alpha.25.bin",
             "firmware_size": 729616,
             "firmware_sha256": "22" * 32,
         }
@@ -62,7 +62,7 @@ class PlantsOtaPackageTests(unittest.TestCase):
         self.assertEqual(manifest["product"], "esp-plants-waveshare")
         self.assertTrue(manifest["asset"].endswith(".plantsota"))
         self.assertEqual(manifest["package_size"], manifest["firmware_size"] + 512)
-        self.assertEqual(manifest["h2"]["version"], "0.2.0-alpha.24")
+        self.assertEqual(manifest["h2"]["version"], "0.2.0-alpha.25")
 
     def test_wrong_chip_rejected(self):
         with self.assertRaisesRegex(ValueError, "not ESP32-S3"):

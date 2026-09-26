@@ -37,13 +37,13 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
 
     ws_bin.write_bytes(
         fake_image(
-            "ESPPLANTS-WAVESHARE-0.2.0-alpha.36",
+            "ESPPLANTS-WAVESHARE-0.2.0-alpha.38",
             b"ESP-PLANTS-DISTRIBUTION-BUILD",
             esp32s3=True,
         )
     )
     h2_bin.write_bytes(
-        fake_image("ESPPLANTS-H2-0.2.0-alpha.24", b"ESP-PLANTS-H2-DISTRIBUTION-BUILD")
+        fake_image("ESPPLANTS-H2-0.2.0-alpha.25", b"ESP-PLANTS-H2-DISTRIBUTION-BUILD")
     )
     bridge_bin.write_bytes(
         fake_image("ESPPLANTS-H2-0.2.0-alpha.23", b"ESP-PLANTS-H2-DISTRIBUTION-BUILD")
@@ -59,18 +59,18 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
     )
 
     expected = {
-        "esp-plants-waveshare-0.2.0-alpha.36.plantsota",
+        "esp-plants-waveshare-0.2.0-alpha.38.plantsota",
         "esp-plants-waveshare.manifest.json",
-        "esp-plants-h2-0.2.0-alpha.24.bin",
-        "esp-plants-h2-0.2.0-alpha.24.bin.sha256",
+        "esp-plants-h2-0.2.0-alpha.25.bin",
+        "esp-plants-h2-0.2.0-alpha.25.bin.sha256",
         "esp-plants-h2-0.2.0-alpha.23.bin",
         "esp-plants-h2-0.2.0-alpha.23.bin.sha256",
     }
     assert expected.issubset({path.name for path in release.iterdir()})
 
     manifest = json.loads((release / "esp-plants-waveshare.manifest.json").read_text())
-    assert manifest["version"] == "0.2.0-alpha.36"
+    assert manifest["version"] == "0.2.0-alpha.38"
     assert manifest["hardware"] == "waveshare-esp32-s3-touch-lcd-7"
-    assert manifest["h2"]["version"] == "0.2.0-alpha.24"
-    assert manifest["h2"]["asset"] == "esp-plants-h2-0.2.0-alpha.24.bin"
+    assert manifest["h2"]["version"] == "0.2.0-alpha.25"
+    assert manifest["h2"]["asset"] == "esp-plants-h2-0.2.0-alpha.25.bin"
     assert "0.2.0-alpha.23" not in json.dumps(manifest)

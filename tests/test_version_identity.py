@@ -51,10 +51,10 @@ def test_release_manifest_uses_regular_waveshare_7_hardware_identity():
     h2 = {
         "product": "esp-plants-h2",
         "hardware": "m5stack-unit-gateway-h2",
-        "version": "0.2.0-alpha.24",
-        "build_id": "ESPPLANTS-H2-0.2.0-alpha.24",
+        "version": "0.2.0-alpha.25",
+        "build_id": "ESPPLANTS-H2-0.2.0-alpha.25",
         "protocol": 1,
-        "asset": "esp-plants-h2-0.2.0-alpha.24.bin",
+        "asset": "esp-plants-h2-0.2.0-alpha.25.bin",
         "firmware_size": 123,
         "firmware_sha256": "22" * 32,
     }
@@ -79,8 +79,6 @@ def test_build_header_keeps_runtime_7b_identity_separate_from_release_7_identity
 
 
 def test_crash_diagnostics_uses_waveshare_build_identity():
-    # This guard is intended for a full checkout. The delivery ZIP only carries
-    # files changed by this task, so skip the source-preservation check there.
     source_path = ROOT / "firmware" / "waveshare-hub" / "src" / "crash_diagnostics.cpp"
     if not source_path.exists():
         return
