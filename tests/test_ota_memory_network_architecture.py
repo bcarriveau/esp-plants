@@ -186,6 +186,7 @@ def test_h2_manifest_metadata_remains_authoritative():
         "h2Protocol != plantlink::kProtocolVersion",
         "h2BuildId != expectedH2Build",
         "h2Asset != expectedH2Asset",
+        "h2AssetNameValid(h2Asset.c_str())",
         "candidate.h2FirmwareSize = h2FirmwareSize",
         "candidate.h2FirmwareSha256",
     ):
@@ -239,9 +240,9 @@ def test_repeated_attempts_do_not_recreate_network_worker_or_leak_http_clients()
     assert "abortAndDestroyFlashWriter(*workspace_)" in installer
 
 
-def test_version_is_alpha35_and_h2_version_remains_independent():
+def test_version_is_alpha36_and_h2_version_remains_independent():
     waveshare = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
     h2 = read(ROOT / "firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.35"' in waveshare
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.35"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.36"' in waveshare
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.36"
     assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.24"' in h2

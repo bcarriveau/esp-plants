@@ -1132,7 +1132,7 @@ bool parseManifest(const char *body, size_t bodyLength, const String &githubTag,
       h2Protocol != plantlink::kProtocolVersion ||
       !parseVersion(h2Version, parsedH2) ||
       h2BuildId != expectedH2Build || h2Asset != expectedH2Asset ||
-      !assetNameValid(h2Asset.c_str()) ||
+      !h2AssetNameValid(h2Asset.c_str()) ||
       !boundedPrintableAscii(h2BuildId.c_str(), kMaxBuildIdLength) ||
       h2FirmwareSize < kH2MinFirmwareBytes || h2FirmwareSize > kH2MaxFirmwareBytes ||
       !lowerHexDigest(h2FirmwareSha.c_str())) {

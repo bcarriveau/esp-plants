@@ -58,6 +58,18 @@ inline bool assetNameValid(const char *asset) {
          strcmp(asset + length - (sizeof(suffix) - 1U), suffix) == 0;
 }
 
+inline bool h2AssetNameValid(const char *asset) {
+  if (!boundedPrintableAscii(asset, kMaxAssetNameLength)) return false;
+  constexpr char prefix[] = "esp-plants-h2-";
+  constexpr char suffix[] = ".bin";
+  const size_t length = strlen(asset);
+  const size_t prefixLength = sizeof(prefix) - 1U;
+  const size_t suffixLength = sizeof(suffix) - 1U;
+  return length > prefixLength + suffixLength &&
+         strncmp(asset, prefix, prefixLength) == 0 &&
+         strcmp(asset + length - suffixLength, suffix) == 0;
+}
+
 inline bool tagValid(const char *tag) {
   if (!boundedPrintableAscii(tag, kMaxTagLength)) return false;
   for (const char *p = tag; *p; ++p) {

@@ -11,7 +11,7 @@ def read(path: str) -> str:
 
 def load_packager():
     path = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
-    spec = importlib.util.spec_from_file_location("build_plants_ota_alpha35", path)
+    spec = importlib.util.spec_from_file_location("build_plants_ota_alpha36", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -21,9 +21,9 @@ def load_packager():
 def test_release_versions_create_real_h2_ota_delta():
     waveshare = read("firmware/waveshare-hub/include/build_version.h")
     h2 = read("firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.35"' in waveshare
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.36"' in waveshare
     assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.24"' in h2
-    assert read("VERSION").strip() == "0.2.0-alpha.35"
+    assert read("VERSION").strip() == "0.2.0-alpha.36"
 
 
 def test_alpha23_bridge_is_explicit_and_does_not_change_normal_h2_target():
@@ -64,7 +64,7 @@ def test_release_manifest_uses_regular_7_and_h2_alpha24_target():
         "build_id": h2_identity.build_id,
         "protocol": 1,
         "asset": f"esp-plants-h2-{h2_identity.version}.bin",
-        "firmware_size": 729616,
+        "firmware_size": 729680,
         "firmware_sha256": "22" * 32,
     }
     manifest = json.loads(
