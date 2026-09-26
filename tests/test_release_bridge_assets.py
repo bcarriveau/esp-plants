@@ -37,7 +37,7 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
 
     ws_bin.write_bytes(
         fake_image(
-            "ESPPLANTS-WAVESHARE-0.2.0-alpha.34",
+            "ESPPLANTS-WAVESHARE-0.2.0-alpha.35",
             b"ESP-PLANTS-DISTRIBUTION-BUILD",
             esp32s3=True,
         )
@@ -59,7 +59,7 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
     )
 
     expected = {
-        "esp-plants-waveshare-0.2.0-alpha.34.plantsota",
+        "esp-plants-waveshare-0.2.0-alpha.35.plantsota",
         "esp-plants-waveshare.manifest.json",
         "esp-plants-h2-0.2.0-alpha.24.bin",
         "esp-plants-h2-0.2.0-alpha.24.bin.sha256",
@@ -69,7 +69,7 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
     assert expected.issubset({path.name for path in release.iterdir()})
 
     manifest = json.loads((release / "esp-plants-waveshare.manifest.json").read_text())
-    assert manifest["version"] == "0.2.0-alpha.34"
+    assert manifest["version"] == "0.2.0-alpha.35"
     assert manifest["hardware"] == "waveshare-esp32-s3-touch-lcd-7"
     assert manifest["h2"]["version"] == "0.2.0-alpha.24"
     assert manifest["h2"]["asset"] == "esp-plants-h2-0.2.0-alpha.24.bin"

@@ -17,6 +17,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include <freertos/idf_additions.h>
+#include <lwip/netdb.h>
+#include <lwip/sockets.h>
 #include <new>
 
 #include "build_version.h"
@@ -61,6 +63,14 @@ constexpr char kH2HardwareId[] = "m5stack-unit-gateway-h2";
 constexpr char kH2BuildPrefix[] = "ESPPLANTS-H2-";
 constexpr uint32_t kH2MinFirmwareBytes = 64U * 1024U;
 constexpr uint32_t kH2MaxFirmwareBytes = 0xE0000U;
+// Hardware logs show the healthy Waveshare baseline near 82 KB free / 69 KB
+// largest internal block, while the failing TLS/install path collapsed to about
+// 2.5 KB / 1 KB. Keep substantial measured headroom before starting TLS.
+constexpr size_t kOtaMinInternalFreeBytes = 48U * 1024U;
+constexpr size_t kOtaMinLargestInternalBlockBytes = 32U * 1024U;
+constexpr uint32_t kOtaNetworkWorkerStackBytes = 16U * 1024U;
+constexpr uint32_t kOtaRecoveryWifiTimeoutMs = 20U * 1000U;
+constexpr uint32_t kOtaRecoveryTimeTimeoutMs = 20U * 1000U;
 
 constexpr char kEmbeddedBuildId[] = ESP_PLANTS_WAVESHARE_BUILD_ID;
 constexpr char kEmbeddedHardwareId[] = ESP_PLANTS_WAVESHARE_HARDWARE_ID;
@@ -143,8 +153,13 @@ bool portalConnectionPending = false;
 uint32_t portalAttemptStartedMs = 0;
 uint32_t portalStopAtMs = 0;
 volatile bool checkTaskRunning = false;
-TaskHandle_t checkTaskHandle = nullptr;
 volatile bool installTaskRunning = false;
+TaskHandle_t otaNetworkTaskHandle = nullptr;
+enum class OtaNetworkCommand : uint8_t { NONE = 0, CHECK, INSTALL };
+volatile OtaNetworkCommand otaNetworkCommand = OtaNetworkCommand::NONE;
+portMUX_TYPE otaNetworkCommandMux = portMUX_INITIALIZER_UNLOCKED;
+bool lastCheckTransportFailure = false;
+bool lastHttpsTransportFailure = false;
 volatile bool manualCheckRequested = false;
 volatile bool installRequested = false;
 volatile bool hasUpdate = false;
@@ -526,6 +541,117 @@ void beginStationConnection(bool restartRadio = false) {
   Serial.printf("[wifi] connecting to \"%s\"\n", savedSsid.c_str());
 }
 
+struct OtaMemorySnapshot {
+  size_t internalFree = 0;
+  size_t internalMinimum = 0;
+  size_t largestInternalBlock = 0;
+  size_t psramFree = 0;
+};
+
+OtaMemorySnapshot otaMemorySnapshot(const char *stage) {
+  OtaMemorySnapshot snapshot;
+  snapshot.internalFree = heap_caps_get_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  snapshot.internalMinimum = heap_caps_get_minimum_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  snapshot.largestInternalBlock = heap_caps_get_largest_free_block(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  snapshot.psramFree = ESP.getFreePsram();
+  Serial.printf(
+      "[update] OTA preflight %s: internal=%u minimum=%u largest=%u psram=%u\n",
+      stage ? stage : "?", static_cast<unsigned>(snapshot.internalFree),
+      static_cast<unsigned>(snapshot.internalMinimum),
+      static_cast<unsigned>(snapshot.largestInternalBlock),
+      static_cast<unsigned>(snapshot.psramFree));
+  return snapshot;
+}
+
+bool otaMemorySafe(const OtaMemorySnapshot &snapshot) {
+  return snapshot.internalFree >= kOtaMinInternalFreeBytes &&
+         snapshot.largestInternalBlock >= kOtaMinLargestInternalBlockBytes;
+}
+
+bool validStationAddress() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  const IPAddress address = WiFi.localIP();
+  return address[0] || address[1] || address[2] || address[3];
+}
+
+bool verifyGithubDns() {
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo *result = nullptr;
+  const int resolved = getaddrinfo("api.github.com", nullptr, &hints, &result);
+  if (result) freeaddrinfo(result);
+  if (resolved != 0) {
+    Serial.printf("[update] OTA recovery DNS check failed: %d\n", resolved);
+    return false;
+  }
+  return true;
+}
+
+bool recoverOtaNetwork(const char *reason) {
+  if (!savedSsid.length() || reconnectSuppressed || setupPortalRunning) {
+    Serial.println("[update] OTA network recovery skipped by current Wi-Fi policy");
+    return false;
+  }
+
+  Serial.printf("[update] OTA network recovery: %s\n", reason ? reason : "transport");
+  // Reuse the proven hard station-radio bring-up. eraseap=false preserves both
+  // the user's ESP PLANTS NVS credentials and the Wi-Fi driver's saved state.
+  beginStationConnection(true);
+
+  const uint32_t wifiStarted = millis();
+  while (millis() - wifiStarted < kOtaRecoveryWifiTimeoutMs) {
+    if (validStationAddress()) break;
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  if (!validStationAddress()) {
+    setStatus("OTA recovery could not restore Wi-Fi/IP");
+    return false;
+  }
+
+  portENTER_CRITICAL(&timeMux);
+  ntpSynchronized = false;
+  portEXIT_CRITICAL(&timeMux);
+  configureTimeSync("OTA transport recovery");
+  const uint32_t timeStarted = millis();
+  while (millis() - timeStarted < kOtaRecoveryTimeTimeoutMs) {
+    if (secureTimeReady()) break;
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  if (!secureTimeReady()) {
+    setStatus("OTA recovery restored Wi-Fi but not confirmed SNTP time");
+    return false;
+  }
+  if (!verifyGithubDns()) {
+    setStatus("OTA recovery could not resolve GitHub DNS");
+    return false;
+  }
+
+  Serial.printf("[update] OTA network recovery restored IP %s and secure time\n",
+                WiFi.localIP().toString().c_str());
+  return true;
+}
+
+bool otaMemoryPreflight(const char *stage, bool &recoveryUsed) {
+  OtaMemorySnapshot snapshot = otaMemorySnapshot(stage);
+  if (otaMemorySafe(snapshot)) return true;
+
+  if (!recoveryUsed) {
+    recoveryUsed = true;
+    setStatus("OTA memory is low; recycling Wi-Fi before secure update...");
+    if (recoverOtaNetwork("memory preflight")) {
+      snapshot = otaMemorySnapshot("after recovery");
+      if (otaMemorySafe(snapshot)) return true;
+    }
+  }
+
+  setStatus("OTA stopped safely: internal memory below secure-update threshold");
+  return false;
+}
+
 bool metadataHostAllowed(const char *url) {
   constexpr char prefix[] = "https://";
   if (!url || strncmp(url, prefix, sizeof(prefix) - 1U) != 0) return false;
@@ -557,6 +683,49 @@ struct MetadataWorkspace {
 static_assert(sizeof(MetadataWorkspace) <= 9U * 1024U,
               "Metadata HTTPS workspace exceeded bounded PSRAM budget");
 
+class PsramText {
+ public:
+  PsramText() = default;
+  ~PsramText() { release(); }
+  PsramText(const PsramText &) = delete;
+  PsramText &operator=(const PsramText &) = delete;
+
+  bool allocate(size_t maximumBytes) {
+    release();
+    if (maximumBytes == 0) return false;
+    data_ = static_cast<char *>(heap_caps_malloc(
+        maximumBytes + 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!data_) return false;
+    capacity_ = maximumBytes;
+    length_ = 0;
+    data_[0] = 0;
+    return true;
+  }
+
+  bool append(const uint8_t *data, size_t length) {
+    if (!data_ || !data || length > capacity_ - length_) return false;
+    memcpy(data_ + length_, data, length);
+    length_ += length;
+    data_[length_] = 0;
+    return true;
+  }
+
+  void release() {
+    if (data_) heap_caps_free(data_);
+    data_ = nullptr;
+    length_ = 0;
+    capacity_ = 0;
+  }
+
+  const char *data() const { return data_ ? data_ : ""; }
+  size_t length() const { return length_; }
+
+ private:
+  char *data_ = nullptr;
+  size_t length_ = 0;
+  size_t capacity_ = 0;
+};
+
 class MetadataWorkspaceGuard {
  public:
   MetadataWorkspaceGuard() {
@@ -580,9 +749,11 @@ class MetadataWorkspaceGuard {
 
 void logHttpsMemory(const char *stage) {
   Serial.printf(
-      "[update] HTTPS memory %s: internal=%u largest=%u psram=%u\n",
+      "[update] HTTPS memory %s: internal=%u minimum=%u largest=%u psram=%u\n",
       stage ? stage : "?",
       static_cast<unsigned>(heap_caps_get_free_size(
+          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+      static_cast<unsigned>(heap_caps_get_minimum_free_size(
           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
       static_cast<unsigned>(heap_caps_get_largest_free_block(
           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
@@ -614,10 +785,15 @@ esp_err_t metadataEventHandler(esp_http_client_event_t *event) {
   return ESP_OK;
 }
 bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumBytes,
-                  String &body, int &statusCode) {
-  body = "";
+                  PsramText &body, int &statusCode) {
+  body.release();
   statusCode = -1;
-  if (!initialUrl || !metadataHostAllowed(initialUrl)) return false;
+  lastHttpsTransportFailure = false;
+  if (!initialUrl || !metadataHostAllowed(initialUrl) || maximumBytes == 0) return false;
+  if (!body.allocate(maximumBytes)) {
+    setStatus("GitHub HTTPS PSRAM body allocation failed");
+    return false;
+  }
 
   MetadataWorkspaceGuard workspaceGuard;
   MetadataWorkspace *workspace = workspaceGuard.get();
@@ -654,7 +830,10 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
 
     logHttpsMemory("before TLS");
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return false;
+    if (!client) {
+      lastHttpsTransportFailure = true;
+      return false;
+    }
     if (accept) esp_http_client_set_header(client, "Accept", accept);
     esp_http_client_set_header(client, "Accept-Encoding", "identity");
     esp_http_client_set_header(client, "Connection", "close");
@@ -662,6 +841,7 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     bool opened = false;
     const esp_err_t openResult = esp_http_client_open(client, 0);
     if (openResult != ESP_OK) {
+      lastHttpsTransportFailure = true;
       logHttpsMemory("TLS failed");
       esp_http_client_cleanup(client);
       return false;
@@ -671,6 +851,7 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
 
     const int64_t length = esp_http_client_fetch_headers(client);
     if (length < 0 || workspace->headers.invalid) {
+      if (length < 0 && !workspace->headers.invalid) lastHttpsTransportFailure = true;
       esp_http_client_close(client);
       esp_http_client_cleanup(client);
       return false;
@@ -708,24 +889,25 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
       return false;
     }
 
-    body.reserve(length > 0 ? static_cast<size_t>(length) + 1U : 2048U);
     uint8_t buffer[1024];
     uint32_t lastDataMs = millis();
     bool ok = true;
+    bool bodyLimitRejected = false;
+    bool transportReadFailure = false;
     while (!esp_http_client_is_complete_data_received(client)) {
       const int got = esp_http_client_read(
           client, reinterpret_cast<char *>(buffer), sizeof(buffer));
       if (got > 0) {
-        if (body.length() + static_cast<size_t>(got) > maximumBytes) {
+        if (!body.append(buffer, static_cast<size_t>(got))) {
+          bodyLimitRejected = true;
           ok = false;
           break;
         }
-        body.concat(reinterpret_cast<const char *>(buffer),
-                    static_cast<unsigned int>(got));
         lastDataMs = millis();
       } else if (got == 0) {
         if (esp_http_client_is_complete_data_received(client)) break;
         if (millis() - lastDataMs >= kMetadataIdleTimeoutMs) {
+          transportReadFailure = true;
           ok = false;
           break;
         }
@@ -736,6 +918,7 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
             socketError == ETIMEDOUT) {
           if (millis() - lastDataMs < kMetadataIdleTimeoutMs) continue;
         }
+        transportReadFailure = true;
         ok = false;
         break;
       }
@@ -743,6 +926,9 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     const bool complete = esp_http_client_is_complete_data_received(client);
     if (opened) esp_http_client_close(client);
     esp_http_client_cleanup(client);
+    if (transportReadFailure || (!complete && !bodyLimitRejected)) {
+      lastHttpsTransportFailure = true;
+    }
     return ok && complete;
   }
   return false;
@@ -872,18 +1058,18 @@ bool makeManifestUrl(const String &tag, char *destination, size_t capacity) {
   return written > 0 && static_cast<size_t>(written) < capacity;
 }
 
-bool parseManifest(const String &body, const String &githubTag,
+bool parseManifest(const char *body, size_t bodyLength, const String &githubTag,
                    espplants_ota_installer::Release &release,
                    String &versionOut, String &assetOut,
                    bool &identityMismatch) {
   identityMismatch = false;
-  if (body.length() > kMaxManifestBytes) {
+  if (!body || bodyLength > kMaxManifestBytes) {
     Serial.printf("[update] Skipping release %s: manifest exceeds supported size\n",
                   githubTag.c_str());
     return false;
   }
   JsonDocument doc(&psramAllocator);
-  const DeserializationError error = deserializeJson(doc, body);
+  const DeserializationError error = deserializeJson(doc, body, bodyLength);
   if (error) {
     Serial.printf("[update] Skipping release %s: manifest is invalid JSON\n",
                   githubTag.c_str());
@@ -983,21 +1169,24 @@ bool parseManifest(const String &body, const String &githubTag,
 }
 
 bool checkGithubRelease() {
+  lastCheckTransportFailure = false;
   hasUpdate = false;
   h2OnlyUpdate = false;
   pendingRelease = espplants_ota_installer::Release{};
 
-  String releasesBody;
+  PsramText releasesBody;
   int code = 0;
   if (!httpsGetText(kGithubReleasesUrl, "application/vnd.github+json",
                     kMaxReleaseListBytes, releasesBody, code)) {
+    lastCheckTransportFailure = lastHttpsTransportFailure;
     if (code == 403) setStatus("GitHub rate limit reached; try later");
     else setStatus("Secure GitHub check failed (HTTP %d)", code);
     return false;
   }
 
   JsonDocument releases(&psramAllocator);
-  const DeserializationError releasesError = deserializeJson(releases, releasesBody);
+  const DeserializationError releasesError =
+      deserializeJson(releases, releasesBody.data(), releasesBody.length());
   if (releasesError || !releases.is<JsonArray>()) {
     setStatus("GitHub returned an invalid release list");
     return false;
@@ -1006,7 +1195,7 @@ bool checkGithubRelease() {
   // The parsed release metadata now lives in PSRAM. Drop the HTTP response
   // body before the manifest TLS handshakes so it does not compete with the
   // RGB/LVGL driver for scarce internal DRAM.
-  releasesBody = static_cast<const char *>(nullptr);
+  releasesBody.release();
   logHttpsMemory("release metadata parsed");
 
   bool sawManifestRelease = false;
@@ -1035,10 +1224,11 @@ bool checkGithubRelease() {
 
     char manifestUrl[512]{};
     if (!makeManifestUrl(tag, manifestUrl, sizeof(manifestUrl))) continue;
-    String manifestBody;
+    PsramText manifestBody;
     if (!httpsGetText(manifestUrl, "application/octet-stream", kMaxManifestBytes,
                       manifestBody, code)) {
-      manifestTransportFailed = true;
+      if (lastHttpsTransportFailure) manifestTransportFailed = true;
+      else manifestRejected = true;
       continue;
     }
 
@@ -1046,8 +1236,8 @@ bool checkGithubRelease() {
     String candidateVersion;
     String candidateAsset;
     bool identityMismatch = false;
-    if (!parseManifest(manifestBody, tag, candidate, candidateVersion, candidateAsset,
-                       identityMismatch)) {
+    if (!parseManifest(manifestBody.data(), manifestBody.length(), tag, candidate,
+                       candidateVersion, candidateAsset, identityMismatch)) {
       if (!identityMismatch) manifestRejected = true;
       continue;
     }
@@ -1103,6 +1293,7 @@ bool checkGithubRelease() {
   }
 
   if (manifestTransportFailed) {
+    lastCheckTransportFailure = true;
     setStatus("Secure GitHub release manifest download failed; will retry later");
     return false;
   }
@@ -1119,40 +1310,12 @@ bool checkGithubRelease() {
   return true;
 }
 
-void checkTask(void *) {
-  // Keep one PSRAM-backed metadata worker alive for the lifetime of the app.
-  // Reusing the same blocked task avoids the ESP-IDF 5.1 WithCaps deletion
-  // race that could free a task stack while that task was still executing on
-  // the other core after repeated CHECK NOW operations.
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    setStatus("Checking GitHub securely for updates...");
-    const bool ok = checkGithubRelease();
-    if (!ok) nextFailedCheckMs = millis() + kFailedCheckRetryMs;
-    checkTaskRunning = false;
-    Serial.println("[update] GitHub check worker idle");
-  }
-}
-
-bool startCheckTask(const char *failureMessage) {
-  // Certificate verification needs scarce internal DRAM. Keep the metadata
-  // worker's stack in PSRAM so MbedTLS has room for RSA/X.509 work. The worker
-  // is persistent and blocks between checks; it is never repeatedly created or
-  // deleted. The OTA install task intentionally remains on an internal stack
-  // because PSRAM may be unavailable while flash writes are in progress.
-  if (!checkTaskHandle) {
-    const BaseType_t result = xTaskCreateWithCaps(
-        checkTask, "espplants-update-check", 16384, nullptr, 1, &checkTaskHandle,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (result != pdPASS) {
-      checkTaskHandle = nullptr;
-      checkTaskRunning = false;
-      setStatus("%s", failureMessage);
-      return false;
-    }
-  }
-  xTaskNotifyGive(checkTaskHandle);
-  return true;
+bool h2TransportFailureMessage(const char *message) {
+  if (!message) return false;
+  return strstr(message, "H2 HTTPS client allocation failed") ||
+         strstr(message, "H2 HTTPS open failed") ||
+         strstr(message, "H2 release headers were invalid") ||
+         strstr(message, "H2 release download stalled");
 }
 
 void installProgress(uint32_t receivedBytes, uint32_t packageBytes) {
@@ -1161,40 +1324,162 @@ void installProgress(uint32_t receivedBytes, uint32_t packageBytes) {
   installProgressPct = static_cast<int>(percent > 100U ? 100U : percent);
 }
 
-void installTask(void *) {
+void runUpdateCheckOnNetworkWorker() {
+  bool recoveryUsed = false;
+  if (!otaMemoryPreflight("before GitHub TLS", recoveryUsed)) {
+    nextFailedCheckMs = millis() + kFailedCheckRetryMs;
+    checkTaskRunning = false;
+    return;
+  }
+
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    setStatus(attempt == 0 ? "Checking GitHub securely for updates..."
+                           : "Retrying secure GitHub check after network recovery...");
+    if (checkGithubRelease()) break;
+    if (!lastCheckTransportFailure || recoveryUsed || attempt != 0) {
+      nextFailedCheckMs = millis() + kFailedCheckRetryMs;
+      break;
+    }
+
+    recoveryUsed = true;
+    if (!recoverOtaNetwork("GitHub metadata transport failure") ||
+        !otaMemorySafe(otaMemorySnapshot("after transport recovery"))) {
+      nextFailedCheckMs = millis() + kFailedCheckRetryMs;
+      break;
+    }
+  }
+  checkTaskRunning = false;
+  Serial.println("[update] persistent OTA network worker idle after check");
+}
+
+void runInstallOnNetworkWorker() {
   installProgressPct = 0;
+  bool recoveryUsed = false;
   char message[160]{};
 
-  if (h2OnlyUpdate) {
-    setStatus("Downloading and verifying H2 firmware...");
-    const espplants_h2_ota::Result result = espplants_h2_ota::updateForRelease(
-        pendingRelease, installProgress, message, sizeof(message));
-    if (result == espplants_h2_ota::Result::OK) {
+  if (!otaMemoryPreflight("before OTA install TLS", recoveryUsed)) {
+    installTaskRunning = false;
+    return;
+  }
+
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    message[0] = 0;
+    bool transportFailure = false;
+
+    // H2 is a network/UART stage only. Keep its download, SHA validation,
+    // short-lived authorization, inactive-slot transfer, and reboot/build
+    // confirmation on this PSRAM-backed coordinator worker.
+    setStatus(attempt == 0 ? "Downloading and verifying H2 firmware..."
+                           : "Retrying H2 stage after network recovery...");
+    const espplants_h2_ota::Result h2Result =
+        espplants_h2_ota::updateForRelease(
+            pendingRelease, installProgress, message, sizeof(message));
+    if (h2Result != espplants_h2_ota::Result::OK) {
+      transportFailure = h2TransportFailureMessage(message);
+      if (!transportFailure || recoveryUsed || attempt != 0) {
+        setStatus("H2 update rejected safely: %s",
+                  message[0] ? message : "unknown error");
+        break;
+      }
+    } else if (h2OnlyUpdate) {
       installProgressPct = 100;
       hasUpdate = false;
       h2OnlyUpdate = false;
       setStatus("%s", message[0] ? message : "H2 update complete");
+      break;
     } else {
-      setStatus("H2 update rejected safely: %s",
-                message[0] ? message : "unknown error");
+      // H2 can legitimately consume time and temporary buffers. Re-check the
+      // measured internal-memory gate before opening the Waveshare package TLS
+      // connection; this shares the same one-recovery budget as transport.
+      if (!otaMemoryPreflight("before Waveshare package TLS", recoveryUsed)) {
+        break;
+      }
+      message[0] = 0;
+      setStatus(attempt == 0 ? "Downloading and verifying ESP PLANTS update..."
+                             : "Retrying ESP PLANTS download after network recovery...");
+      const espplants_ota_installer::Result result =
+          espplants_ota_installer::install(pendingRelease, installProgress,
+                                           message, sizeof(message));
+      if (result == espplants_ota_installer::Result::RESTART_PENDING) {
+        installProgressPct = 100;
+        setStatus("%s", message);
+        break;
+      }
+      transportFailure =
+          result == espplants_ota_installer::Result::TRANSPORT_FAILED;
+      if (!transportFailure || recoveryUsed || attempt != 0) {
+        setStatus("Update rejected safely: %s",
+                  message[0] ? message : "unknown error");
+        break;
+      }
     }
-    installTaskRunning = false;
-    vTaskDelete(nullptr);
-    return;
+
+    recoveryUsed = true;
+    setStatus("OTA transport failed; recycling Wi-Fi and retrying once...");
+    if (!recoverOtaNetwork("OTA transport failure")) {
+      setStatus("OTA recovery failed; update stopped safely");
+      break;
+    }
+    const OtaMemorySnapshot recovered = otaMemorySnapshot("after OTA recovery");
+    if (!otaMemorySafe(recovered)) {
+      setStatus("OTA recovery restored network but internal memory is still unsafe");
+      break;
+    }
   }
 
-  setStatus("Downloading and verifying .plantsota package...");
-  const espplants_ota_installer::Result result =
-      espplants_ota_installer::install(pendingRelease, installProgress,
-                                       message, sizeof(message));
-  if (result == espplants_ota_installer::Result::RESTART_PENDING) {
-    installProgressPct = 100;
-    setStatus("%s", message);
-  } else {
-    setStatus("Update rejected safely: %s", message[0] ? message : "unknown error");
-  }
   installTaskRunning = false;
-  vTaskDelete(nullptr);
+  Serial.println("[update] persistent OTA network worker idle after install");
+}
+
+OtaNetworkCommand takeOtaNetworkCommand() {
+  portENTER_CRITICAL(&otaNetworkCommandMux);
+  const OtaNetworkCommand command = otaNetworkCommand;
+  otaNetworkCommand = OtaNetworkCommand::NONE;
+  portEXIT_CRITICAL(&otaNetworkCommandMux);
+  return command;
+}
+
+void otaNetworkWorkerTask(void *) {
+  // This worker is persistent and its 16 KB stack is explicitly PSRAM-backed.
+  // TLS, GitHub metadata, H2 download/verification, and .plantsota streaming
+  // never run on the small internal flash-writer stack.
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    switch (takeOtaNetworkCommand()) {
+      case OtaNetworkCommand::CHECK:
+        runUpdateCheckOnNetworkWorker();
+        break;
+      case OtaNetworkCommand::INSTALL:
+        runInstallOnNetworkWorker();
+        break;
+      case OtaNetworkCommand::NONE:
+      default:
+        break;
+    }
+  }
+}
+
+bool ensureOtaNetworkWorker(const char *failureMessage) {
+  if (otaNetworkTaskHandle) return true;
+  const BaseType_t result = xTaskCreateWithCaps(
+      otaNetworkWorkerTask, "espplants-ota-network", kOtaNetworkWorkerStackBytes,
+      nullptr, 1, &otaNetworkTaskHandle, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (result == pdPASS) return true;
+  otaNetworkTaskHandle = nullptr;
+  checkTaskRunning = false;
+  installTaskRunning = false;
+  setStatus("%s", failureMessage);
+  return false;
+}
+
+bool queueOtaNetworkCommand(OtaNetworkCommand command,
+                            const char *failureMessage) {
+  if (!ensureOtaNetworkWorker(failureMessage)) return false;
+  portENTER_CRITICAL(&otaNetworkCommandMux);
+  otaNetworkCommand = command;
+  portEXIT_CRITICAL(&otaNetworkCommandMux);
+  xTaskNotifyGive(otaNetworkTaskHandle);
+  return true;
 }
 
 bool shouldAutoCheck() {
@@ -1340,11 +1625,13 @@ void service() {
     manualCheckRequested = false;
     waitingForClockNotice = false;
     checkTaskRunning = true;
-    startCheckTask("Could not start update-check task");
+    queueOtaNetworkCommand(OtaNetworkCommand::CHECK,
+                           "Could not start persistent OTA network worker");
   } else if (shouldAutoCheck()) {
     autoCheckedThisBoot = true;
     checkTaskRunning = true;
-    startCheckTask("Could not start automatic update-check task");
+    queueOtaNetworkCommand(OtaNetworkCommand::CHECK,
+                           "Could not start persistent OTA network worker");
   }
 
   if (installRequested && connected && secureTimeReady() && hasUpdate &&
@@ -1352,10 +1639,8 @@ void service() {
       espplants_ota_installer::restartState() == espplants_ota_installer::RestartState::IDLE) {
     installRequested = false;
     installTaskRunning = true;
-    if (xTaskCreate(installTask, "espplants-update-install", 16384, nullptr, 1, nullptr) != pdPASS) {
-      installTaskRunning = false;
-      setStatus("Could not start OTA install task");
-    }
+    queueOtaNetworkCommand(OtaNetworkCommand::INSTALL,
+                           "Could not start persistent OTA network worker");
   }
 }
 

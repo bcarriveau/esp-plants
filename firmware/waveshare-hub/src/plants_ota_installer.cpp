@@ -23,7 +23,6 @@
 #include <strings.h>
 
 #include "update_policy.h"
-#include "h2_ota_client.h"
 
 namespace espplants_ota_installer {
 namespace {
@@ -48,7 +47,15 @@ constexpr uint32_t kHttpBodyIdleTimeoutMs = 15000UL;
 constexpr uint32_t kMinimumHttpBudgetMs = 500UL;
 constexpr uint32_t kTransportReleaseDelayMs = 75UL;
 constexpr size_t kDownloadBufferBytes = 4096U;
+// Network/TLS producer and flash consumer are deliberately separated. The ring
+// lives in PSRAM; only this bounded buffer and the flash-writer task stack live
+// in internal RAM while esp_ota_write() is executing.
+constexpr size_t kOtaRingSlotBytes = 4096U;
+constexpr size_t kOtaRingSlotCount = 8U;
+constexpr size_t kOtaRingBytes = kOtaRingSlotBytes * kOtaRingSlotCount;
 constexpr size_t kInternalFlashWriteBufferBytes = 1024U;
+constexpr uint32_t kFlashWriterStackBytes = 6144U;
+constexpr uint32_t kFlashWriterWaitMs = 15000U;
 constexpr uint32_t kProgressGranularityBytes = 64U * 1024U;
 
 constexpr uint32_t kRestartDelayMs = 1500U;
@@ -109,6 +116,36 @@ struct StreamMatcher {
   uint8_t failure[kMaxBuildIdLength + 1U]{};
 };
 
+enum class FlashWriterState : uint32_t {
+  STARTING = 0,
+  RUNNING,
+  COMMIT_REQUESTED,
+  ABORT_REQUESTED,
+  COMPLETE,
+  ABORTED,
+  FAILED,
+};
+
+struct FlashWriterContext {
+  const esp_partition_t *updatePartition = nullptr;
+  uint8_t *psramRing = nullptr;
+  TaskHandle_t producerTask = nullptr;
+  TaskHandle_t writerTask = nullptr;
+  volatile uint32_t writeSequence = 0;
+  volatile uint32_t readSequence = 0;
+  volatile uint32_t state = static_cast<uint32_t>(FlashWriterState::STARTING);
+  uint16_t slotLengths[kOtaRingSlotCount]{};
+  uint32_t expectedFirmwareBytes = 0;
+  uint32_t writtenBytes = 0;
+  esp_ota_handle_t otaHandle = 0;
+  bool otaHandleActive = false;
+  char error[128]{};
+  uint8_t internalWriteBuffer[kInternalFlashWriteBufferBytes]{};
+};
+
+static_assert(sizeof(FlashWriterContext) <= 2048U,
+              "Flash writer internal control block exceeded its DRAM budget");
+
 struct InstallWorkspace {
   HttpHeaderState headers;
   char currentUrl[kMaxRedirectUrlLength + 1U]{};
@@ -116,18 +153,16 @@ struct InstallWorkspace {
   char redirectHost[96]{};
   uint8_t downloadBuffer[kDownloadBufferBytes]{};
   uint8_t packageHeaderBytes[kPackageHeaderSize]{};
-  uint8_t *flashWriteBuffer = nullptr;
   PackageHeader packageHeader{};
   uint8_t imagePrefix[sizeof(esp_image_header_t)]{};
   size_t packageHeaderReceived = 0;
   size_t imagePrefixReceived = 0;
   uint32_t packageReceived = 0;
   uint32_t payloadReceived = 0;
-  uint32_t payloadWritten = 0;
   uint32_t lastProgressBytes = 0;
   const esp_partition_t *updatePartition = nullptr;
-  esp_ota_handle_t otaHandle = 0;
-  bool otaHandleActive = false;
+  uint8_t *psramRing = nullptr;
+  FlashWriterContext *writer = nullptr;
   mbedtls_sha256_context packageSha;
   mbedtls_sha256_context firmwareSha;
   bool packageShaActive = false;
@@ -139,6 +174,8 @@ struct InstallWorkspace {
 static_assert(sizeof(InstallWorkspace) <= 16U * 1024U,
               "ESP PLANTS remote OTA workspace exceeded PSRAM budget");
 
+void abortAndDestroyFlashWriter(InstallWorkspace &workspace);
+
 class WorkspaceGuard {
  public:
   WorkspaceGuard() {
@@ -149,10 +186,10 @@ class WorkspaceGuard {
 
   ~WorkspaceGuard() {
     if (!workspace_) return;
-    if (workspace_->otaHandleActive) esp_ota_abort(workspace_->otaHandle);
+    abortAndDestroyFlashWriter(*workspace_);
     if (workspace_->packageShaActive) mbedtls_sha256_free(&workspace_->packageSha);
     if (workspace_->firmwareShaActive) mbedtls_sha256_free(&workspace_->firmwareSha);
-    if (workspace_->flashWriteBuffer) heap_caps_free(workspace_->flashWriteBuffer);
+    if (workspace_->psramRing) heap_caps_free(workspace_->psramRing);
     workspace_->~InstallWorkspace();
     heap_caps_free(workspace_);
   }
@@ -386,17 +423,6 @@ bool validatePackageHeader(InstallWorkspace &workspace, const Release &release,
     return false;
   }
 
-  esp_ota_handle_t startedHandle = 0;
-  const esp_err_t beginResult = esp_ota_begin(workspace.updatePartition,
-                                              header.firmwareSize, &startedHandle);
-  if (beginResult != ESP_OK) {
-    snprintf(message, messageCapacity, "OTA partition begin failed: %s",
-             esp_err_to_name(beginResult));
-    return false;
-  }
-  workspace.otaHandle = startedHandle;
-  workspace.otaHandleActive = true;
-
   mbedtls_sha256_init(&workspace.firmwareSha);
   if (mbedtls_sha256_starts(&workspace.firmwareSha, 0) != 0) {
     copyText(message, messageCapacity, "Firmware SHA-256 initialization failed");
@@ -406,7 +432,7 @@ bool validatePackageHeader(InstallWorkspace &workspace, const Release &release,
   prepareMatcher(workspace.buildIdMatcher, workspace.packageHeader.buildId);
   prepareMatcher(workspace.distributionMatcher, kDistributionMarker);
 
-  Serial.printf("[update] package accepted: build=%s firmware=%lu bytes slot=%s\n",
+  Serial.printf("[update] package header accepted: build=%s firmware=%lu bytes slot=%s\n",
                 header.buildId, static_cast<unsigned long>(header.firmwareSize),
                 workspace.updatePartition->label);
   return true;
@@ -427,35 +453,248 @@ bool validateImagePrefix(InstallWorkspace &workspace,
   return true;
 }
 
-bool writeFirmwareBytes(InstallWorkspace &workspace, const uint8_t *data,
-                        size_t length, char *message, size_t messageCapacity) {
-  if (!length) return true;
-  if (!workspace.flashWriteBuffer) {
-    copyText(message, messageCapacity, "Internal OTA flash-write buffer is unavailable");
+FlashWriterState flashWriterState(const FlashWriterContext &writer) {
+  return static_cast<FlashWriterState>(
+      __atomic_load_n(&writer.state, __ATOMIC_ACQUIRE));
+}
+
+void setFlashWriterState(FlashWriterContext &writer, FlashWriterState state) {
+  __atomic_store_n(&writer.state, static_cast<uint32_t>(state), __ATOMIC_RELEASE);
+}
+
+void failFlashWriter(FlashWriterContext &writer, const char *message) {
+  copyText(writer.error, sizeof(writer.error), message);
+  if (writer.otaHandleActive) {
+    esp_ota_abort(writer.otaHandle);
+    writer.otaHandleActive = false;
+  }
+  setFlashWriterState(writer, FlashWriterState::FAILED);
+  if (writer.producerTask) xTaskNotifyGive(writer.producerTask);
+}
+
+void flashWriterTask(void *parameter) {
+  FlashWriterContext &writer = *static_cast<FlashWriterContext *>(parameter);
+  esp_ota_handle_t handle = 0;
+  const esp_err_t beginResult = esp_ota_begin(
+      writer.updatePartition, writer.expectedFirmwareBytes, &handle);
+  if (beginResult != ESP_OK) {
+    char text[128]{};
+    snprintf(text, sizeof(text), "OTA partition begin failed: %s",
+             esp_err_to_name(beginResult));
+    failFlashWriter(writer, text);
+  } else {
+    writer.otaHandle = handle;
+    writer.otaHandleActive = true;
+    setFlashWriterState(writer, FlashWriterState::RUNNING);
+    if (writer.producerTask) xTaskNotifyGive(writer.producerTask);
+  }
+
+  for (;;) {
+    const FlashWriterState state = flashWriterState(writer);
+    if (state == FlashWriterState::FAILED ||
+        state == FlashWriterState::COMPLETE ||
+        state == FlashWriterState::ABORTED) {
+      // The PSRAM network worker deletes this task only after it is blocked here.
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      continue;
+    }
+
+    if (state == FlashWriterState::ABORT_REQUESTED) {
+      if (writer.otaHandleActive) {
+        esp_ota_abort(writer.otaHandle);
+        writer.otaHandleActive = false;
+      }
+      setFlashWriterState(writer, FlashWriterState::ABORTED);
+      if (writer.producerTask) xTaskNotifyGive(writer.producerTask);
+      continue;
+    }
+
+    const uint32_t readSequence =
+        __atomic_load_n(&writer.readSequence, __ATOMIC_ACQUIRE);
+    const uint32_t writeSequence =
+        __atomic_load_n(&writer.writeSequence, __ATOMIC_ACQUIRE);
+    if (readSequence < writeSequence) {
+      const size_t slot = readSequence % kOtaRingSlotCount;
+      const size_t length = writer.slotLengths[slot];
+      const uint8_t *source = writer.psramRing + slot * kOtaRingSlotBytes;
+      size_t offset = 0;
+      while (offset < length) {
+        const size_t chunk = std::min(
+            kInternalFlashWriteBufferBytes, length - offset);
+        // PSRAM is touched only while copying into this internal buffer. The
+        // subsequent flash operation depends only on internal stack/data.
+        memcpy(writer.internalWriteBuffer, source + offset, chunk);
+        const esp_err_t writeResult =
+            esp_ota_write(writer.otaHandle, writer.internalWriteBuffer, chunk);
+        if (writeResult != ESP_OK) {
+          char text[128]{};
+          snprintf(text, sizeof(text), "Firmware write failed: %s",
+                   esp_err_to_name(writeResult));
+          failFlashWriter(writer, text);
+          break;
+        }
+        writer.writtenBytes += static_cast<uint32_t>(chunk);
+        offset += chunk;
+      }
+      if (flashWriterState(writer) == FlashWriterState::FAILED) continue;
+      __atomic_store_n(&writer.readSequence, readSequence + 1U, __ATOMIC_RELEASE);
+      if (writer.producerTask) xTaskNotifyGive(writer.producerTask);
+      continue;
+    }
+
+    if (state == FlashWriterState::COMMIT_REQUESTED) {
+      if (writer.writtenBytes != writer.expectedFirmwareBytes) {
+        failFlashWriter(writer, "Flash writer did not receive the complete firmware image");
+        continue;
+      }
+      const esp_err_t endResult = esp_ota_end(writer.otaHandle);
+      writer.otaHandleActive = false;
+      if (endResult != ESP_OK) {
+        char text[128]{};
+        snprintf(text, sizeof(text), "ESP image validation failed: %s",
+                 esp_err_to_name(endResult));
+        failFlashWriter(writer, text);
+        continue;
+      }
+      const esp_err_t bootResult =
+          esp_ota_set_boot_partition(writer.updatePartition);
+      if (bootResult != ESP_OK) {
+        char text[128]{};
+        snprintf(text, sizeof(text), "Boot partition update failed: %s",
+                 esp_err_to_name(bootResult));
+        failFlashWriter(writer, text);
+        continue;
+      }
+      setFlashWriterState(writer, FlashWriterState::COMPLETE);
+      if (writer.producerTask) xTaskNotifyGive(writer.producerTask);
+      continue;
+    }
+
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+  }
+}
+
+bool waitForWriterState(FlashWriterContext &writer, FlashWriterState wanted,
+                        uint32_t timeoutMs) {
+  const uint32_t started = millis();
+  while (millis() - started < timeoutMs) {
+    const FlashWriterState state = flashWriterState(writer);
+    if (state == wanted) return true;
+    if (state == FlashWriterState::FAILED || state == FlashWriterState::ABORTED)
+      return false;
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+  }
+  return flashWriterState(writer) == wanted;
+}
+
+bool startFlashWriter(InstallWorkspace &workspace,
+                      char *message, size_t messageCapacity) {
+  if (workspace.writer) return true;
+  if (!workspace.psramRing || !workspace.updatePartition) {
+    copyText(message, messageCapacity, "OTA producer buffer was not initialized");
     return false;
   }
+
+  auto *writer = static_cast<FlashWriterContext *>(heap_caps_calloc(
+      1, sizeof(FlashWriterContext), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!writer) {
+    copyText(message, messageCapacity, "Internal flash-writer control allocation failed");
+    return false;
+  }
+  writer->updatePartition = workspace.updatePartition;
+  writer->psramRing = workspace.psramRing;
+  writer->producerTask = xTaskGetCurrentTaskHandle();
+  writer->expectedFirmwareBytes = workspace.packageHeader.firmwareSize;
+  workspace.writer = writer;
+
+  const BaseType_t created = xTaskCreateWithCaps(
+      flashWriterTask, "espplants-ota-flash", kFlashWriterStackBytes, writer, 2,
+      &writer->writerTask, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (created != pdPASS) {
+    workspace.writer = nullptr;
+    heap_caps_free(writer);
+    copyText(message, messageCapacity, "Could not start internal OTA flash writer");
+    return false;
+  }
+  if (!waitForWriterState(*writer, FlashWriterState::RUNNING,
+                          kFlashWriterWaitMs)) {
+    copyText(message, messageCapacity,
+             writer->error[0] ? writer->error : "Internal OTA flash writer did not start");
+    return false;
+  }
+  return true;
+}
+
+bool queueFirmwareBytes(InstallWorkspace &workspace, const uint8_t *data,
+                        size_t length, char *message, size_t messageCapacity) {
+  if (!length) return true;
+  if (!workspace.writer) {
+    copyText(message, messageCapacity, "Internal OTA flash writer is unavailable");
+    return false;
+  }
+  FlashWriterContext &writer = *workspace.writer;
+
   while (length) {
-    const size_t chunk = std::min(length, kInternalFlashWriteBufferBytes);
-    memcpy(workspace.flashWriteBuffer, data, chunk);
-    const esp_err_t result = esp_ota_write(workspace.otaHandle,
-                                           workspace.flashWriteBuffer, chunk);
-    if (result != ESP_OK) {
-      snprintf(message, messageCapacity, "Firmware write failed: %s",
-               esp_err_to_name(result));
+    while (__atomic_load_n(&writer.writeSequence, __ATOMIC_ACQUIRE) -
+               __atomic_load_n(&writer.readSequence, __ATOMIC_ACQUIRE) >=
+           kOtaRingSlotCount) {
+      if (flashWriterState(writer) == FlashWriterState::FAILED) {
+        copyText(message, messageCapacity,
+                 writer.error[0] ? writer.error : "Internal OTA flash writer failed");
+        return false;
+      }
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+    }
+
+    if (flashWriterState(writer) != FlashWriterState::RUNNING) {
+      copyText(message, messageCapacity,
+               writer.error[0] ? writer.error : "Internal OTA flash writer stopped");
       return false;
     }
-    workspace.payloadWritten += static_cast<uint32_t>(chunk);
+    const uint32_t sequence =
+        __atomic_load_n(&writer.writeSequence, __ATOMIC_ACQUIRE);
+    const size_t slot = sequence % kOtaRingSlotCount;
+    const size_t chunk = std::min(length, kOtaRingSlotBytes);
+    memcpy(workspace.psramRing + slot * kOtaRingSlotBytes, data, chunk);
+    writer.slotLengths[slot] = static_cast<uint16_t>(chunk);
+    __atomic_store_n(&writer.writeSequence, sequence + 1U, __ATOMIC_RELEASE);
+    xTaskNotifyGive(writer.writerTask);
     data += chunk;
     length -= chunk;
   }
   return true;
 }
 
+void abortAndDestroyFlashWriter(InstallWorkspace &workspace) {
+  FlashWriterContext *writer = workspace.writer;
+  if (!writer) return;
+
+  const FlashWriterState state = flashWriterState(*writer);
+  if (state != FlashWriterState::COMPLETE &&
+      state != FlashWriterState::FAILED &&
+      state != FlashWriterState::ABORTED) {
+    setFlashWriterState(*writer, FlashWriterState::ABORT_REQUESTED);
+    if (writer->writerTask) xTaskNotifyGive(writer->writerTask);
+    const uint32_t started = millis();
+    while (millis() - started < kFlashWriterWaitMs) {
+      const FlashWriterState now = flashWriterState(*writer);
+      if (now == FlashWriterState::ABORTED || now == FlashWriterState::FAILED) break;
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
+    }
+  }
+  if (writer->writerTask) {
+    vTaskDeleteWithCaps(writer->writerTask);
+    writer->writerTask = nullptr;
+  }
+  heap_caps_free(writer);
+  workspace.writer = nullptr;
+}
+
 bool processPayload(InstallWorkspace &workspace, const uint8_t *data,
                     size_t length, char *message, size_t messageCapacity) {
   if (!length) return true;
-  if (!workspace.firmwareShaActive || !workspace.otaHandleActive) {
-    copyText(message, messageCapacity, "Remote OTA writer was not initialized");
+  if (!workspace.firmwareShaActive) {
+    copyText(message, messageCapacity, "Firmware validator was not initialized");
     return false;
   }
   if (workspace.payloadReceived > workspace.packageHeader.firmwareSize ||
@@ -481,12 +720,13 @@ bool processPayload(InstallWorkspace &workspace, const uint8_t *data,
     length -= copyLength;
     if (workspace.imagePrefixReceived < sizeof(workspace.imagePrefix)) return true;
     if (!validateImagePrefix(workspace, message, messageCapacity) ||
-        !writeFirmwareBytes(workspace, workspace.imagePrefix,
+        !startFlashWriter(workspace, message, messageCapacity) ||
+        !queueFirmwareBytes(workspace, workspace.imagePrefix,
                             sizeof(workspace.imagePrefix), message, messageCapacity)) {
       return false;
     }
   }
-  return writeFirmwareBytes(workspace, data, length, message, messageCapacity);
+  return queueFirmwareBytes(workspace, data, length, message, messageCapacity);
 }
 
 bool processPackageBytes(InstallWorkspace &workspace, const Release &release,
@@ -528,8 +768,7 @@ bool finishPackage(InstallWorkspace &workspace, const Release &release,
   if (workspace.packageReceived != release.packageSize ||
       workspace.packageHeaderReceived != kPackageHeaderSize ||
       workspace.payloadReceived != release.firmwareSize ||
-      workspace.payloadWritten != release.firmwareSize ||
-      !workspace.otaHandleActive || !workspace.packageShaActive ||
+      !workspace.writer || !workspace.packageShaActive ||
       !workspace.firmwareShaActive) {
     copyText(message, messageCapacity, "Downloaded firmware package was incomplete");
     return false;
@@ -571,17 +810,23 @@ bool finishPackage(InstallWorkspace &workspace, const Release &release,
     return false;
   }
 
-  const esp_err_t endResult = esp_ota_end(workspace.otaHandle);
-  workspace.otaHandleActive = false;
-  if (endResult != ESP_OK) {
-    snprintf(message, messageCapacity, "ESP image validation failed: %s",
-             esp_err_to_name(endResult));
-    return false;
+  FlashWriterContext &writer = *workspace.writer;
+  while (__atomic_load_n(&writer.readSequence, __ATOMIC_ACQUIRE) !=
+         __atomic_load_n(&writer.writeSequence, __ATOMIC_ACQUIRE)) {
+    if (flashWriterState(writer) == FlashWriterState::FAILED) {
+      copyText(message, messageCapacity,
+               writer.error[0] ? writer.error : "Internal OTA flash writer failed");
+      return false;
+    }
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(25));
   }
-  const esp_err_t bootResult = esp_ota_set_boot_partition(workspace.updatePartition);
-  if (bootResult != ESP_OK) {
-    snprintf(message, messageCapacity, "Boot partition update failed: %s",
-             esp_err_to_name(bootResult));
+
+  setFlashWriterState(writer, FlashWriterState::COMMIT_REQUESTED);
+  xTaskNotifyGive(writer.writerTask);
+  if (!waitForWriterState(writer, FlashWriterState::COMPLETE,
+                          kFlashWriterWaitMs)) {
+    copyText(message, messageCapacity,
+             writer.error[0] ? writer.error : "Internal OTA flash finalization failed");
     return false;
   }
   return true;
@@ -698,14 +943,6 @@ Result install(const Release &release, ProgressCallback progress,
   if (!message || messageCapacity == 0) return Result::FAILED;
   message[0] = 0;
 
-  // Phase 2 Update All: H2 must validate, switch its inactive OTA slot, reboot,
-  // and report the target build before the Waveshare inactive slot is touched.
-  {
-    const auto h2Result = espplants_h2_ota::updateForRelease(
-        release, progress, message, messageCapacity);
-    if (h2Result != espplants_h2_ota::Result::OK) return Result::FAILED;
-  }
-
   if (!packageLayoutValid(release.packageSize, release.firmwareSize) ||
       !boundedPrintableAscii(release.buildId, kMaxBuildIdLength) ||
       !tagValid(release.tag) || !assetNameValid(release.asset)) {
@@ -724,10 +961,10 @@ Result install(const Release &release, ProgressCallback progress,
     copyText(message, messageCapacity, "No inactive OTA partition is available");
     return Result::FAILED;
   }
-  workspace->flashWriteBuffer = static_cast<uint8_t *>(heap_caps_malloc(
-      kInternalFlashWriteBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  if (!workspace->flashWriteBuffer) {
-    copyText(message, messageCapacity, "Internal OTA flash-write buffer allocation failed");
+  workspace->psramRing = static_cast<uint8_t *>(heap_caps_malloc(
+      kOtaRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!workspace->psramRing) {
+    copyText(message, messageCapacity, "OTA PSRAM ring allocation failed");
     return Result::FAILED;
   }
   if (!makeAssetUrl(release, workspace->currentUrl, sizeof(workspace->currentUrl))) {
@@ -748,11 +985,11 @@ Result install(const Release &release, ProgressCallback progress,
   for (uint8_t redirect = 0; redirect <= kMaxRedirects; ++redirect) {
     if (WiFi.status() != WL_CONNECTED) {
       copyText(message, messageCapacity, "Wi-Fi disconnected during update");
-      return Result::FAILED;
+      return Result::TRANSPORT_FAILED;
     }
     if (deadlineReached(absoluteDeadlineMs)) {
       copyText(message, messageCapacity, "Remote OTA exceeded its three-minute deadline");
-      return Result::FAILED;
+      return Result::TRANSPORT_FAILED;
     }
 
     workspace->host[0] = 0;
@@ -767,7 +1004,7 @@ Result install(const Release &release, ProgressCallback progress,
         kHttpConnectTimeoutMs, remainingToDeadline(absoluteDeadlineMs));
     if (connectBudgetMs < kMinimumHttpBudgetMs) {
       copyText(message, messageCapacity, "Remote OTA had insufficient HTTPS time remaining");
-      return Result::FAILED;
+      return Result::TRANSPORT_FAILED;
     }
     const size_t urlLength = strlen(workspace->currentUrl);
     const size_t txBufferBytes = httpTransmitBufferBytes(urlLength);
@@ -795,7 +1032,7 @@ Result install(const Release &release, ProgressCallback progress,
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
       copyText(message, messageCapacity, "GitHub HTTPS client allocation failed");
-      return Result::FAILED;
+      return Result::TRANSPORT_FAILED;
     }
     esp_http_client_set_header(client, "Accept", "application/octet-stream");
     esp_http_client_set_header(client, "Accept-Encoding", "identity");
@@ -807,19 +1044,21 @@ Result install(const Release &release, ProgressCallback progress,
       snprintf(message, messageCapacity, "GitHub HTTPS open failed: %s",
                esp_err_to_name(openResult));
       releaseHttpClient(client, false);
-      return Result::FAILED;
+      return Result::TRANSPORT_FAILED;
     }
     opened = true;
     const int64_t fetchedLength = esp_http_client_fetch_headers(client);
     if (workspace->headers.failure != HeaderFailure::NONE || fetchedLength < 0) {
-      if (workspace->headers.failure != HeaderFailure::NONE) {
+      const bool transportFailure =
+          workspace->headers.failure == HeaderFailure::NONE;
+      if (!transportFailure) {
         copyText(message, messageCapacity,
                  headerFailureMessage(workspace->headers.failure));
       } else {
         copyText(message, messageCapacity, "GitHub release header fetch failed");
       }
       releaseHttpClient(client, opened);
-      return Result::FAILED;
+      return transportFailure ? Result::TRANSPORT_FAILED : Result::FAILED;
     }
 
     const int statusCode = esp_http_client_get_status_code(client);
@@ -869,20 +1108,24 @@ Result install(const Release &release, ProgressCallback progress,
     esp_http_client_set_timeout_ms(client, kHttpBodyIdleTimeoutMs);
     uint32_t lastProgressMs = millis();
     bool readFailed = false;
+    bool transportFailure = false;
     while (workspace->packageReceived < release.packageSize) {
       if (WiFi.status() != WL_CONNECTED) {
         copyText(message, messageCapacity, "Wi-Fi disconnected during update");
         readFailed = true;
+        transportFailure = true;
         break;
       }
       if (deadlineReached(absoluteDeadlineMs)) {
         copyText(message, messageCapacity, "Remote OTA exceeded its three-minute deadline");
         readFailed = true;
+        transportFailure = true;
         break;
       }
       if (millis() - lastProgressMs >= kHttpBodyIdleTimeoutMs) {
         copyText(message, messageCapacity, "GitHub release download stalled for 15 seconds");
         readFailed = true;
+        transportFailure = true;
         break;
       }
 
@@ -909,7 +1152,9 @@ Result install(const Release &release, ProgressCallback progress,
         vTaskDelay(1);
       } else if (bytesRead == 0) {
         if (esp_http_client_is_complete_data_received(client)) break;
+        copyText(message, messageCapacity, "GitHub release download ended early");
         readFailed = true;
+        transportFailure = true;
         break;
       } else {
         const int socketError = esp_http_client_get_errno(client);
@@ -922,6 +1167,7 @@ Result install(const Release &release, ProgressCallback progress,
                  "GitHub release body read failed: result=%d errno=%d",
                  bytesRead, socketError);
         readFailed = true;
+        transportFailure = true;
         break;
       }
     }
@@ -930,7 +1176,9 @@ Result install(const Release &release, ProgressCallback progress,
     releaseHttpClient(client, opened);
     if (readFailed || !complete || workspace->packageReceived != release.packageSize) {
       if (!message[0]) copyText(message, messageCapacity, "GitHub release download was incomplete");
-      return Result::FAILED;
+      return transportFailure || !complete
+                 ? Result::TRANSPORT_FAILED
+                 : Result::FAILED;
     }
     if (!finishPackage(*workspace, release, message, messageCapacity)) {
       return Result::FAILED;

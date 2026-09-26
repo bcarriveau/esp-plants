@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import struct
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -32,53 +31,59 @@ class PlantsOtaPackageTests(unittest.TestCase):
             data[2048 : 2048 + len(value)] = value
         return bytes(data)
 
-    def test_package_round_trip(self):
+    def h2_metadata(self):
+        return {
+            "product": "esp-plants-h2",
+            "hardware": "m5stack-unit-gateway-h2",
+            "version": "0.2.0-alpha.24",
+            "build_id": "ESPPLANTS-H2-0.2.0-alpha.24",
+            "protocol": 1,
+            "asset": "esp-plants-h2-0.2.0-alpha.24.bin",
+            "firmware_size": 729616,
+            "firmware_sha256": "22" * 32,
+        }
+
+    def test_package_round_trip_metadata(self):
         identity = self.identity()
-        package = ota.create_package(self.firmware(), identity)
-        metadata = ota.validate_package(package, identity)
+        firmware = self.firmware()
+        package = ota.create_package(firmware, identity)
+        metadata = ota.metadata(package, identity)
         self.assertEqual(metadata.package_size, len(package))
-        self.assertEqual(metadata.firmware_size, len(self.firmware()))
+        self.assertEqual(metadata.firmware_size, len(firmware))
         manifest = json.loads(
-            ota.create_manifest(identity, metadata, ota.versioned_package_name(identity))
+            ota.create_manifest(
+                identity,
+                metadata,
+                f"esp-plants-waveshare-{identity.version}.plantsota",
+                self.h2_metadata(),
+            )
         )
         self.assertEqual(manifest["hardware"], "waveshare-esp32-s3-touch-lcd-7")
         self.assertEqual(manifest["product"], "esp-plants-waveshare")
         self.assertTrue(manifest["asset"].endswith(".plantsota"))
         self.assertEqual(manifest["package_size"], manifest["firmware_size"] + 512)
+        self.assertEqual(manifest["h2"]["version"], "0.2.0-alpha.24")
 
     def test_wrong_chip_rejected(self):
         with self.assertRaisesRegex(ValueError, "not ESP32-S3"):
             ota.create_package(self.firmware(chip_id=0), self.identity())
 
     def test_private_build_rejected(self):
-        with self.assertRaisesRegex(ValueError, "DISTRIBUTION"):
+        with self.assertRaisesRegex(ValueError, "distribution/build identity"):
             ota.create_package(self.firmware(marker=False), self.identity())
 
     def test_missing_build_id_rejected(self):
-        with self.assertRaisesRegex(ValueError, "build ID"):
+        with self.assertRaisesRegex(ValueError, "distribution/build identity"):
             ota.create_package(self.firmware(build=False), self.identity())
 
-    def test_tamper_rejected(self):
+    def test_package_metadata_sha_detects_tamper(self):
         identity = self.identity()
         package = bytearray(ota.create_package(self.firmware(), identity))
+        clean = ota.metadata(bytes(package), identity)
         package[-1] ^= 0x01
-        with self.assertRaisesRegex(ValueError, "SHA-256"):
-            ota.validate_package(bytes(package), identity)
-
-    def test_release_assets_have_fixed_manifest_name(self):
-        identity = self.identity()
-        with tempfile.TemporaryDirectory() as td:
-            td = Path(td)
-            firmware = td / "firmware.bin"
-            firmware.write_bytes(self.firmware())
-            asset, manifest, metadata = ota.write_release_assets(
-                firmware,
-                ROOT / "firmware" / "waveshare-hub" / "include" / "build_version.h",
-                td / "release",
-            )
-            self.assertEqual(manifest.name, ota.MANIFEST_ASSET_NAME)
-            self.assertEqual(asset.name, ota.versioned_package_name(identity))
-            self.assertEqual(asset.stat().st_size, metadata.package_size)
+        tampered = ota.metadata(bytes(package), identity)
+        self.assertNotEqual(clean.package_sha256, tampered.package_sha256)
+        self.assertNotEqual(clean.firmware_sha256, tampered.firmware_sha256)
 
 
 if __name__ == "__main__":

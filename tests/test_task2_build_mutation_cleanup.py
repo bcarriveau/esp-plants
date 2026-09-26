@@ -79,7 +79,7 @@ def test_h2_commissioning_and_identity_behavior_is_in_real_source():
     assert "one-shot router rejoin window" not in source
 
 
-def test_waveshare_injected_behavior_is_in_real_source():
+def test_waveshare_behavior_is_in_real_source_without_injectors():
     main = (ROOT / "firmware/waveshare-hub/src/main.cpp").read_text(encoding="utf-8")
     installer = (ROOT / "firmware/waveshare-hub/src/plants_ota_installer.cpp").read_text(encoding="utf-8")
     service = (ROOT / "firmware/waveshare-hub/src/update_service.cpp").read_text(encoding="utf-8")
@@ -96,7 +96,12 @@ def test_waveshare_injected_behavior_is_in_real_source():
     ):
         assert token in main
 
-    assert '#include "h2_ota_client.h"' in installer
-    assert "espplants_h2_ota::updateForRelease" in installer
+    # H2 orchestration now belongs to the persistent PSRAM network worker;
+    # the Waveshare installer is intentionally flash/package-only.
+    assert '#include "h2_ota_client.h"' not in installer
+    assert "espplants_h2_ota::updateForRelease" not in installer
+    assert '#include "h2_ota_client.h"' in service
+    assert "espplants_h2_ota::updateForRelease" in service
+    assert "void otaNetworkWorkerTask(void *)" in service
     assert "Phase 2 release selection: choose highest compatible semantic version" in service
     assert "haveBestRelease" in service

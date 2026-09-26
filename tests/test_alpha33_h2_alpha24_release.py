@@ -8,17 +8,26 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_release_versions_create_real_h2_ota_delta():
-    waveshare = read("firmware/waveshare-hub/include/build_version.h")
-    h2 = read("firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.33"' in waveshare
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.24"' in h2
-    assert read("VERSION").strip() == "0.2.0-alpha.33"
+def test_current_waveshare_release_keeps_h2_alpha24_independent():
+    script_path = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
+    spec = importlib.util.spec_from_file_location("build_plants_ota_current", script_path)
+    ota = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(ota)
+    waveshare = ota.read_build_identity(
+        ROOT / "firmware" / "waveshare-hub" / "include" / "build_version.h"
+    )
+    h2 = ota.read_h2_build_identity(
+        ROOT / "firmware" / "m5-h2-zigbee" / "include" / "build_version.h"
+    )
+    assert read("VERSION").strip() == waveshare.version
+    assert h2.version == "0.2.0-alpha.24"
+    assert waveshare.version != h2.version
 
 
 def test_release_generator_cannot_misidentify_regular_7_as_7b():
     script_path = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
-    spec = importlib.util.spec_from_file_location("build_plants_ota_alpha33", script_path)
+    spec = importlib.util.spec_from_file_location("build_plants_ota_identity", script_path)
     ota = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(ota)

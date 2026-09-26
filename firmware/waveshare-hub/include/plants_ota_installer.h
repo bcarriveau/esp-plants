@@ -27,6 +27,7 @@ struct Release {
 
 enum class Result : uint8_t {
   FAILED = 0,
+  TRANSPORT_FAILED,
   RESTART_PENDING,
 };
 

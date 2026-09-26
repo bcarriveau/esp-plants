@@ -11,7 +11,7 @@ def read(path: str) -> str:
 
 def load_packager():
     path = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
-    spec = importlib.util.spec_from_file_location("build_plants_ota_alpha34", path)
+    spec = importlib.util.spec_from_file_location("build_plants_ota_alpha35", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -21,9 +21,9 @@ def load_packager():
 def test_release_versions_create_real_h2_ota_delta():
     waveshare = read("firmware/waveshare-hub/include/build_version.h")
     h2 = read("firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.34"' in waveshare
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.35"' in waveshare
     assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.24"' in h2
-    assert read("VERSION").strip() == "0.2.0-alpha.34"
+    assert read("VERSION").strip() == "0.2.0-alpha.35"
 
 
 def test_alpha23_bridge_is_explicit_and_does_not_change_normal_h2_target():
@@ -99,7 +99,7 @@ def test_same_waveshare_release_can_offer_h2_only_delta():
     assert "TargetState::DIFFERENT" in source
     assert "h2OnlyUpdate = true;" in source
     assert 'setStatus("H2 update available: v%s", bestRelease.h2Version);' in source
-    assert 'setStatus("Downloading and verifying H2 firmware...");' in source
+    assert '"Downloading and verifying H2 firmware..."' in source
     assert "espplants_h2_ota::updateForRelease(" in source
     assert "matchingH2Found" in source
 
