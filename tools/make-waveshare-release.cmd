@@ -2,10 +2,11 @@
 setlocal
 cd /d "%~dp0\.."
 echo ============================================================
-echo  ESP PLANTS - PHASE 2 UPDATE ALL RELEASE BUILD
+echo  ESP PLANTS - UPDATE ALL RELEASE BUILD
 echo ============================================================
 set "RELEASE_VERSION="
 set "H2_VERSION="
+set "H2_BRIDGE_VERSION=0.2.0-alpha.23"
 for /f "tokens=3" %%V in ('findstr /b /c:"#define ESP_PLANTS_WAVESHARE_VERSION " firmware\waveshare-hub\include\build_version.h') do set "RELEASE_VERSION=%%~V"
 for /f "tokens=3" %%V in ('findstr /b /c:"#define ESP_PLANTS_H2_VERSION " firmware\m5-h2-zigbee\include\build_version.h') do set "H2_VERSION=%%~V"
 if not defined RELEASE_VERSION goto config_failed
@@ -19,7 +20,11 @@ where platformio >nul 2>&1 && set "PIO=platformio" && goto build
 goto pio_missing
 
 :build
-echo Building H2 distribution image v%H2_VERSION% first...
+echo Building H2 alpha.23 compatibility bridge for older Waveshare updaters...
+"%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2_release_bridge_alpha23
+if errorlevel 1 goto build_failed
+
+echo Building H2 distribution target v%H2_VERSION%...
 "%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2_release
 if errorlevel 1 goto build_failed
 
@@ -28,6 +33,7 @@ echo Building Waveshare distribution image v%RELEASE_VERSION%...
 if errorlevel 1 goto build_failed
 
 echo Packaging Waveshare + H2 release assets explicitly...
+if not exist "firmware\m5-h2-zigbee\.pio\build\m5_gateway_h2_release_bridge_alpha23\firmware.bin" goto package_missing_binary
 if not exist "firmware\m5-h2-zigbee\.pio\build\m5_gateway_h2_release\firmware.bin" goto package_missing_binary
 if not exist "firmware\waveshare-hub\.pio\build\waveshare_s3_touch_lcd_7_release\firmware.bin" goto package_missing_binary
 if exist "%PYTHON%" goto run_packager
@@ -40,25 +46,35 @@ del /q "release\esp-plants-waveshare-%RELEASE_VERSION%.plantsota" >nul 2>&1
 del /q "release\esp-plants-waveshare.manifest.json" >nul 2>&1
 del /q "release\esp-plants-h2-%H2_VERSION%.bin" >nul 2>&1
 del /q "release\esp-plants-h2-%H2_VERSION%.bin.sha256" >nul 2>&1
+del /q "release\esp-plants-h2-%H2_BRIDGE_VERSION%.bin" >nul 2>&1
+del /q "release\esp-plants-h2-%H2_BRIDGE_VERSION%.bin.sha256" >nul 2>&1
 
 "%PYTHON%" "firmware\waveshare-hub\scripts\build_plants_ota.py" ^
   "firmware\waveshare-hub\.pio\build\waveshare_s3_touch_lcd_7_release\firmware.bin" ^
   "firmware\waveshare-hub\include\build_version.h" ^
-  "release"
+  "release" ^
+  --h2-bridge-firmware "firmware\m5-h2-zigbee\.pio\build\m5_gateway_h2_release_bridge_alpha23\firmware.bin" ^
+  --h2-bridge-version "%H2_BRIDGE_VERSION%"
 if errorlevel 1 goto package_failed
 
 if not exist "release\esp-plants-waveshare-%RELEASE_VERSION%.plantsota" goto package_failed
 if not exist "release\esp-plants-waveshare.manifest.json" goto package_failed
 if not exist "release\esp-plants-h2-%H2_VERSION%.bin" goto package_failed
 if not exist "release\esp-plants-h2-%H2_VERSION%.bin.sha256" goto package_failed
+if not exist "release\esp-plants-h2-%H2_BRIDGE_VERSION%.bin" goto package_failed
+if not exist "release\esp-plants-h2-%H2_BRIDGE_VERSION%.bin.sha256" goto package_failed
 
 echo.
-echo Waveshare release v%RELEASE_VERSION% complete with H2 firmware v%H2_VERSION%.
+echo Waveshare release v%RELEASE_VERSION% complete.
+echo Target H2 firmware: v%H2_VERSION%
+echo Compatibility H2 bridge for alpha.32 updater: v%H2_BRIDGE_VERSION%
 echo Verified generated files in release\:
 echo   esp-plants-waveshare-%RELEASE_VERSION%.plantsota
 echo   esp-plants-waveshare.manifest.json
 echo   esp-plants-h2-%H2_VERSION%.bin
 echo   esp-plants-h2-%H2_VERSION%.bin.sha256
+echo   esp-plants-h2-%H2_BRIDGE_VERSION%.bin
+echo   esp-plants-h2-%H2_BRIDGE_VERSION%.bin.sha256
 pause
 exit /b 0
 

@@ -20,6 +20,8 @@
 #include <new>
 
 #include "build_version.h"
+#include "h2_ota_client.h"
+#include "plantlink.h"
 #include "plants_ota_installer.h"
 #include "update_policy.h"
 
@@ -54,6 +56,11 @@ constexpr uint32_t kMetadataIdleTimeoutMs = 10000UL;
 constexpr size_t kMaxReleaseListBytes = 96U * 1024U;
 constexpr uint8_t kMaxMetadataRedirects = 3;
 constexpr char kUserAgent[] = "ESP-PLANTS-Waveshare-Updater/1";
+constexpr char kH2ProductId[] = "esp-plants-h2";
+constexpr char kH2HardwareId[] = "m5stack-unit-gateway-h2";
+constexpr char kH2BuildPrefix[] = "ESPPLANTS-H2-";
+constexpr uint32_t kH2MinFirmwareBytes = 64U * 1024U;
+constexpr uint32_t kH2MaxFirmwareBytes = 0xE0000U;
 
 constexpr char kEmbeddedBuildId[] = ESP_PLANTS_WAVESHARE_BUILD_ID;
 constexpr char kEmbeddedHardwareId[] = ESP_PLANTS_WAVESHARE_HARDWARE_ID;
@@ -141,6 +148,7 @@ volatile bool installTaskRunning = false;
 volatile bool manualCheckRequested = false;
 volatile bool installRequested = false;
 volatile bool hasUpdate = false;
+volatile bool h2OnlyUpdate = false;
 volatile int installProgressPct = 0;
 
 bool initialized = false;
@@ -895,8 +903,20 @@ bool parseManifest(const String &body, const String &githubTag,
   const uint32_t firmwareSize = doc["firmware_size"] | 0U;
   String firmwareSha = doc["firmware_sha256"] | "";
   const uint32_t minimumUpdater = doc["min_updater"] | 0U;
+
+  JsonObject h2 = doc["h2"].as<JsonObject>();
+  const String h2Product = h2["product"] | "";
+  const String h2Hardware = h2["hardware"] | "";
+  const String h2Version = h2["version"] | "";
+  const String h2BuildId = h2["build_id"] | "";
+  const String h2Asset = h2["asset"] | "";
+  const uint32_t h2Protocol = h2["protocol"] | 0U;
+  const uint32_t h2FirmwareSize = h2["firmware_size"] | 0U;
+  String h2FirmwareSha = h2["firmware_sha256"] | "";
+
   packageSha.toLowerCase();
   firmwareSha.toLowerCase();
+  h2FirmwareSha.toLowerCase();
 
   if (schema != kManifestSchema || product != ESP_PLANTS_WAVESHARE_PRODUCT_ID ||
       hardware != ESP_PLANTS_WAVESHARE_HARDWARE_ID ||
@@ -912,13 +932,25 @@ bool parseManifest(const String &body, const String &githubTag,
                   githubTag.c_str());
     return false;
   }
+
   SemVersion parsed;
+  SemVersion parsedH2;
+  const String expectedH2Build = String(kH2BuildPrefix) + h2Version;
+  const String expectedH2Asset = String("esp-plants-h2-") + h2Version + ".bin";
   if (!parseVersion(version, parsed) || !tagValid(tag.c_str()) ||
       !assetNameValid(asset.c_str()) ||
       !boundedPrintableAscii(buildId.c_str(), kMaxBuildIdLength) ||
       !packageLayoutValid(packageSize, firmwareSize) ||
-      !lowerHexDigest(packageSha.c_str()) || !lowerHexDigest(firmwareSha.c_str())) {
-    Serial.printf("[update] Skipping release %s: invalid package metadata\n",
+      !lowerHexDigest(packageSha.c_str()) || !lowerHexDigest(firmwareSha.c_str()) ||
+      h2Product != kH2ProductId || h2Hardware != kH2HardwareId ||
+      h2Protocol != plantlink::kProtocolVersion ||
+      !parseVersion(h2Version, parsedH2) ||
+      h2BuildId != expectedH2Build || h2Asset != expectedH2Asset ||
+      !assetNameValid(h2Asset.c_str()) ||
+      !boundedPrintableAscii(h2BuildId.c_str(), kMaxBuildIdLength) ||
+      h2FirmwareSize < kH2MinFirmwareBytes || h2FirmwareSize > kH2MaxFirmwareBytes ||
+      !lowerHexDigest(h2FirmwareSha.c_str())) {
+    Serial.printf("[update] Skipping release %s: invalid package/H2 metadata\n",
                   githubTag.c_str());
     return false;
   }
@@ -927,12 +959,18 @@ bool parseManifest(const String &body, const String &githubTag,
   snprintf(candidate.tag, sizeof(candidate.tag), "%s", tag.c_str());
   snprintf(candidate.asset, sizeof(candidate.asset), "%s", asset.c_str());
   snprintf(candidate.buildId, sizeof(candidate.buildId), "%s", buildId.c_str());
+  snprintf(candidate.h2Version, sizeof(candidate.h2Version), "%s", h2Version.c_str());
+  snprintf(candidate.h2Asset, sizeof(candidate.h2Asset), "%s", h2Asset.c_str());
+  snprintf(candidate.h2BuildId, sizeof(candidate.h2BuildId), "%s", h2BuildId.c_str());
   candidate.packageSize = packageSize;
   candidate.firmwareSize = firmwareSize;
+  candidate.h2FirmwareSize = h2FirmwareSize;
   if (!hexToBytes(packageSha.c_str(), candidate.packageSha256,
                   sizeof(candidate.packageSha256)) ||
       !hexToBytes(firmwareSha.c_str(), candidate.firmwareSha256,
-                  sizeof(candidate.firmwareSha256))) {
+                  sizeof(candidate.firmwareSha256)) ||
+      !hexToBytes(h2FirmwareSha.c_str(), candidate.h2FirmwareSha256,
+                  sizeof(candidate.h2FirmwareSha256))) {
     Serial.printf("[update] Skipping release %s: invalid SHA-256 metadata\n",
                   githubTag.c_str());
     return false;
@@ -946,6 +984,7 @@ bool parseManifest(const String &body, const String &githubTag,
 
 bool checkGithubRelease() {
   hasUpdate = false;
+  h2OnlyUpdate = false;
   pendingRelease = espplants_ota_installer::Release{};
 
   String releasesBody;
@@ -1014,15 +1053,18 @@ bool checkGithubRelease() {
     }
 
     bool matchingPackageFound = false;
+    bool matchingH2Found = false;
     for (JsonObject asset : githubRelease["assets"].as<JsonArray>()) {
       const String name = asset["name"] | "";
       const uint32_t size = asset["size"] | 0U;
       if (name == candidateAsset && size == candidate.packageSize) {
         matchingPackageFound = true;
-        break;
+      }
+      if (name == candidate.h2Asset && size == candidate.h2FirmwareSize) {
+        matchingH2Found = true;
       }
     }
-    if (!matchingPackageFound) continue;
+    if (!matchingPackageFound || !matchingH2Found) continue;
 
     if (!haveBestRelease || compareVersions(candidateVersion, bestVersion) > 0) {
       haveBestRelease = true;
@@ -1036,12 +1078,25 @@ bool checkGithubRelease() {
     snprintf(latestVersionText, sizeof(latestVersionText), "%s", bestVersion.c_str());
     const int comparison =
         compareVersions(String(ESP_PLANTS_WAVESHARE_VERSION), bestVersion);
-    if (comparison >= 0) {
+    if (comparison < 0) {
+      hasUpdate = true;
+      h2OnlyUpdate = false;
+      setStatus("Verified update available: v%s", latestVersionText);
+    } else if (comparison == 0) {
+      const espplants_h2_ota::TargetState h2State =
+          espplants_h2_ota::targetStateForRelease(bestRelease);
+      if (h2State == espplants_h2_ota::TargetState::DIFFERENT) {
+        hasUpdate = true;
+        h2OnlyUpdate = true;
+        setStatus("H2 update available: v%s", bestRelease.h2Version);
+      } else {
+        hasUpdate = false;
+        h2OnlyUpdate = false;
+        setStatus("Up to date: v%s", ESP_PLANTS_WAVESHARE_VERSION);
+      }
+    } else {
       hasUpdate = false;
       setStatus("Up to date: v%s", ESP_PLANTS_WAVESHARE_VERSION);
-    } else {
-      hasUpdate = true;
-      setStatus("Verified update available: v%s", latestVersionText);
     }
     rememberCheckTime();
     return true;
@@ -1108,8 +1163,27 @@ void installProgress(uint32_t receivedBytes, uint32_t packageBytes) {
 
 void installTask(void *) {
   installProgressPct = 0;
-  setStatus("Downloading and verifying .plantsota package...");
   char message[160]{};
+
+  if (h2OnlyUpdate) {
+    setStatus("Downloading and verifying H2 firmware...");
+    const espplants_h2_ota::Result result = espplants_h2_ota::updateForRelease(
+        pendingRelease, installProgress, message, sizeof(message));
+    if (result == espplants_h2_ota::Result::OK) {
+      installProgressPct = 100;
+      hasUpdate = false;
+      h2OnlyUpdate = false;
+      setStatus("%s", message[0] ? message : "H2 update complete");
+    } else {
+      setStatus("H2 update rejected safely: %s",
+                message[0] ? message : "unknown error");
+    }
+    installTaskRunning = false;
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  setStatus("Downloading and verifying .plantsota package...");
   const espplants_ota_installer::Result result =
       espplants_ota_installer::install(pendingRelease, installProgress,
                                        message, sizeof(message));
@@ -1351,6 +1425,7 @@ void forgetWifi() {
   manualCheckRequested = false;
   waitingForClockNotice = false;
   hasUpdate = false;
+  h2OnlyUpdate = false;
   pendingRelease = espplants_ota_installer::Release{};
   snprintf(latestVersionText, sizeof(latestVersionText), "--");
   networkPreferences.remove("ssid");

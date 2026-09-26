@@ -13,6 +13,16 @@ struct Release {
   uint32_t firmwareSize = 0;
   uint8_t packageSha256[32]{};
   uint8_t firmwareSha256[32]{};
+
+  // H2 metadata comes from the same verified release manifest. Keeping it in
+  // the transient Release object lets newer Waveshare firmware target the H2
+  // version actually published with that release instead of a version baked
+  // into an older updater binary.
+  char h2Version[32]{};
+  char h2Asset[128]{};
+  char h2BuildId[96]{};
+  uint32_t h2FirmwareSize = 0;
+  uint8_t h2FirmwareSha256[32]{};
 };
 
 enum class Result : uint8_t {

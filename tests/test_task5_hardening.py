@@ -18,8 +18,6 @@ def test_h2_reboot_does_not_auto_open_commissioning():
 
 
 def test_explicit_add_sensor_path_still_exists_on_waveshare():
-    # The UI/source itself is intentionally unchanged by Task 5. This guard is
-    # evaluated against the checked-out repo when this test is copied into it.
     path = ROOT / "firmware" / "waveshare-hub" / "src" / "main.cpp"
     assert path.exists(), "run this test from a full ESP PLANTS checkout"
     main = path.read_text(encoding="utf-8")
@@ -34,7 +32,9 @@ def test_h2_release_debug_surface_is_reduced_but_dev_mode_remains():
     main = read("firmware/m5-h2-zigbee/src/main.cpp")
 
     assert "-DESP_PLANTS_H2_DEV_DIAGNOSTICS=1" in pio
-    release = pio.split("[env:m5_gateway_h2_release]", 1)[1]
+    release = pio.split("[env:m5_gateway_h2_release]", 1)[1].split(
+        "[env:m5_gateway_h2_release_bridge_alpha23]", 1
+    )[0]
     assert "-DCORE_DEBUG_LEVEL=0" in release
     assert "-DESP_PLANTS_DISTRIBUTION_BUILD=1" in release
     assert "ESP_PLANTS_H2_DEV_DIAGNOSTICS" not in release
@@ -68,8 +68,6 @@ def test_h2_ota_requires_fresh_controller_session_and_keeps_validation():
     assert "plantlink::getU32LE(f.payload+4)==plantlink_ota::kAuthorizeIntentMagic" in receiver
     assert "kExpectedDistributionMarker[]=ESP_PLANTS_H2_RELEASE_MARKER" in receiver
 
-    # Existing inactive-slot, chip/image, digest and embedded identity validation
-    # must remain intact.
     for token in (
         "esp_ota_get_next_update_partition",
         "esp_ota_get_running_partition",
@@ -82,20 +80,20 @@ def test_h2_ota_requires_fresh_controller_session_and_keeps_validation():
     ):
         assert token in receiver
 
-    # The Waveshare explicitly arms OTA immediately before Begin, after the
-    # HTTPS download/SHA validation may have consumed significant time.
     sha_check = client.index("H2 firmware SHA-256 mismatch")
     intent = client.index("kAuthorizeIntentMagic", sha_check)
     hello = client.index("sendFrame(plantlink::MessageType::Hello", intent)
     begin = client.index("sendFrame(plantlink::MessageType::H2OtaBegin", hello)
     assert sha_check < intent < hello < begin
 
-    # H2 and Waveshare versions are independent. Never derive H2 asset/build
-    # names from release.buildId / the Waveshare alpha number.
-    assert '#include "../../m5-h2-zigbee/include/build_version.h"' in client
-    assert "ESP_PLANTS_H2_BUILD_ID" in client
-    assert "ESP_PLANTS_H2_VERSION" in client
-    assert "kMaxH2Bytes=0xE0000u" in client
+    # New Waveshare releases use the H2 identity carried by the verified
+    # release manifest. This avoids pinning a future H2 target to whatever
+    # H2 version happened to be compiled into an older Waveshare updater.
+    assert '../../m5-h2-zigbee/include/build_version.h' not in client
+    assert "release.h2BuildId" in client
+    assert "release.h2Asset" in client
+    assert "release.h2FirmwareSha256" in client
+    assert "kMaxH2Bytes = 0xE0000u" in client
     assert "release.buildId+" not in client
 
 
