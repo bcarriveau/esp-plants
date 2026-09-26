@@ -120,6 +120,11 @@ InfrastructureState infrastructure[kMaxInfrastructure];
 uint8_t sensorCount = 0;
 uint8_t infrastructureCount = 0;
 
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
+constexpr uint32_t kTopologyDiagSensorIntervalMs = 30000;
+uint32_t topologyDiagLastMs[kMaxSensors]{};
+#endif
+
 bool ieeeIsZero(const uint8_t ieee[8]) {
   for (size_t i = 0; i < 8; ++i) {
     if (ieee[i] != 0) return false;
@@ -476,6 +481,136 @@ void printHex(const uint8_t *data, size_t length) {
   for (size_t i = 0; i < length; ++i) Serial.printf("%02X", data[i]);
 }
 
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
+const char *topologyDeviceTypeName(uint8_t type) {
+  switch (type) {
+    case ESP_ZB_DEVICE_TYPE_COORDINATOR: return "COORDINATOR";
+    case ESP_ZB_DEVICE_TYPE_ROUTER: return "ROUTER";
+    case ESP_ZB_DEVICE_TYPE_ED: return "END_DEVICE";
+    default: return "UNKNOWN";
+  }
+}
+
+const char *topologyRelationshipName(uint8_t relationship) {
+  switch (relationship) {
+    case ESP_ZB_NWK_RELATIONSHIP_PARENT: return "PARENT";
+    case ESP_ZB_NWK_RELATIONSHIP_CHILD: return "CHILD";
+    case ESP_ZB_NWK_RELATIONSHIP_SIBLING: return "SIBLING";
+    case ESP_ZB_NWK_RELATIONSHIP_NONE_OF_THE_ABOVE: return "OTHER";
+    case ESP_ZB_NWK_RELATIONSHIP_PREVIOUS_CHILD: return "PREVIOUS_CHILD";
+    case ESP_ZB_NWK_RELATIONSHIP_UNAUTHENTICATED_CHILD: return "UNAUTH_CHILD";
+    default: return "UNKNOWN";
+  }
+}
+
+const char *topologyRouteStateName(uint8_t status) {
+  switch (status) {
+    case ESP_ZB_NWK_ROUTE_STATE_ACTIVE: return "ACTIVE";
+    case ESP_ZB_NWK_ROUTE_STATE_DISCOVERY_UNDERWAY: return "DISCOVERY";
+    case ESP_ZB_NWK_ROUTE_STATE_DISCOVERY_FAILED: return "FAILED";
+    case ESP_ZB_NWK_ROUTE_STATE_INACTIVE: return "INACTIVE";
+    default: return "UNKNOWN";
+  }
+}
+
+void dumpTopologyTables(const SensorState *triggerSensor = nullptr,
+                        const ApsEvent *triggerEvent = nullptr) {
+  zigbeeReady = Zigbee.connected();
+  if (!zigbeeReady) {
+    Serial.println("[topology] skipped: Zigbee network not ready");
+    return;
+  }
+
+  if (triggerSensor) {
+    char ieeeText[24]{};
+    plantlink::formatIeee(triggerSensor->ieee, ieeeText, sizeof(ieeeText));
+    Serial.printf("[topology] BEGIN trigger=sensor ieee=%s short=0x%04X",
+                  ieeeText, triggerSensor->shortAddress);
+    if (triggerEvent) {
+      Serial.printf(" cluster=0x%04X packet_lqi=%u",
+                    triggerEvent->clusterId, triggerEvent->lqi);
+    }
+    Serial.println();
+  } else {
+    Serial.println("[topology] BEGIN trigger=console");
+  }
+  Serial.printf("[topology] channel=%u link_status_period=%us\n",
+                currentChannel(), esp_zb_nwk_get_link_status_period());
+
+  esp_zb_lock_acquire(portMAX_DELAY);
+
+  size_t neighborCount = 0;
+  esp_zb_nwk_info_iterator_t neighborIterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_neighbor_info_t neighbor{};
+  while (esp_zb_nwk_get_next_neighbor(&neighborIterator, &neighbor) == ESP_OK) {
+    char ieeeText[24]{};
+    plantlink::formatIeee(neighbor.ieee_addr, ieeeText, sizeof(ieeeText));
+    Serial.printf(
+        "[topology][neighbor] short=0x%04X ieee=%s type=%s(%u) depth=%u rx_idle=%u rel=%s(%u) lqi=%u rssi=%d cost=%u age=%u timeout=%lu counter=%lu\n",
+        neighbor.short_addr, ieeeText, topologyDeviceTypeName(neighbor.device_type),
+        neighbor.device_type, neighbor.depth, neighbor.rx_on_when_idle,
+        topologyRelationshipName(neighbor.relationship), neighbor.relationship,
+        neighbor.lqi, neighbor.rssi, neighbor.outgoing_cost, neighbor.age,
+        static_cast<unsigned long>(neighbor.device_timeout),
+        static_cast<unsigned long>(neighbor.timeout_counter));
+    ++neighborCount;
+  }
+  if (!neighborCount) Serial.println("[topology][neighbor] <none>");
+
+  size_t routeCount = 0;
+  esp_zb_nwk_info_iterator_t routeIterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_route_info_t route{};
+  while (esp_zb_nwk_get_next_route(&routeIterator, &route) == ESP_OK) {
+    Serial.printf(
+        "[topology][route] dest=0x%04X next=0x%04X state=%s(%u) expiry=%u no_cache=%u many_to_one=%u record_required=%u group=%u\n",
+        route.dest_addr, route.next_hop_addr, topologyRouteStateName(route.flags.status),
+        route.flags.status, route.expiry, route.flags.no_route_cache,
+        route.flags.many_to_one, route.flags.route_record_required, route.flags.group_id);
+    ++routeCount;
+  }
+  if (!routeCount) Serial.println("[topology][route] <none>");
+
+  size_t recordCount = 0;
+  esp_zb_nwk_info_iterator_t recordIterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_route_record_info_t record{};
+  while (esp_zb_nwk_get_next_route_record(&recordIterator, &record) == ESP_OK) {
+    Serial.printf("[topology][source-route] dest=0x%04X expiry=%u relays=%u path=",
+                  record.dest_address, record.expiry, record.relay_count);
+    const uint8_t relayCount =
+        record.relay_count < ESP_ZB_NWK_MAX_SOURCE_ROUTE
+            ? record.relay_count
+            : ESP_ZB_NWK_MAX_SOURCE_ROUTE;
+    if (!relayCount) {
+      Serial.print("<none>");
+    } else {
+      for (uint8_t i = 0; i < relayCount; ++i) {
+        if (i) Serial.print("->");
+        Serial.printf("0x%04X", record.path[i]);
+      }
+    }
+    Serial.println();
+    ++recordCount;
+  }
+  if (!recordCount) Serial.println("[topology][source-route] <none>");
+
+  esp_zb_lock_release();
+  Serial.printf("[topology] END neighbors=%u routes=%u source_routes=%u\n",
+                static_cast<unsigned>(neighborCount),
+                static_cast<unsigned>(routeCount),
+                static_cast<unsigned>(recordCount));
+}
+
+bool topologyDiagDue(const SensorState &sensor) {
+  const size_t slot = static_cast<size_t>(&sensor - sensors);
+  if (slot >= kMaxSensors) return false;
+  const uint32_t now = millis();
+  const uint32_t last = topologyDiagLastMs[slot];
+  if (last != 0 && now - last < kTopologyDiagSensorIntervalMs) return false;
+  topologyDiagLastMs[slot] = now;
+  return true;
+}
+#endif
+
 void processApsEvent(const ApsEvent &event) {
   char ieeeText[24]{};
   plantlink::formatIeee(event.ieee, ieeeText, sizeof(ieeeText));
@@ -576,6 +711,9 @@ void processApsEvent(const ApsEvent &event) {
   if (sensor && decoded) {
     applyNormalized(*sensor, normalized);
     sendSensorReport(*sensor);
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
+    if (topologyDiagDue(*sensor)) dumpTopologyTables(sensor, &event);
+#endif
   }
 
   // Keep raw traffic observable during bring-up, especially unknown devices
@@ -779,6 +917,7 @@ void printUsbConsoleHelp() {
 #if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
   Serial.println("  p = open Zigbee pairing for 120 seconds (development only)");
   Serial.println("  c = close Zigbee pairing (development only)");
+  Serial.println("  t = dump Zigbee topology tables (development only)");
 #endif
   Serial.println("  s = print Zigbee/network/sensor/repeater status");
   Serial.println("  h or ? = show this help");
@@ -865,6 +1004,12 @@ void handleUsbConsoleCommand(char command) {
       Serial.println("[console] pairing command disabled in distribution build");
 #endif
       break;
+
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
+    case 't':
+      dumpTopologyTables();
+      break;
+#endif
 
     case 's':
       printUsbConsoleStatus();
