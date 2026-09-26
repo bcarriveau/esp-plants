@@ -7,6 +7,7 @@
 #include "plantlink.h"
 #include "phrase_engine.h"
 #include "update_service.h"
+#include "sensor_route_view.h"
 
 namespace {
 
@@ -66,6 +67,7 @@ struct PersistedInfrastructure {
 };
 
 struct PlantSensor {
+  sensor_route_view::Route route{};  // RAM only; never part of PersistedPlant.
   bool used = false;
   bool seenThisBoot = false;
   uint8_t ieee[8]{};
@@ -132,6 +134,8 @@ uint32_t lastHelloMs = 0;
 uint32_t lastH2RxMs = 0;
 uint32_t lastUiRefreshMs = 0;
 bool h2Online = false;
+bool haveH2Uptime = false;
+uint32_t lastH2Uptime = 0;
 bool networkReady = false;
 bool useFahrenheit = true;
 // Alpha.23 persistent phrase theme selector
@@ -180,6 +184,7 @@ lv_obj_t *homeTemp = nullptr;
 lv_obj_t *homeHumidity = nullptr;
 lv_obj_t *homeBar = nullptr;
 lv_obj_t *homeWarning = nullptr;
+lv_obj_t *homeRoute = nullptr;
 lv_obj_t *homeSummary = nullptr;
 
 lv_obj_t *allSummary = nullptr;
@@ -196,6 +201,7 @@ lv_obj_t *detailSignal = nullptr;
 lv_obj_t *detailUpdated = nullptr;
 lv_obj_t *detailBar = nullptr;
 lv_obj_t *detailWarning = nullptr;
+lv_obj_t *detailRoute = nullptr;
 lv_obj_t *renameButton = nullptr;
 lv_obj_t *replaceButton = nullptr;
 lv_obj_t *removeButton = nullptr;
@@ -1553,6 +1559,19 @@ void buildHeader(lv_obj_t *screen) {
   lv_obj_align(headerCount, LV_ALIGN_RIGHT_MID, -22, 0);
 }
 
+lv_obj_t *routeLabel(lv_obj_t *parent, int x, int y, int width) {
+  lv_obj_t *obj = lv_label_create(parent);
+  lv_label_set_text(obj, "");
+  lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(obj, lv_color_hex(0xAABBAF), 0);
+  lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_style_pad_all(obj, 0, 0);
+  lv_obj_set_pos(obj, x, y);
+  lv_obj_set_size(obj, width, 15);
+  lv_label_set_long_mode(obj, LV_LABEL_LONG_DOT);
+  return obj;
+}
+
 void buildHome(lv_obj_t *screen) {
   homePage = lv_obj_create(screen);
   lv_obj_set_pos(homePage, 0, 66);
@@ -1618,8 +1637,10 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_pad_hor(homeWarning, 14, 0);
   lv_obj_set_style_pad_ver(homeWarning, 8, 0);
   lv_obj_set_style_radius(homeWarning, 10, 0);
-  lv_obj_set_pos(homeWarning, 24, 278);
+  lv_obj_align(homeWarning, LV_ALIGN_TOP_MID, 0, 272);
   lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+
+  homeRoute = routeLabel(featured, 312, 292, 140);
 
   lv_obj_t *listCard = card(homePage, 528, 10, 258, 334);
   lv_obj_t *listTitle = lv_label_create(listCard);
@@ -1875,8 +1896,12 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_set_style_pad_hor(detailWarning, 14, 0);
   lv_obj_set_style_pad_ver(detailWarning, 8, 0);
   lv_obj_set_style_radius(detailWarning, 10, 0);
-  lv_obj_set_pos(detailWarning, 600, 272);
+  lv_obj_align(detailWarning, LV_ALIGN_TOP_MID, 0, 272);
   lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+
+  // Centered badge and right-aligned route occupy separate horizontal bounds.
+  // With the inherited 24px card padding, bottom=292+24+15=331 <334.
+  detailRoute = routeLabel(p, 500, 292, 224);
 }
 
 void buildSettings(lv_obj_t *screen) {
@@ -2692,6 +2717,20 @@ void refreshUi() {
   const size_t waiting = count >= reporting ? count - reporting : 0;
   const int homeSensor = featuredHomeSensor();
 
+  label(homeRoute, "");
+  label(detailRoute, "");
+  if (homeSensor >= 0 && homeSensor < static_cast<int>(kMaxSensors)) {
+    sensor_route_view::format(sensors[homeSensor].route, infrastructure, millis(),
+                             h2Online && networkReady, text, sizeof(text));
+    label(homeRoute, text);
+  }
+  if (selectedSensor >= 0 && selectedSensor < static_cast<int>(kMaxSensors) &&
+      sensors[selectedSensor].used) {
+    sensor_route_view::format(sensors[selectedSensor].route, infrastructure, millis(),
+                             h2Online && networkReady, text, sizeof(text));
+    label(detailRoute, text);
+  }
+
   snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count), count == 1 ? "PLANT" : "PLANTS");
   label(headerCount, text);
   snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
@@ -3162,6 +3201,7 @@ void handleDeviceLeft(const plantlink::Frame &frame) {
   }
 
   s->seenThisBoot = false;
+  s->route = {};
   s->lastSeenMs = 0;
   s->shortAddress = 0xffff;
   Serial.printf("[zigbee] registered sensor left: %s slot=%u now waiting\n",
@@ -3175,6 +3215,13 @@ void handleSensorReport(const plantlink::Frame &frame) {
 
   size_t slot = 0;
   PlantSensor *s = findSensor(report.ieee, &slot);
+  if (frame.flags & plantlink::FlagRouteOnly) {
+    if (s && report.fieldFlags == 0) {
+      s->route.update(report, millis());
+      uiDirty = true;
+    }
+    return;
+  }
   if (!s) s = acceptPairingSensor(report.ieee, report.shortAddress, &slot);
 
   if (!s) {
@@ -3185,6 +3232,7 @@ void handleSensorReport(const plantlink::Frame &frame) {
   }
 
   s->seenThisBoot = true;
+  s->route.update(report, millis());
   s->shortAddress = report.shortAddress;
 
   // ZG-303Z reports may contain only a subset of measurements.
@@ -3226,10 +3274,23 @@ void handleSensorReport(const plantlink::Frame &frame) {
   Serial.println();
 }
 
+void clearRoutes() {
+  for (auto &sensor : sensors) sensor.route = {};
+  uiDirty = true;
+}
+
 void handleFrame(const plantlink::Frame &frame) {
   lastH2RxMs = millis();
   if (!h2Online) { h2Online = true; uiDirty = true; }
   switch (frame.type) {
+    case plantlink::MessageType::Heartbeat:
+      if (frame.payloadLength == 8) {
+        const uint32_t uptime = plantlink::getU32LE(frame.payload);
+        if (haveH2Uptime && uptime < lastH2Uptime) clearRoutes();
+        lastH2Uptime = uptime;
+        haveH2Uptime = true;
+      }
+      break;
     case plantlink::MessageType::HelloAck: {
       char build[plantlink::kMaxPayloadBytes + 1]{};
       const size_t n = frame.payloadLength < sizeof(build) - 1 ? frame.payloadLength : sizeof(build) - 1;
@@ -3259,6 +3320,8 @@ void servicePlantLink() {
   }
   if (h2Online && now - lastH2RxMs > kLinkTimeoutMs) {
     h2Online = false; networkReady = false; permitJoinRemaining = 0; uiDirty = true;
+    clearRoutes();
+    haveH2Uptime = false;
   }
 }
 

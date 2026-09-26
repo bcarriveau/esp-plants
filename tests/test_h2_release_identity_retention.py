@@ -11,7 +11,7 @@ def read(path: str) -> str:
 def current_h2_version() -> str:
     header = read("firmware/m5-h2-zigbee/include/build_version.h")
     matches = re.findall(r'^#define ESP_PLANTS_H2_VERSION "([^"]+)"$', header, re.MULTILINE)
-    assert len(matches) >= 2
+    assert len(matches) == 1
     return matches[-1]
 
 
@@ -23,18 +23,12 @@ def test_h2_release_identity_survives_linker_gc():
     assert "ESP_PLANTS_H2_BUILD_ID" in receiver
 
 
-def test_alpha23_bridge_remains_an_explicit_distribution_build():
+def test_v2_release_has_no_compatibility_identity():
     pio = read("firmware/m5-h2-zigbee/platformio.ini")
-    bridge = pio.split("[env:m5_gateway_h2_release_bridge_alpha23]", 1)[1]
-    assert "-DESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23=1" in bridge
-    assert "-DESP_PLANTS_DISTRIBUTION_BUILD=1" in bridge
-
-
-def test_bridge_version_and_current_h2_version_remain_independent():
     header = read("firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.23"' in header
+    assert "release_bridge" not in pio
+    assert "COMPAT_BRIDGE" not in header
     assert f'#define ESP_PLANTS_H2_VERSION "{current_h2_version()}"' in header
-    assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-" ESP_PLANTS_H2_VERSION' in header
 
 
 def test_release_packager_still_requires_marker_and_exact_build_id():

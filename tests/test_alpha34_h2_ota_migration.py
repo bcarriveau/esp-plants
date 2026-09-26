@@ -33,18 +33,11 @@ def test_release_versions_come_from_authoritative_build_headers():
     assert h2.build_id == f"ESPPLANTS-H2-{h2.version}"
 
 
-def test_alpha23_bridge_is_explicit_and_does_not_change_normal_h2_target():
+def test_v2_retires_the_alpha23_bridge():
     header = read("firmware/m5-h2-zigbee/include/build_version.h")
     pio = read("firmware/m5-h2-zigbee/platformio.ini")
-    _, _, h2 = current_identities()
-    assert "ESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23" in header
-    assert f'#define ESP_PLANTS_H2_VERSION "{BRIDGE_VERSION}"' in header
-    assert f'#define ESP_PLANTS_H2_VERSION "{h2.version}"' in header
-    assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-" ESP_PLANTS_H2_VERSION' in header
-    assert "[env:m5_gateway_h2_release_bridge_alpha23]" in pio
-    bridge = pio.split("[env:m5_gateway_h2_release_bridge_alpha23]", 1)[1]
-    assert "-DESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23=1" in bridge
-    assert "-DESP_PLANTS_DISTRIBUTION_BUILD=1" in bridge
+    assert "ESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23" not in header
+    assert "release_bridge_alpha23" not in pio
     assert "default_envs = m5_gateway_h2" in pio
 
 

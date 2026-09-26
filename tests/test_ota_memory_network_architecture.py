@@ -246,6 +246,6 @@ def test_current_versions_derive_from_authoritative_headers():
     ws = re.search(r'^#define ESP_PLANTS_WAVESHARE_VERSION "([^"]+)"$', waveshare_header, re.MULTILINE)
     h2 = re.findall(r'^#define ESP_PLANTS_H2_VERSION "([^"]+)"$', h2_header, re.MULTILINE)
     assert ws
-    assert len(h2) >= 2
+    assert len(h2) == 1
     assert read(ROOT / "VERSION").strip() == ws.group(1)
     assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-" ESP_PLANTS_H2_VERSION' in h2_header

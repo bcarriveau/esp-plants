@@ -20,16 +20,9 @@ constexpr char kExpectedDistributionMarker[]=ESP_PLANTS_H2_RELEASE_MARKER;
 
 // Keep a single contiguous identity record in the loadable image.  The release
 // packager scans firmware.bin itself (not the ELF symbol table), so both exact
-// ASCII tokens must survive compiler/linker garbage collection.  Make the
-// alpha.23 compatibility bridge literal explicit here as a belt-and-suspenders
-// guard: the bridge environment must report alpha.23 even while the normal H2
-// release target remains independently versioned.
+// ASCII tokens must survive compiler/linker garbage collection.
 #if defined(ESP_PLANTS_DISTRIBUTION_BUILD)
-  #if defined(ESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23)
-    #define ESP_PLANTS_H2_BINARY_BUILD_ID "ESPPLANTS-H2-0.2.0-alpha.23"
-  #else
-    #define ESP_PLANTS_H2_BINARY_BUILD_ID ESP_PLANTS_H2_BUILD_ID
-  #endif
+  #define ESP_PLANTS_H2_BINARY_BUILD_ID ESP_PLANTS_H2_BUILD_ID
   #define ESP_PLANTS_H2_BINARY_MARKER "ESP-PLANTS-H2-DISTRIBUTION-BUILD"
 #else
   #define ESP_PLANTS_H2_BINARY_BUILD_ID ESP_PLANTS_H2_BUILD_ID
@@ -39,11 +32,6 @@ constexpr char kExpectedDistributionMarker[]=ESP_PLANTS_H2_RELEASE_MARKER;
 __attribute__((used, retain)) static const char kFirmwareIdentity[] =
     ESP_PLANTS_H2_BINARY_MARKER "\0" ESP_PLANTS_H2_BINARY_BUILD_ID;
 
-#if defined(ESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23)
-static_assert(sizeof(ESP_PLANTS_H2_BINARY_BUILD_ID) ==
-                  sizeof("ESPPLANTS-H2-0.2.0-alpha.23"),
-              "alpha.23 compatibility bridge build ID changed unexpectedly");
-#endif
 
 uint16_t txSeq=0x8000;
 uint32_t otaAuthorizedUntilMs=0;

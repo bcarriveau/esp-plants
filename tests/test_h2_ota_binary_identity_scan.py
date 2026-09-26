@@ -28,10 +28,9 @@ def test_identity_scan_keeps_tail_for_cross_chunk_matches():
     assert "combined+total-ota.tailLen" in scanner
 
 
-def test_h2_current_release_is_derived_and_bridge_stays_alpha23():
+def test_h2_current_release_is_derived_without_bridge():
     header = HEADER.read_text(encoding="utf-8")
     matches = re.findall(r'^#define ESP_PLANTS_H2_VERSION "([^"]+)"$', header, re.MULTILINE)
-    assert len(matches) >= 2
-    assert matches[0] == "0.2.0-alpha.23"
-    assert matches[-1] != matches[0]
+    assert len(matches) == 1
+    assert "COMPAT_BRIDGE" not in header
     assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-" ESP_PLANTS_H2_VERSION' in header

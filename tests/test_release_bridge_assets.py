@@ -25,7 +25,7 @@ def fake_image(build_id: str, marker: bytes, esp32s3: bool = False) -> bytes:
     return bytes(data)
 
 
-def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
+def test_v2_packager_emits_only_current_coordinated_assets(tmp_path: Path):
     current_ws = ota.read_build_identity(WS_HEADER)
     current_h2 = ota.read_h2_build_identity(H2_HEADER)
 
@@ -34,8 +34,7 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
     h2_header = repo / "firmware/m5-h2-zigbee/include/build_version.h"
     ws_bin = repo / "firmware/waveshare-hub/.pio/build/waveshare_s3_touch_lcd_7_release/firmware.bin"
     h2_bin = repo / "firmware/m5-h2-zigbee/.pio/build/m5_gateway_h2_release/firmware.bin"
-    bridge_bin = repo / "firmware/m5-h2-zigbee/.pio/build/m5_gateway_h2_release_bridge_alpha23/firmware.bin"
-    for path in (ws_header, h2_header, ws_bin, h2_bin, bridge_bin):
+    for path in (ws_header, h2_header, ws_bin, h2_bin):
         path.parent.mkdir(parents=True, exist_ok=True)
 
     shutil.copy(WS_HEADER, ws_header)
@@ -51,20 +50,11 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
     h2_bin.write_bytes(
         fake_image(current_h2.build_id, b"ESP-PLANTS-H2-DISTRIBUTION-BUILD")
     )
-    bridge_bin.write_bytes(
-        fake_image(
-            f"ESPPLANTS-H2-{BRIDGE_VERSION}",
-            b"ESP-PLANTS-H2-DISTRIBUTION-BUILD",
-        )
-    )
-
     release = repo / "release"
     ota.write_release_assets(
         ws_bin,
         ws_header,
         release,
-        bridge_bin,
-        BRIDGE_VERSION,
     )
 
     expected = {
@@ -72,10 +62,8 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
         "esp-plants-waveshare.manifest.json",
         f"esp-plants-h2-{current_h2.version}.bin",
         f"esp-plants-h2-{current_h2.version}.bin.sha256",
-        f"esp-plants-h2-{BRIDGE_VERSION}.bin",
-        f"esp-plants-h2-{BRIDGE_VERSION}.bin.sha256",
     }
-    assert expected.issubset({path.name for path in release.iterdir()})
+    assert expected == {path.name for path in release.iterdir()}
 
     manifest = json.loads((release / "esp-plants-waveshare.manifest.json").read_text())
     assert manifest["version"] == current_ws.version
@@ -83,3 +71,5 @@ def test_transition_packager_emits_bridge_and_current_h2_assets(tmp_path: Path):
     assert manifest["h2"]["version"] == current_h2.version
     assert manifest["h2"]["asset"] == f"esp-plants-h2-{current_h2.version}.bin"
     assert BRIDGE_VERSION not in json.dumps(manifest)
+
+    assert manifest["h2"]["protocol"] == ota.read_plantlink_version() == 2

@@ -5,6 +5,23 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Coordinated PlantLink v2 routing (Waveshare alpha.39 / H2 alpha.27)
+
+- Extend SensorReport to 30 bytes with UNKNOWN/DIRECT/ROUTED and next-hop repeater
+  IEEE. Both controllers use the same strict v2 parser; v1 is intentionally
+  incompatible and the alpha.23 release bridge is retired. Crossing from v1
+  requires updating both controllers locally over USB.
+- H2 resolves routes from current neighbor/routing tables under the Zigbee lock
+  and refreshes transient topology without pretending a new measurement arrived.
+- Show DIRECT TO HUB or VIA: the current registry name, blank when unknown,
+  offline, or stale. Route state never enters flash and needs no schema migration.
+- Center WATER ME! on the existing home/detail cards as requested; add small
+  right-aligned, bounded route labels. Card geometry, LQI, and bottom navigation
+  stay unchanged. Long repeater names are ellipsized.
+- Host scenarios cover direct/routed, rename/loss, route changes, reboot/expiry,
+  and strict wire parsing. Physical route scenarios remain pending hardware tests.
+
+
 ### Waveshare dark greenhouse theme
 
 #### Changed

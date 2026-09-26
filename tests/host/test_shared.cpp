@@ -57,6 +57,8 @@ static void testSensorReportWireLayout() {
   in.batteryPct = 86;
   in.lqi = 201;
   in.rssiDbm = -61;
+  in.routeState = plantlink::RouteState::ROUTED;
+  in.repeaterIeee[0] = 0x42;
 
   uint8_t payload[plantlink::kSensorReportPayloadBytes]{};
   assert(plantlink::serializeSensorReport(in, payload, sizeof(payload)) == sizeof(payload));
@@ -69,6 +71,29 @@ static void testSensorReportWireLayout() {
   assert(out.batteryPct == 86);
   assert(out.lqi == 201);
   assert(out.rssiDbm == -61);
+  assert(sizeof(payload) == 30);
+  assert(payload[21] == 2 && payload[22] == 0x42);
+  assert(out.routeState == plantlink::RouteState::ROUTED);
+  assert(out.repeaterIeee[0] == 0x42);
+  assert(!plantlink::parseSensorReport(payload, 21, out));
+  assert(!plantlink::parseSensorReport(payload, 29, out));
+  payload[21] = 3;
+  assert(!plantlink::parseSensorReport(payload, sizeof(payload), out));
+  payload[21] = 0;
+  assert(plantlink::parseSensorReport(payload, sizeof(payload), out));
+  assert(out.routeState == plantlink::RouteState::UNKNOWN);
+}
+
+static void testRejectV1() {
+  uint8_t decoded[plantlink::kHeaderBytes + plantlink::kCrcBytes]{};
+  decoded[0] = 1; decoded[1] = uint8_t(plantlink::MessageType::Hello);
+  plantlink::putU32LE(decoded + plantlink::kHeaderBytes,
+                     plantlink::crc32(decoded, plantlink::kHeaderBytes));
+  uint8_t encoded[32];
+  const auto n = plantlink::cobsEncode(decoded, sizeof(decoded), encoded, sizeof(encoded));
+  plantlink::Frame out;
+  assert(plantlink::kProtocolVersion == 2);
+  assert(!plantlink::decodeFrame(encoded, n, out));
 }
 
 static void testTuyaNewMapping() {
@@ -127,6 +152,7 @@ int main() {
   testPlantLinkRoundTrip();
   testPlantLinkRejectsCorruptFrame();
   testSensorReportWireLayout();
+  testRejectV1();
   testTuyaNewMapping();
   testTuyaLegacyAndUnknown();
   testStandardReports();

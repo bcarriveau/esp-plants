@@ -1,5 +1,5 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.38"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.39"
 #define ESP_PLANTS_WAVESHARE_7_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
 #ifdef ESP_PLANTS_WAVESHARE_7B
@@ -12,7 +12,7 @@
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Fixes binary-safe H2 OTA firmware identity validation and targets H2 alpha.25 while retaining the PSRAM OTA worker, bounded flash streaming, memory preflight, and one-shot network recovery."
+  "PlantLink v2 route labels with H2 alpha.27; coordinated USB update of both controllers required from v1. Route data is transient and user data is preserved."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif

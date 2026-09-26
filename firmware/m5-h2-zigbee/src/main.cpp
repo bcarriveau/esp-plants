@@ -13,6 +13,7 @@
 #include "build_version.h"
 #include "h2_ota_receiver.h"
 #include "zg303z_tuya.h"
+#include "sensor_route.h"
 
 // Arduino-ESP32 registers this APS handler internally for binding-table housekeeping.
 // Our observer calls it first so adding ZG-303Z raw capture does not remove core behavior.
@@ -212,7 +213,43 @@ void sendInfrastructureReport(const InfrastructureState &node) {
   }
 }
 
-void sendSensorReport(const SensorState &sensor) {
+struct RouteTables {
+  esp_zb_nwk_info_iterator_t neighbors = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_info_iterator_t routes = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_neighbor_info_t neighbor{};
+  esp_zb_nwk_route_info_t route{};
+  bool matchesSensor(const uint8_t ieee[8], uint16_t address) const {
+    esp_zb_ieee_addr_t current{};
+    return esp_zb_ieee_address_by_short(address, current) == ESP_OK &&
+           ieeeEqual(ieee, current);
+  }
+  void restartNeighbors() { neighbors = ESP_ZB_NWK_INFO_ITERATOR_INIT; }
+  void restartRoutes() { routes = ESP_ZB_NWK_INFO_ITERATOR_INIT; }
+  bool nextNeighbor() { return esp_zb_nwk_get_next_neighbor(&neighbors, &neighbor) == ESP_OK; }
+  bool nextRoute() { return esp_zb_nwk_get_next_route(&routes, &route) == ESP_OK; }
+  bool directChild(const uint8_t ieee[8], uint16_t address) const {
+    return neighbor.short_addr == address && ieeeEqual(ieee, neighbor.ieee_addr) &&
+           neighbor.device_type == ESP_ZB_DEVICE_TYPE_ED &&
+           neighbor.relationship == ESP_ZB_NWK_RELATIONSHIP_CHILD;
+  }
+  uint16_t activeNextHop(uint16_t address) const {
+    return route.dest_addr == address && !route.flags.group_id &&
+                   route.flags.status == ESP_ZB_NWK_ROUTE_STATE_ACTIVE
+               ? route.next_hop_addr : 0xffff;
+  }
+  bool liveRouter(uint16_t address, uint8_t ieee[8]) const {
+    if (neighbor.short_addr != address ||
+        neighbor.device_type != ESP_ZB_DEVICE_TYPE_ROUTER ||
+        neighbor.relationship == ESP_ZB_NWK_RELATIONSHIP_PREVIOUS_CHILD ||
+        neighbor.relationship == ESP_ZB_NWK_RELATIONSHIP_UNAUTHENTICATED_CHILD ||
+        neighbor.age > 3 || !neighbor.outgoing_cost ||
+        neighbor.outgoing_cost > 7 || ieeeIsZero(neighbor.ieee_addr)) return false;
+    memcpy(ieee, neighbor.ieee_addr, 8);
+    return true;
+  }
+};
+
+void sendSensorReport(const SensorState &sensor, bool routeOnly = false) {
   plantlink::SensorReportData report;
   memcpy(report.ieee, sensor.ieee, 8);
   report.shortAddress = sensor.shortAddress;
@@ -225,9 +262,19 @@ void sendSensorReport(const SensorState &sensor) {
   report.lqi = sensor.lqi;
   report.rssiDbm = sensor.rssi;
 
+  if (zigbeeReady) {
+    esp_zb_lock_acquire(portMAX_DELAY);
+    RouteTables tables;
+    sensor_route::resolve(tables, sensor.ieee, sensor.shortAddress, report);
+    esp_zb_lock_release();
+  }
+  // Topology refreshes must never masquerade as new sensor measurements.
+  if (routeOnly) report.fieldFlags = 0;
+
   uint8_t payload[plantlink::kSensorReportPayloadBytes]{};
   const size_t length = plantlink::serializeSensorReport(report, payload, sizeof(payload));
-  if (length) sendFrame(plantlink::MessageType::SensorReport, payload, length);
+  if (length) sendFrame(plantlink::MessageType::SensorReport, payload, length,
+                        routeOnly ? plantlink::FlagRouteOnly : plantlink::FlagNone);
 }
 
 void sendRawEvent(const ApsEvent &event) {
@@ -625,6 +672,9 @@ void serviceInfrastructureRegistry() {
 
   for (const auto &node : infrastructure) {
     if (node.used) sendInfrastructureReport(node);
+  }
+  for (const auto &sensor : sensors) {
+    if (sensor.used) sendSensorReport(sensor, true);
   }
   sendNetworkStatus();
 }

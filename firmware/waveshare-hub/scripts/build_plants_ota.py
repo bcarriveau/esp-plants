@@ -91,7 +91,7 @@ def read_build_identity(path: Path) -> BuildIdentity:
 
 def read_h2_build_identity(path: Path) -> H2BuildIdentity:
     text = path.read_text(encoding="utf-8")
-    # The default/current H2 target is the non-bridge branch in build_version.h.
+    # There is one current H2 target; PlantLink v2 has no bridge build.
     matches = re.findall(r'#define\s+ESP_PLANTS_H2_VERSION\s+"([^"]+)"', text)
     if not matches:
         raise ValueError("ESP_PLANTS_H2_VERSION was not found")
@@ -147,6 +147,14 @@ def metadata(package: bytes, identity: BuildIdentity) -> PackageMetadata:
     )
 
 
+def read_plantlink_version() -> int:
+    header = Path(__file__).resolve().parents[3] / "shared/plantlink/plantlink.h"
+    match = re.search(r"kProtocolVersion\s*=\s*(\d+)", header.read_text(encoding="utf-8"))
+    if not match:
+        raise ValueError("PlantLink protocol version missing")
+    return int(match.group(1))
+
+
 def write_h2_asset(
     firmware_path: Path,
     release_dir: Path,
@@ -179,7 +187,7 @@ def write_h2_asset(
         "hardware": hardware,
         "version": version,
         "build_id": build_id,
-        "protocol": 1,
+        "protocol": read_plantlink_version(),
         "asset": name,
         "firmware_size": len(data),
         "firmware_sha256": digest,
@@ -239,8 +247,6 @@ def write_release_assets(
     firmware: Path,
     build_header: Path,
     release_dir: Path,
-    h2_bridge_firmware: Path | None = None,
-    h2_bridge_version: str | None = None,
 ):
     identity = read_build_identity(build_header)
     package = create_package(firmware.read_bytes(), identity)
@@ -252,19 +258,6 @@ def write_release_assets(
 
     repo = build_header.parents[3]
     h2 = h2_asset(repo, release_dir)
-
-    if h2_bridge_firmware is not None or h2_bridge_version is not None:
-        if h2_bridge_firmware is None or not h2_bridge_version:
-            raise ValueError("H2 bridge firmware and version must be supplied together")
-        if h2_bridge_version == h2["version"]:
-            raise ValueError("H2 bridge version must differ from the current H2 target")
-        write_h2_asset(
-            h2_bridge_firmware,
-            release_dir,
-            h2_bridge_version,
-            h2["hardware"],
-            h2["product"],
-        )
 
     manifest_path = release_dir / MANIFEST_ASSET_NAME
     manifest_path.write_bytes(create_manifest(identity, package_metadata, asset, h2))
@@ -294,16 +287,12 @@ def main() -> int:
     parser.add_argument("firmware", type=Path)
     parser.add_argument("build_header", type=Path)
     parser.add_argument("release_dir", type=Path)
-    parser.add_argument("--h2-bridge-firmware", type=Path)
-    parser.add_argument("--h2-bridge-version")
     args = parser.parse_args()
     print(
         write_release_assets(
             args.firmware,
             args.build_header,
             args.release_dir,
-            args.h2_bridge_firmware,
-            args.h2_bridge_version,
         )
     )
     return 0
