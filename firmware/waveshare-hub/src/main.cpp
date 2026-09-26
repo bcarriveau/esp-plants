@@ -3197,8 +3197,7 @@ void handleSensorReport(const plantlink::Frame &frame) {
   size_t slot = 0;
   PlantSensor *s = findSensor(report.ieee, &slot);
   if (frame.flags & plantlink::FlagRouteOnly) {
-    if (s && report.fieldFlags == 0) {
-      s->route.update(report, millis());
+    if (s && report.fieldFlags == 0 && s->route.update(report)) {
       uiDirty = true;
     }
     return;
@@ -3213,7 +3212,7 @@ void handleSensorReport(const plantlink::Frame &frame) {
   }
 
   s->seenThisBoot = true;
-  s->route.update(report, millis());
+  s->route.update(report);
   s->shortAddress = report.shortAddress;
 
   // ZG-303Z reports may contain only a subset of measurements.

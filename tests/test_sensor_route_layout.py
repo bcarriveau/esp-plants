@@ -37,6 +37,7 @@ def test_topology_refresh_cannot_refresh_measurements_or_pair_sensors():
     branch = handler.split("if (frame.flags & plantlink::FlagRouteOnly)", 1)[1].split("acceptPairingSensor", 1)[0]
     assert "report.fieldFlags == 0" in branch
     assert "s->route.update" in branch and "return;" in branch
+    assert "&& s->route.update(report)" in branch
     assert "lastSeenMs" not in branch and "seenThisBoot = true" not in branch
     for record in ("PersistedPlant", "PersistedInfrastructure"):
         fields = source.split(f"struct {record} {{", 1)[1].split("};", 1)[0]

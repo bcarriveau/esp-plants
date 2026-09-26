@@ -2,33 +2,40 @@
 #include "plantlink.h"
 
 namespace sensor_route {
-// Adapter supplies SDK table entries, restarting each traversal. No retained
-// topology or short-address identity: every resolution uses the current tables.
+// The coordinator's route table is not populated for these sleepy end devices.
+// Hardware diagnostics showed that a forwarded APS packet updates the immediate
+// router neighbor's LQI to the packet LQI. Treat that as last-hop evidence only
+// when exactly one live router matches. Direct children and ambiguous matches
+// intentionally produce no route metadata.
 template <class Tables>
-void resolve(Tables &tables, const uint8_t ieee[8], uint16_t address,
-             plantlink::SensorReportData &out) {
-  out.routeState = plantlink::RouteState::UNKNOWN;
-  memset(out.repeaterIeee, 0, 8);
-  if (address == 0 || address >= 0xfff8) return;
-  if (!tables.matchesSensor(ieee, address)) return;
+bool resolveRepeater(Tables &tables, const uint8_t ieee[8], uint16_t address,
+                     uint8_t packetLqi, uint8_t repeaterIeee[8]) {
+  memset(repeaterIeee, 0, 8);
+  if (address == 0 || address >= 0xfff8) return false;
+  if (!tables.matchesSensor(ieee, address)) return false;
+
   tables.restartNeighbors();
   while (tables.nextNeighbor()) {
-    if (tables.directChild(ieee, address)) {
-      out.routeState = plantlink::RouteState::DIRECT;
-      return;
-    }
+    if (tables.directSensor(ieee, address)) return false;
   }
-  tables.restartRoutes();
-  while (tables.nextRoute()) {
-    const uint16_t hop = tables.activeNextHop(address);
-    if (hop == 0 || hop >= 0xfff8 || hop == address) continue;
-    tables.restartNeighbors();
-    while (tables.nextNeighbor()) {
-      if (tables.liveRouter(hop, out.repeaterIeee)) {
-        out.routeState = plantlink::RouteState::ROUTED;
-        return;
-      }
+
+  bool found = false;
+  uint8_t candidate[8]{};
+  tables.restartNeighbors();
+  while (tables.nextNeighbor()) {
+    uint8_t routerIeee[8]{};
+    if (!tables.routerForPacket(packetLqi, routerIeee)) continue;
+    if (found) {
+      // Two routers with the same current LQI are ambiguous. Never guess.
+      memset(repeaterIeee, 0, 8);
+      return false;
     }
+    memcpy(candidate, routerIeee, 8);
+    found = true;
   }
+
+  if (!found) return false;
+  memcpy(repeaterIeee, candidate, 8);
+  return true;
 }
 }  // namespace sensor_route

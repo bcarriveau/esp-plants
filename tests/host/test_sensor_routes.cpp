@@ -1,7 +1,6 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
-#include <vector>
 #include "sensor_route.h"
 #include "sensor_route_view.h"
 
@@ -11,79 +10,103 @@ struct Node {
   uint32_t lastSeenMs = 100;
   char name[24] = "KITCHEN REPEATER";
 };
+
 struct Tables {
-  bool child = false, router = true, active = true;
-  uint16_t destination = 0x1234, hop = 0x5678;
-  unsigned neighbors = 0, routes = 0;
-  uint8_t routerIeee = 1;
+  enum Kind : uint8_t { SENSOR_DIRECT, ROUTER_A, ROUTER_B, OTHER };
+  struct Entry {
+    Kind kind = OTHER;
+    uint8_t lqi = 0;
+  } entries[4]{};
+  size_t count = 0;
+  size_t index = 0;
   bool identityMatches = true;
+
   bool matchesSensor(const uint8_t *, uint16_t) { return identityMatches; }
-  void restartNeighbors() { neighbors = 0; }
-  void restartRoutes() { routes = 0; }
-  bool nextNeighbor() { return neighbors++ == 0; }
-  bool nextRoute() { return routes++ == 0; }
-  bool directChild(const uint8_t ieee[8], uint16_t address) {
-    return child && ieee[0] == 9 && address == destination;
+  void restartNeighbors() { index = 0; }
+  bool nextNeighbor() { return index < count ? (++index, true) : false; }
+  const Entry &current() const { return entries[index - 1]; }
+  bool directSensor(const uint8_t ieee[8], uint16_t address) const {
+    return current().kind == SENSOR_DIRECT && ieee[0] == 9 && address == 0x1234;
   }
-  uint16_t activeNextHop(uint16_t address) {
-    return active && address == destination ? hop : 0xffff;
-  }
-  bool liveRouter(uint16_t address, uint8_t ieee[8]) {
-    if (!router || address != hop) return false;
-    memset(ieee, 0, 8); ieee[0] = routerIeee;
-    return true;
+  bool routerForPacket(uint8_t packetLqi, uint8_t ieee[8]) const {
+    if (current().lqi != packetLqi) return false;
+    if (current().kind == ROUTER_A) {
+      memset(ieee, 0, 8); ieee[0] = 1; return true;
+    }
+    if (current().kind == ROUTER_B) {
+      memset(ieee, 0, 8); ieee[0] = 2; return true;
+    }
+    return false;
   }
 };
 
 int main() {
   Tables tables;
-  plantlink::SensorReportData report;
-  report.ieee[0] = 9;
-  report.shortAddress = 0x1234;
+  uint8_t sensorIeee[8]{9};
+  uint8_t repeater[8]{};
+
+  // A coordinator child is intentionally silent even if a router happens to
+  // have the same LQI.
+  tables.entries[0] = {Tables::SENSOR_DIRECT, 77};
+  tables.entries[1] = {Tables::ROUTER_A, 77};
+  tables.count = 2;
+  assert(!sensor_route::resolveRepeater(tables, sensorIeee, 0x1234, 77, repeater));
+  assert(repeater[0] == 0);
+
+  // One live router matching the forwarded packet LQI is positive last-hop evidence.
+  tables.entries[0] = {Tables::ROUTER_A, 61};
+  tables.entries[1] = {Tables::OTHER, 61};
+  tables.count = 2;
+  assert(sensor_route::resolveRepeater(tables, sensorIeee, 0x1234, 61, repeater));
+  assert(repeater[0] == 1);
+
+  // No matching router remains unknown.
+  tables.entries[0] = {Tables::ROUTER_A, 45};
+  tables.count = 1;
+  assert(!sensor_route::resolveRepeater(tables, sensorIeee, 0x1234, 61, repeater));
+  assert(repeater[0] == 0);
+
+  // Two matching routers are ambiguous: never guess.
+  tables.entries[0] = {Tables::ROUTER_A, 61};
+  tables.entries[1] = {Tables::ROUTER_B, 61};
+  tables.count = 2;
+  assert(!sensor_route::resolveRepeater(tables, sensorIeee, 0x1234, 61, repeater));
+  assert(repeater[0] == 0);
+
+  tables.identityMatches = false;
+  assert(!sensor_route::resolveRepeater(tables, sensorIeee, 0x1234, 61, repeater));
+  tables.identityMatches = true;
+  assert(!sensor_route::resolveRepeater(tables, sensorIeee, 0xffff, 61, repeater));
+
+  // Wire compatibility keeps DIRECT reserved, but the UI intentionally renders
+  // only repeater routes.
   sensor_route_view::Route view;
-  Node registry[2]; registry[1].ieee[0] = 2;
+  Node registry[2];
+  registry[1].ieee[0] = 2;
   strcpy(registry[1].name, "HALL REPEATER");
   char text[64];
   auto show = [&](uint32_t now = 100, bool ready = true) {
     sensor_route_view::format(view, registry, now, ready, text, sizeof(text));
   };
-  auto resolve = [&]() {
-    sensor_route::resolve(tables, report.ieee, report.shortAddress, report);
-    // Exercise the real v2 wire parser between H2 policy and Waveshare view.
-    uint8_t payload[30];
-    assert(plantlink::serializeSensorReport(report, payload, sizeof(payload)) == 30);
-    plantlink::SensorReportData parsed;
-    assert(plantlink::parseSensorReport(payload, sizeof(payload), parsed));
-    view.update(parsed, 100);
-    show();
-  };
-  show(); assert(!text[0]);  // reboot starts unknown
-  tables.child = true; resolve();
-  assert(!strcmp(text, "DIRECT TO HUB"));
-  tables.child = false; resolve();
-  assert(!strcmp(text, "VIA: KITCHEN REPEATER"));
-  strcpy(registry[0].name, "DEN REPEATER"); show();
-  assert(!strcmp(text, "VIA: DEN REPEATER")); // no new report required
-  registry[0].online = false; show(); assert(!text[0]);
-  registry[0].online = true;
-  tables.router = false; resolve(); assert(!text[0]); // disappeared next hop
-  tables.router = true; tables.active = false; resolve(); assert(!text[0]);
-  tables.active = true; tables.routerIeee = 2; resolve();
-  assert(!strcmp(text, "VIA: HALL REPEATER"));
-  tables.identityMatches = false; resolve(); assert(!text[0]);
-  tables.identityMatches = true;
-  tables.routerIeee = 3; resolve(); assert(!text[0]); // unregistered/reused short address
-  tables.child = true; resolve(); assert(!strcmp(text, "DIRECT TO HUB"));
-  show(10101); assert(!text[0]); // topology stream lost, heartbeat may still run
-  show(100, false); assert(!text[0]);
-  view = {}; show(); assert(!text[0]); // H2/link reset
-  tables.child = false; tables.hop = report.shortAddress; resolve(); assert(!text[0]);
-  tables.hop = 0; resolve(); assert(!text[0]);
-  report.shortAddress = 0xffff; resolve(); assert(!text[0]);
-  report.shortAddress = 0x1234; tables.hop = 0x5678; tables.routerIeee = 1;
-  resolve(); registry[0].lastSeenMs = 0;
-  view.learnedMs = 11000; show(11000); assert(!text[0]); // registry freshness
-  view.learnedMs = 0xfffffff0u; registry[0].lastSeenMs = 0xfffffff0u;
-  show(16); assert(!strcmp(text, "VIA: DEN REPEATER")); // millis wrap
-  std::cout << "sensor route scenarios: PASS\n";
+
+  plantlink::SensorReportData report;
+  report.routeState = plantlink::RouteState::DIRECT;
+  assert(view.update(report));
+  show(); assert(!text[0]);
+
+  report.routeState = plantlink::RouteState::ROUTED;
+  report.repeaterIeee[0] = 1;
+  assert(view.update(report));
+  show(); assert(!strcmp(text, "VIA: KITCHEN REPEATER"));
+  assert(!view.update(report));  // same route identity, no visible redraw needed
+  show(101); assert(!strcmp(text, "VIA: KITCHEN REPEATER"));
+
+  report.repeaterIeee[0] = 2;
+  assert(view.update(report));
+  show(102); assert(!strcmp(text, "VIA: HALL REPEATER"));
+  registry[1].online = false; show(102); assert(!text[0]);
+  registry[1].online = true;
+  show(102, false); assert(!text[0]);
+
+  std::cout << "sensor repeater route scenarios: PASS\n";
 }
