@@ -1,5 +1,5 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.40"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.41"
 #define ESP_PLANTS_WAVESHARE_7_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
 #ifdef ESP_PLANTS_WAVESHARE_7B
@@ -12,7 +12,7 @@
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Fix route-label LVGL update churn while keeping PlantLink v2 and H2 alpha.27; restore the proven alpha.38 WATER ME positions and keep route text bounded."
+  "Fix the alpha.39/40 touch freeze by removing the extra route-label LVGL objects while keeping PlantLink v2 and H2 alpha.27; route status now reuses the existing detail footer and alpha.38 WATER ME positions stay unchanged."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif

@@ -184,7 +184,6 @@ lv_obj_t *homeTemp = nullptr;
 lv_obj_t *homeHumidity = nullptr;
 lv_obj_t *homeBar = nullptr;
 lv_obj_t *homeWarning = nullptr;
-lv_obj_t *homeRoute = nullptr;
 lv_obj_t *homeSummary = nullptr;
 
 lv_obj_t *allSummary = nullptr;
@@ -201,7 +200,6 @@ lv_obj_t *detailSignal = nullptr;
 lv_obj_t *detailUpdated = nullptr;
 lv_obj_t *detailBar = nullptr;
 lv_obj_t *detailWarning = nullptr;
-lv_obj_t *detailRoute = nullptr;
 lv_obj_t *renameButton = nullptr;
 lv_obj_t *replaceButton = nullptr;
 lv_obj_t *removeButton = nullptr;
@@ -271,36 +269,6 @@ bool ieeeZero(const uint8_t ieee[8]) {
 
 void label(lv_obj_t *obj, const char *text) {
   if (obj && text) lv_label_set_text(obj, text);
-}
-
-void labelIfChanged(lv_obj_t *obj, const char *text) {
-  if (!obj || !text) return;
-  const char *current = lv_label_get_text(obj);
-  if (!current || strcmp(current, text) != 0) lv_label_set_text(obj, text);
-}
-
-void fitRouteLabelText(const char *source, lv_coord_t width, char *out, size_t size) {
-  if (!out || !size) return;
-  out[0] = '\0';
-  if (!source || !source[0]) return;
-
-  snprintf(out, size, "%s", source);
-  if (lv_txt_get_width(out, strlen(out), &lv_font_montserrat_12, 0,
-                       LV_TEXT_FLAG_NONE) <= width) {
-    return;
-  }
-
-  const size_t sourceLength = strlen(source);
-  for (size_t keep = sourceLength; keep > 0; --keep) {
-    if (keep + 4 > size) continue;
-    memcpy(out, source, keep);
-    memcpy(out + keep, "...", 4);
-    if (lv_txt_get_width(out, strlen(out), &lv_font_montserrat_12, 0,
-                         LV_TEXT_FLAG_NONE) <= width) {
-      return;
-    }
-  }
-  out[0] = '\0';
 }
 
 void clearSetupQrCanvas() {
@@ -1589,19 +1557,6 @@ void buildHeader(lv_obj_t *screen) {
   lv_obj_align(headerCount, LV_ALIGN_RIGHT_MID, -22, 0);
 }
 
-lv_obj_t *routeLabel(lv_obj_t *parent, int x, int y, int width) {
-  lv_obj_t *obj = lv_label_create(parent);
-  lv_label_set_text(obj, "");
-  lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(obj, lv_color_hex(0xAABBAF), 0);
-  lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_set_style_pad_all(obj, 0, 0);
-  lv_obj_set_pos(obj, x, y);
-  lv_obj_set_size(obj, width, 15);
-  lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
-  return obj;
-}
-
 void buildHome(lv_obj_t *screen) {
   homePage = lv_obj_create(screen);
   lv_obj_set_pos(homePage, 0, 66);
@@ -1669,8 +1624,6 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_radius(homeWarning, 10, 0);
   lv_obj_set_pos(homeWarning, 24, 278);
   lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
-
-  homeRoute = routeLabel(featured, 312, 292, 140);
 
   lv_obj_t *listCard = card(homePage, 528, 10, 258, 334);
   lv_obj_t *listTitle = lv_label_create(listCard);
@@ -1917,6 +1870,8 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_set_style_text_font(detailUpdated, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(detailUpdated, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(detailUpdated, 24, 276);
+  lv_obj_set_width(detailUpdated, 540);
+  lv_label_set_long_mode(detailUpdated, LV_LABEL_LONG_CLIP);
 
   detailWarning = lv_label_create(p);
   lv_label_set_text(detailWarning, "WATER ME!");
@@ -1928,9 +1883,6 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_set_style_radius(detailWarning, 10, 0);
   lv_obj_set_pos(detailWarning, 600, 272);
   lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
-
-  // Keep the alpha.38 WATER ME badge untouched; route status stays left of it.
-  detailRoute = routeLabel(p, 350, 292, 220);
 }
 
 void buildSettings(lv_obj_t *screen) {
@@ -2746,25 +2698,6 @@ void refreshUi() {
   const size_t waiting = count >= reporting ? count - reporting : 0;
   const int homeSensor = featuredHomeSensor();
 
-  char routeRaw[64]{};
-  char routeText[64]{};
-  if (homeSensor >= 0 && homeSensor < static_cast<int>(kMaxSensors)) {
-    sensor_route_view::format(sensors[homeSensor].route, infrastructure, millis(),
-                             h2Online && networkReady, routeRaw, sizeof(routeRaw));
-  }
-  fitRouteLabelText(routeRaw, 140, routeText, sizeof(routeText));
-  labelIfChanged(homeRoute, routeText);
-
-  routeRaw[0] = '\0';
-  routeText[0] = '\0';
-  if (selectedSensor >= 0 && selectedSensor < static_cast<int>(kMaxSensors) &&
-      sensors[selectedSensor].used) {
-    sensor_route_view::format(sensors[selectedSensor].route, infrastructure, millis(),
-                             h2Online && networkReady, routeRaw, sizeof(routeRaw));
-  }
-  fitRouteLabelText(routeRaw, 220, routeText, sizeof(routeText));
-  labelIfChanged(detailRoute, routeText);
-
   snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count), count == 1 ? "PLANT" : "PLANTS");
   label(headerCount, text);
   snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
@@ -2898,13 +2831,27 @@ void refreshUi() {
     else snprintf(text, sizeof(text), "LQI --");
     label(detailSignal, text);
 
+    char updatedText[64]{};
     if (!s.seenThisBoot || !s.lastSeenMs) {
-      snprintf(text, sizeof(text), "Waiting for this plant to check in");
+      snprintf(updatedText, sizeof(updatedText), "Waiting for this plant to check in");
     } else {
       const uint32_t age = (millis() - s.lastSeenMs) / 1000u;
-      if (age < 2) snprintf(text, sizeof(text), "Updated now");
-      else if (age < 60) snprintf(text, sizeof(text), "Updated %lus ago", static_cast<unsigned long>(age));
-      else snprintf(text, sizeof(text), "Updated %lum ago", static_cast<unsigned long>(age / 60u));
+      if (age < 2) snprintf(updatedText, sizeof(updatedText), "Updated now");
+      else if (age < 60)
+        snprintf(updatedText, sizeof(updatedText), "Updated %lus ago",
+                 static_cast<unsigned long>(age));
+      else
+        snprintf(updatedText, sizeof(updatedText), "Updated %lum ago",
+                 static_cast<unsigned long>(age / 60u));
+    }
+
+    char routeText[64]{};
+    sensor_route_view::format(s.route, infrastructure, millis(),
+                             h2Online && networkReady, routeText, sizeof(routeText));
+    if (routeText[0]) {
+      snprintf(text, sizeof(text), "%s  |  %s", updatedText, routeText);
+    } else {
+      snprintf(text, sizeof(text), "%s", updatedText);
     }
     label(detailUpdated, text);
 
