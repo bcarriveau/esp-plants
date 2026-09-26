@@ -94,9 +94,26 @@ bool releaseMetadataValid(const espplants_ota_installer::Release &release) {
       !release.h2BuildId[0]) {
     return false;
   }
-  if (strncmp(release.h2BuildId, kH2Prefix, strlen(kH2Prefix)) != 0) return false;
+  char expectedBuild[96]{};
+  const int written = snprintf(expectedBuild, sizeof(expectedBuild), "%s%s",
+                               kH2Prefix, release.h2Version);
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(expectedBuild) ||
+      strcmp(release.h2BuildId, expectedBuild) != 0) {
+    return false;
+  }
+  int versionComparison = 0;
+  if (!espplants_update_policy::compareSemanticVersions(
+          release.h2Version, release.h2Version, versionComparison)) {
+    return false;
+  }
+  if (!espplants_update_policy::h2AssetNameValid(release.h2Asset)) return false;
   if (release.h2FirmwareSize < 65536u || release.h2FirmwareSize > kMaxH2Bytes) return false;
   return true;
+}
+
+TargetState classifyTargetHello(const char *hello,
+                                const espplants_ota_installer::Release &release) {
+  return targetStateForIdentity(hello, release.h2Version, release.h2BuildId);
 }
 
 TargetState probeTarget(const espplants_ota_installer::Release &release) {
@@ -121,8 +138,7 @@ TargetState probeTarget(const espplants_ota_installer::Release &release) {
     portEXIT_CRITICAL(&mux);
 
     if (events != before && strncmp(hello, kH2Prefix, strlen(kH2Prefix)) == 0) {
-      return strcmp(hello, release.h2BuildId) == 0 ? TargetState::MATCH
-                                                   : TargetState::DIFFERENT;
+      return classifyTargetHello(hello, release);
     }
     delay(5);
   }
@@ -294,11 +310,21 @@ Result updateForRelease(const espplants_ota_installer::Release &release,
   plantlink::FrameObserver previous = plantlink::frameObserver();
   plantlink::setFrameObserver(observer);
   const TargetState initialState = probeTarget(release);
-  const bool phase2 = initialState != TargetState::UNKNOWN;
   if (initialState == TargetState::MATCH) {
     plantlink::setFrameObserver(previous);
     copyText(message, messageCapacity, "H2 already matches release");
     return Result::OK;
+  }
+  if (initialState == TargetState::NEWER_THAN_RELEASE) {
+    plantlink::setFrameObserver(previous);
+    copyText(message, messageCapacity, "H2 is newer than release target; downgrade skipped");
+    return Result::OK;
+  }
+  if (initialState == TargetState::UNKNOWN) {
+    plantlink::setFrameObserver(previous);
+    copyText(message, messageCapacity,
+             "H2 identity is unknown; automatic H2 update blocked");
+    return Result::FAILED;
   }
 
   uint8_t *image = static_cast<uint8_t *>(
@@ -361,9 +387,8 @@ Result updateForRelease(const espplants_ota_installer::Release &release,
   if (!waitStatus(before, kAckTimeoutMs, statusValue, errorValue, next)) {
     heap_caps_free(image);
     plantlink::setFrameObserver(previous);
-    copyText(message, messageCapacity,
-             phase2 ? "H2 OTA did not answer" : "H2 needs one USB bootstrap to phase-2 OTA");
-    return phase2 ? Result::FAILED : Result::BOOTSTRAP_REQUIRED;
+    copyText(message, messageCapacity, "H2 OTA did not answer");
+    return Result::FAILED;
   }
   if (statusValue == uint8_t(plantlink_ota::Status::Error)) {
     heap_caps_free(image);

@@ -12,7 +12,7 @@
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Fixes binary-safe H2 OTA firmware identity validation and targets H2 alpha.26 while retaining the PSRAM OTA worker, bounded flash streaming, memory preflight, and one-shot network recovery."
+  "Fixes binary-safe H2 OTA firmware identity validation and targets H2 alpha.25 while retaining the PSRAM OTA worker, bounded flash streaming, memory preflight, and one-shot network recovery."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif

@@ -2,38 +2,37 @@ from pathlib import Path
 import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "firmware/waveshare-hub/scripts/build_plants_ota.py"
+WS_HEADER = ROOT / "firmware/waveshare-hub/include/build_version.h"
+H2_HEADER = ROOT / "firmware/m5-h2-zigbee/include/build_version.h"
 
 
 def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_current_waveshare_release_keeps_h2_alpha25_independent():
-    script_path = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
-    spec = importlib.util.spec_from_file_location("build_plants_ota_current", script_path)
+def load_packager():
+    spec = importlib.util.spec_from_file_location("build_plants_ota_current", SCRIPT)
     ota = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(ota)
-    waveshare = ota.read_build_identity(
-        ROOT / "firmware" / "waveshare-hub" / "include" / "build_version.h"
-    )
-    h2 = ota.read_h2_build_identity(
-        ROOT / "firmware" / "m5-h2-zigbee" / "include" / "build_version.h"
-    )
+    return ota
+
+
+def test_current_waveshare_and_h2_release_identities_are_independent():
+    ota = load_packager()
+    waveshare = ota.read_build_identity(WS_HEADER)
+    h2 = ota.read_h2_build_identity(H2_HEADER)
     assert read("VERSION").strip() == waveshare.version
-    assert h2.version == "0.2.0-alpha.25"
-    assert waveshare.version != h2.version
+    assert waveshare.product == "esp-plants-waveshare"
+    assert h2.product == "esp-plants-h2"
+    assert waveshare.build_id == f"ESPPLANTS-WAVESHARE-{waveshare.version}"
+    assert h2.build_id == f"ESPPLANTS-H2-{h2.version}"
 
 
 def test_release_generator_cannot_misidentify_regular_7_as_7b():
-    script_path = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
-    spec = importlib.util.spec_from_file_location("build_plants_ota_identity", script_path)
-    ota = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(ota)
-    identity = ota.read_build_identity(
-        ROOT / "firmware" / "waveshare-hub" / "include" / "build_version.h"
-    )
+    ota = load_packager()
+    identity = ota.read_build_identity(WS_HEADER)
     assert identity.hardware == "waveshare-esp32-s3-touch-lcd-7"
 
 

@@ -1275,10 +1275,19 @@ bool checkGithubRelease() {
     } else if (comparison == 0) {
       const espplants_h2_ota::TargetState h2State =
           espplants_h2_ota::targetStateForRelease(bestRelease);
-      if (h2State == espplants_h2_ota::TargetState::DIFFERENT) {
+      if (h2State == espplants_h2_ota::TargetState::OLDER_THAN_RELEASE) {
         hasUpdate = true;
         h2OnlyUpdate = true;
         setStatus("H2 update available: v%s", bestRelease.h2Version);
+      } else if (h2State == espplants_h2_ota::TargetState::NEWER_THAN_RELEASE) {
+        hasUpdate = false;
+        h2OnlyUpdate = false;
+        setStatus("H2 is newer than release target v%s; downgrade skipped",
+                  bestRelease.h2Version);
+      } else if (h2State == espplants_h2_ota::TargetState::UNKNOWN) {
+        hasUpdate = false;
+        h2OnlyUpdate = false;
+        setStatus("H2 identity is unknown; automatic H2 update is blocked");
       } else {
         hasUpdate = false;
         h2OnlyUpdate = false;

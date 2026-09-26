@@ -14,6 +14,20 @@ assert spec and spec.loader
 spec.loader.exec_module(ota)
 
 
+def current_h2_metadata():
+    h2 = ota.read_h2_build_identity(H2_HEADER)
+    return {
+        "product": h2.product,
+        "hardware": h2.hardware,
+        "version": h2.version,
+        "build_id": h2.build_id,
+        "protocol": 1,
+        "asset": f"esp-plants-h2-{h2.version}.bin",
+        "firmware_size": 123,
+        "firmware_sha256": "22" * 32,
+    }
+
+
 def test_root_version_tracks_waveshare_release_identity():
     waveshare = ota.read_build_identity(WAVESHARE_HEADER)
     assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == waveshare.version
@@ -35,8 +49,8 @@ def test_waveshare_and_h2_are_valid_independent_release_identities():
     assert waveshare.build_id == f"ESPPLANTS-WAVESHARE-{waveshare.version}"
     assert h2.build_id == f"ESPPLANTS-H2-{h2.version}"
 
-    # The two products are deliberately versioned independently.
-    # This test validates identity construction rather than pinning a historical alpha number.
+    # The two products are deliberately versioned independently. This validates
+    # identity construction without pinning either current alpha number.
 
 
 def test_release_manifest_uses_regular_waveshare_7_hardware_identity():
@@ -48,26 +62,17 @@ def test_release_manifest_uses_regular_waveshare_7_hardware_identity():
         firmware_sha256="11" * 32,
         build_id=waveshare.build_id,
     )
-    h2 = {
-        "product": "esp-plants-h2",
-        "hardware": "m5stack-unit-gateway-h2",
-        "version": "0.2.0-alpha.25",
-        "build_id": "ESPPLANTS-H2-0.2.0-alpha.25",
-        "protocol": 1,
-        "asset": "esp-plants-h2-0.2.0-alpha.25.bin",
-        "firmware_size": 123,
-        "firmware_sha256": "22" * 32,
-    }
     manifest = json.loads(
         ota.create_manifest(
             waveshare,
             metadata,
             f"esp-plants-waveshare-{waveshare.version}.plantsota",
-            h2,
+            current_h2_metadata(),
         )
     )
     assert manifest["hardware"] == "waveshare-esp32-s3-touch-lcd-7"
     assert manifest["hardware"] != "waveshare-esp32-s3-touch-lcd-7b"
+    assert manifest["h2"]["version"] == ota.read_h2_build_identity(H2_HEADER).version
 
 
 def test_build_header_keeps_runtime_7b_identity_separate_from_release_7_identity():

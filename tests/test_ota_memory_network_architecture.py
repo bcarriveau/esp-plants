@@ -240,9 +240,12 @@ def test_repeated_attempts_do_not_recreate_network_worker_or_leak_http_clients()
     assert "abortAndDestroyFlashWriter(*workspace_)" in installer
 
 
-def test_version_is_alpha38_and_h2_version_remains_independent():
-    waveshare = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
-    h2 = read(ROOT / "firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.38"' in waveshare
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.38"
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.25"' in h2
+def test_current_versions_derive_from_authoritative_headers():
+    waveshare_header = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
+    h2_header = read(ROOT / "firmware/m5-h2-zigbee/include/build_version.h")
+    ws = re.search(r'^#define ESP_PLANTS_WAVESHARE_VERSION "([^"]+)"$', waveshare_header, re.MULTILINE)
+    h2 = re.findall(r'^#define ESP_PLANTS_H2_VERSION "([^"]+)"$', h2_header, re.MULTILINE)
+    assert ws
+    assert len(h2) >= 2
+    assert read(ROOT / "VERSION").strip() == ws.group(1)
+    assert '#define ESP_PLANTS_H2_BUILD_ID "ESPPLANTS-H2-" ESP_PLANTS_H2_VERSION' in h2_header

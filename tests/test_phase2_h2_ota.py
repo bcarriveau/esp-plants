@@ -27,7 +27,7 @@ def test_h2_inactive_slot_and_validation_guards():
         "esp_ota_end",
         "esp_ota_set_boot_partition",
         "incoming.chip_id!=running.chip_id",
-        "ESP_PLANTS_H2_DISTRIBUTION_MARKER",
+        "kExpectedDistributionMarker[]=ESP_PLANTS_H2_RELEASE_MARKER",
     ]:
         assert token in s
 

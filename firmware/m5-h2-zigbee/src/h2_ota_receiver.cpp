@@ -23,7 +23,7 @@ constexpr char kExpectedDistributionMarker[]=ESP_PLANTS_H2_RELEASE_MARKER;
 // ASCII tokens must survive compiler/linker garbage collection.  Make the
 // alpha.23 compatibility bridge literal explicit here as a belt-and-suspenders
 // guard: the bridge environment must report alpha.23 even while the normal H2
-// release target remains independently versioned at alpha.25.
+// release target remains independently versioned.
 #if defined(ESP_PLANTS_DISTRIBUTION_BUILD)
   #if defined(ESP_PLANTS_H2_COMPAT_BRIDGE_ALPHA23)
     #define ESP_PLANTS_H2_BINARY_BUILD_ID "ESPPLANTS-H2-0.2.0-alpha.23"

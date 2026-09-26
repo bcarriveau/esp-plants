@@ -6,6 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "firmware" / "waveshare-hub" / "scripts" / "build_plants_ota.py"
+WS_HEADER = ROOT / "firmware/waveshare-hub/include/build_version.h"
+H2_HEADER = ROOT / "firmware/m5-h2-zigbee/include/build_version.h"
 spec = importlib.util.spec_from_file_location("build_plants_ota", SCRIPT)
 ota = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
@@ -14,9 +16,10 @@ spec.loader.exec_module(ota)
 
 class PlantsOtaPackageTests(unittest.TestCase):
     def identity(self):
-        return ota.read_build_identity(
-            ROOT / "firmware" / "waveshare-hub" / "include" / "build_version.h"
-        )
+        return ota.read_build_identity(WS_HEADER)
+
+    def h2_identity(self):
+        return ota.read_h2_build_identity(H2_HEADER)
 
     def firmware(self, *, chip_id=9, marker=True, build=True):
         identity = self.identity()
@@ -32,13 +35,14 @@ class PlantsOtaPackageTests(unittest.TestCase):
         return bytes(data)
 
     def h2_metadata(self):
+        identity = self.h2_identity()
         return {
-            "product": "esp-plants-h2",
-            "hardware": "m5stack-unit-gateway-h2",
-            "version": "0.2.0-alpha.25",
-            "build_id": "ESPPLANTS-H2-0.2.0-alpha.25",
+            "product": identity.product,
+            "hardware": identity.hardware,
+            "version": identity.version,
+            "build_id": identity.build_id,
             "protocol": 1,
-            "asset": "esp-plants-h2-0.2.0-alpha.25.bin",
+            "asset": f"esp-plants-h2-{identity.version}.bin",
             "firmware_size": 729616,
             "firmware_sha256": "22" * 32,
         }
@@ -62,7 +66,7 @@ class PlantsOtaPackageTests(unittest.TestCase):
         self.assertEqual(manifest["product"], "esp-plants-waveshare")
         self.assertTrue(manifest["asset"].endswith(".plantsota"))
         self.assertEqual(manifest["package_size"], manifest["firmware_size"] + 512)
-        self.assertEqual(manifest["h2"]["version"], "0.2.0-alpha.25")
+        self.assertEqual(manifest["h2"]["version"], self.h2_identity().version)
 
     def test_wrong_chip_rejected(self):
         with self.assertRaisesRegex(ValueError, "not ESP32-S3"):
