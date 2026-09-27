@@ -16,8 +16,8 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_waveshare_identity_and_allocator_policy_are_intentional():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.45"
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.45"' in read(BUILD)
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.46"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.46"' in read(BUILD)
     lv_conf = read(LV_CONF)
     assert "#define LV_MEM_CUSTOM 0" in lv_conf
     assert "#define LV_MEM_SIZE (128U * 1024U)" in lv_conf
@@ -67,13 +67,11 @@ def test_lvgl_allocator_telemetry_uses_lvgl_monitor_and_required_fields():
         assert transition in source
 
 
-def test_sorted_row_objects_only_move_when_cached_order_changes():
+def test_remaining_nonvirtual_sorted_rows_only_move_when_cached_order_changes():
     source = read(MAIN)
     refresh = function_block(source, "void refreshUi(bool force, bool alreadyInLvglContext)", "void handleNetworkStatus")
-    assert "appliedOrderMatches(homeAppliedOrder, sorted, sortedCount)" in refresh
     assert "appliedOrderMatches(allAppliedOrder, sorted, sortedCount)" in refresh
-    assert refresh.count("lv_obj_move_to_index(") == 2
-    assert "rememberAppliedOrder(homeAppliedOrder" in refresh
+    assert refresh.count("lv_obj_move_to_index(") == 1
     assert "rememberAppliedOrder(allAppliedOrder" in refresh
 
 
@@ -89,7 +87,6 @@ def test_refresh_is_page_local_and_modals_are_gated():
     assert "refreshUi(true, true);" in show
 
 
-def test_stage_a_keeps_home_and_all_physical_rows_until_later_stages():
+def test_all_sensor_physical_rows_remain_until_stage_d():
     source = read(MAIN)
-    assert "PlantListRow rows[kMaxSensors];" in source
     assert "AllSensorRow allRows[kMaxSensors];" in source

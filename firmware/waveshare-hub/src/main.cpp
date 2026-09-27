@@ -6,6 +6,7 @@
 
 #include "plantlink.h"
 #include "advanced_virtual_list.h"
+#include "home_virtual_list.h"
 #include "phrase_engine.h"
 #include "update_service.h"
 #include "sensor_route_view.h"
@@ -92,6 +93,10 @@ struct PlantListRow {
   lv_obj_t *name = nullptr;
   lv_obj_t *moisture = nullptr;
   lv_obj_t *bar = nullptr;
+  int boundSlot = -1;
+  size_t boundLogicalIndex = kMaxSensors;
+  char nameText[kPlantNameBytes]{};
+  char moistureText[8]{};
 };
 
 struct AllSensorRow {
@@ -130,7 +135,7 @@ struct InfrastructureRow {
 plantlink::Decoder decoder;
 Preferences preferences;
 PlantSensor sensors[kMaxSensors];
-PlantListRow rows[kMaxSensors];
+PlantListRow rows[espplants_home_virtual_list::kPoolSize];
 AllSensorRow allRows[kMaxSensors];
 InfrastructureNode infrastructure[kMaxInfrastructure];
 InfrastructureRow infrastructureRows[espplants_advanced_virtual_list::kPoolSize];
@@ -165,7 +170,6 @@ struct AppliedSensorOrder {
   bool valid = false;
 };
 
-AppliedSensorOrder homeAppliedOrder;
 AppliedSensorOrder allAppliedOrder;
 
 PairDialogState pairDialogState = PairDialogState::Hidden;
@@ -201,6 +205,12 @@ lv_obj_t *homeHumidity = nullptr;
 lv_obj_t *homeBar = nullptr;
 lv_obj_t *homeWarning = nullptr;
 lv_obj_t *homeSummary = nullptr;
+lv_obj_t *homeList = nullptr;
+lv_obj_t *homeVirtualContent = nullptr;
+size_t homeLogicalSlots[kMaxSensors]{};
+size_t homeLogicalCount = 0;
+size_t homeFirstLogicalIndex = kMaxSensors;
+bool homeVirtualBinding = false;
 
 lv_obj_t *allSummary = nullptr;
 
@@ -922,13 +932,96 @@ void navEvent(lv_event_t *event) {
   showPage(static_cast<Page>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event))));
 }
 
+void refreshHomeVirtualList(bool forceValues = false) {
+  if (!homeList || !homeVirtualContent || homeVirtualBinding) return;
+  homeVirtualBinding = true;
+
+  size_t logicalSlots[kMaxSensors]{};
+  const size_t logicalCount = buildSortedSlots(logicalSlots);
+  const bool logicalChanged =
+      logicalCount != homeLogicalCount ||
+      (logicalCount > 0 &&
+       memcmp(homeLogicalSlots, logicalSlots, logicalCount * sizeof(size_t)) != 0);
+
+  if (logicalChanged) {
+    if (logicalCount > 0) {
+      memcpy(homeLogicalSlots, logicalSlots, logicalCount * sizeof(size_t));
+    }
+    homeLogicalCount = logicalCount;
+    lv_obj_set_height(homeVirtualContent,
+                      espplants_home_virtual_list::contentHeight(logicalCount));
+    lv_obj_update_layout(homeList);
+
+    const int32_t scrollY = lv_obj_get_scroll_y(homeList);
+    const int32_t clamped =
+        espplants_home_virtual_list::clampScrollY(logicalCount, scrollY);
+    if (scrollY != clamped) lv_obj_scroll_to_y(homeList, clamped, LV_ANIM_OFF);
+    homeFirstLogicalIndex = kMaxSensors;
+  }
+
+  const int32_t scrollY = espplants_home_virtual_list::clampScrollY(
+      homeLogicalCount, lv_obj_get_scroll_y(homeList));
+  const size_t firstLogical = espplants_home_virtual_list::firstPoolLogicalIndex(
+      homeLogicalCount, scrollY);
+  const bool windowChanged = firstLogical != homeFirstLogicalIndex;
+  const int homeSensor = featuredHomeSensor();
+
+  for (size_t poolIndex = 0;
+       poolIndex < espplants_home_virtual_list::kPoolSize; ++poolIndex) {
+    PlantListRow &row = rows[poolIndex];
+    const size_t logicalIndex = firstLogical + poolIndex;
+    if (logicalIndex >= homeLogicalCount) {
+      row.boundSlot = -1;
+      row.boundLogicalIndex = kMaxSensors;
+      lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+
+    const size_t slot = homeLogicalSlots[logicalIndex];
+    const bool rebound = row.boundSlot != static_cast<int>(slot) ||
+                         row.boundLogicalIndex != logicalIndex;
+    if (rebound || windowChanged) {
+      row.boundSlot = static_cast<int>(slot);
+      row.boundLogicalIndex = logicalIndex;
+      lv_obj_set_pos(row.box, 0, static_cast<lv_coord_t>(logicalIndex *
+          static_cast<size_t>(espplants_home_virtual_list::kStride)));
+    }
+
+    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    if (rebound || windowChanged || forceValues) {
+      staticRowLabel(row.name, row.nameText, sizeof(row.nameText), sensors[slot].name);
+      char moisture[8]{};
+      if (hasFreshMoisture(sensors[slot])) {
+        snprintf(moisture, sizeof(moisture), "%u%%", sensors[slot].soilMoisturePct);
+        lv_bar_set_value(row.bar, sensors[slot].soilMoisturePct, LV_ANIM_OFF);
+      } else {
+        snprintf(moisture, sizeof(moisture), "--%%");
+        lv_bar_set_value(row.bar, 0, LV_ANIM_OFF);
+      }
+      staticRowLabel(row.moisture, row.moistureText, sizeof(row.moistureText), moisture);
+      lv_obj_set_style_bg_color(
+          row.box,
+          lv_color_hex(homeSensor == static_cast<int>(slot) ? 0x1E3529 : 0x1D2922), 0);
+    }
+  }
+
+  homeFirstLogicalIndex = firstLogical;
+  homeVirtualBinding = false;
+}
+
+void homeListScrollEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_SCROLL) return;
+  refreshHomeVirtualList(false);
+}
+
 void rowEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
-  if (slot < 0 || slot >= static_cast<intptr_t>(kMaxSensors) || !sensors[slot].used) return;
-  manualHomeSensor = static_cast<int>(slot);
+  auto *row = static_cast<PlantListRow *>(lv_event_get_user_data(event));
+  if (!row || row->boundSlot < 0 || row->boundSlot >= static_cast<int>(kMaxSensors) ||
+      !sensors[row->boundSlot].used) return;
+  manualHomeSensor = row->boundSlot;
   manualHomeUntilMs = millis() + kHomeManualSelectionMs;
-  selectedSensor = static_cast<int>(slot);
+  selectedSensor = row->boundSlot;
   uiDirty = true;
 }
 
@@ -1801,47 +1894,58 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_text_color(listTitle, lv_color_hex(0xE5ECE7), 0);
   lv_obj_set_pos(listTitle, 10, 8);
 
-  lv_obj_t *list = lv_obj_create(listCard);
-  lv_obj_set_pos(list, 0, 42);
-  lv_obj_set_size(list, 234, 266);
-  lv_obj_set_style_border_width(list, 0, 0);
-  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(list, 0, 0);
-  lv_obj_set_style_pad_row(list, 7, 0);
-  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  homeList = lv_obj_create(listCard);
+  lv_obj_set_pos(homeList, 0, 42);
+  lv_obj_set_size(homeList, 234, espplants_home_virtual_list::kViewportHeight);
+  lv_obj_set_style_border_width(homeList, 0, 0);
+  lv_obj_set_style_bg_opa(homeList, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(homeList, 0, 0);
+  lv_obj_set_scroll_dir(homeList, LV_DIR_VER);
+  lv_obj_add_event_cb(homeList, homeListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
-  for (size_t i = 0; i < kMaxSensors; ++i) {
-    rows[i].box = lv_obj_create(list);
-    lv_obj_set_size(rows[i].box, 228, 56);
-    lv_obj_set_style_radius(rows[i].box, 12, 0);
-    lv_obj_set_style_border_width(rows[i].box, 0, 0);
-    lv_obj_set_style_bg_color(rows[i].box, lv_color_hex(0x1D2922), 0);
-    lv_obj_set_style_pad_all(rows[i].box, 8, 0);
-    lv_obj_clear_flag(rows[i].box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(rows[i].box, rowEvent, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+  homeVirtualContent = lv_obj_create(homeList);
+  lv_obj_set_pos(homeVirtualContent, 0, 0);
+  lv_obj_set_size(homeVirtualContent, 228,
+                  espplants_home_virtual_list::contentHeight(0));
+  lv_obj_set_style_border_width(homeVirtualContent, 0, 0);
+  lv_obj_set_style_bg_opa(homeVirtualContent, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(homeVirtualContent, 0, 0);
+  lv_obj_clear_flag(homeVirtualContent, LV_OBJ_FLAG_SCROLLABLE);
 
-    rows[i].name = lv_label_create(rows[i].box);
-    lv_label_set_text(rows[i].name, "PLANT");
-    lv_obj_set_style_text_font(rows[i].name, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(rows[i].name, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_width(rows[i].name, 145);
-    lv_label_set_long_mode(rows[i].name, LV_LABEL_LONG_DOT);
+  for (size_t i = 0; i < espplants_home_virtual_list::kPoolSize; ++i) {
+    PlantListRow &row = rows[i];
+    row.box = lv_obj_create(homeVirtualContent);
+    lv_obj_set_pos(row.box, 0, 0);
+    lv_obj_set_size(row.box, 228, espplants_home_virtual_list::kRowHeight);
+    lv_obj_set_style_radius(row.box, 12, 0);
+    lv_obj_set_style_border_width(row.box, 0, 0);
+    lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_pad_all(row.box, 8, 0);
+    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(row.box, rowEvent, LV_EVENT_CLICKED, &row);
 
-    rows[i].moisture = lv_label_create(rows[i].box);
-    lv_label_set_text(rows[i].moisture, "--%");
-    lv_obj_set_style_text_font(rows[i].moisture, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(rows[i].moisture, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_align(rows[i].moisture, LV_ALIGN_TOP_RIGHT, -2, -2);
+    row.name = lv_label_create(row.box);
+    row.nameText[0] = '\0';
+    lv_label_set_text_static(row.name, row.nameText);
+    lv_obj_set_style_text_font(row.name, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_width(row.name, 145);
+    lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
-    rows[i].bar = lv_bar_create(rows[i].box);
-    lv_obj_set_pos(rows[i].bar, 2, 30);
-    lv_obj_set_size(rows[i].bar, 208, 9);
-    lv_bar_set_range(rows[i].bar, 0, 100);
-    lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(rows[i].bar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
+    row.moisture = lv_label_create(row.box);
+    row.moistureText[0] = '\0';
+    lv_label_set_text_static(row.moisture, row.moistureText);
+    lv_obj_set_style_text_font(row.moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_align(row.moisture, LV_ALIGN_TOP_RIGHT, -2, -2);
+
+    row.bar = lv_bar_create(row.box);
+    lv_obj_set_pos(row.bar, 2, 30);
+    lv_obj_set_size(row.bar, 208, 9);
+    lv_bar_set_range(row.bar, 0, 100);
+    lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
   }
 }
 
@@ -2930,36 +3034,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
                static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
       label(homeSummary, text);
 
-      size_t sorted[kMaxSensors]{};
-      const size_t sortedCount = buildSortedSlots(sorted);
-      if (!appliedOrderMatches(homeAppliedOrder, sorted, sortedCount)) {
-        for (size_t order = 0; order < sortedCount; ++order) {
-          const size_t slot = sorted[order];
-          lv_obj_move_to_index(rows[slot].box, static_cast<int32_t>(order));
-        }
-        rememberAppliedOrder(homeAppliedOrder, sorted, sortedCount);
-      }
-
-      for (size_t i = 0; i < kMaxSensors; ++i) {
-        if (!sensors[i].used) {
-          lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
-          continue;
-        }
-
-        lv_obj_clear_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
-        label(rows[i].name, sensors[i].name);
-        if (hasFreshMoisture(sensors[i])) {
-          snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
-          lv_bar_set_value(rows[i].bar, sensors[i].soilMoisturePct, LV_ANIM_OFF);
-        } else {
-          snprintf(text, sizeof(text), "--%%");
-          lv_bar_set_value(rows[i].bar, 0, LV_ANIM_OFF);
-        }
-        label(rows[i].moisture, text);
-        lv_obj_set_style_bg_color(
-            rows[i].box,
-            lv_color_hex(homeSensor == static_cast<int>(i) ? 0x1E3529 : 0x1D2922), 0);
-      }
+      refreshHomeVirtualList(true);
 
       if (homeSensor < 0 || homeSensor >= static_cast<int>(kMaxSensors) ||
           !sensors[homeSensor].used) {
