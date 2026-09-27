@@ -152,6 +152,16 @@ int manualHomeSensor = -1;
 uint32_t manualHomeUntilMs = 0;
 char deviceName[kDeviceNameBytes] = "ESP PLANTS";
 Page currentPage = Page::Home;
+
+struct AppliedSensorOrder {
+  size_t slots[kMaxSensors]{};
+  size_t count = 0;
+  bool valid = false;
+};
+
+AppliedSensorOrder homeAppliedOrder;
+AppliedSensorOrder allAppliedOrder;
+
 PairDialogState pairDialogState = PairDialogState::Hidden;
 bool pairInfrastructure = false;
 bool pairRemovingInfrastructure = false;
@@ -268,8 +278,35 @@ bool ieeeZero(const uint8_t ieee[8]) {
 }
 
 void label(lv_obj_t *obj, const char *text) {
-  if (obj && text) lv_label_set_text(obj, text);
+  if (!obj || !text) return;
+  const char *current = lv_label_get_text(obj);
+  if (current && strcmp(current, text) == 0) return;
+  lv_label_set_text(obj, text);
 }
+
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+void logLvglMemory(const char *reason) {
+  lv_mem_monitor_t monitor{};
+  lv_mem_monitor(&monitor);
+  const size_t used =
+      monitor.total_size >= monitor.free_size ? monitor.total_size - monitor.free_size : 0;
+  Serial.printf(
+      "[lvgl-mem] %s total=%lu free=%lu used=%lu biggest=%lu free_cnt=%lu "
+      "used_cnt=%lu max_used=%lu frag=%u%% used_pct=%u%%\n",
+      reason ? reason : "unknown",
+      static_cast<unsigned long>(monitor.total_size),
+      static_cast<unsigned long>(monitor.free_size),
+      static_cast<unsigned long>(used),
+      static_cast<unsigned long>(monitor.free_biggest_size),
+      static_cast<unsigned long>(monitor.free_cnt),
+      static_cast<unsigned long>(monitor.used_cnt),
+      static_cast<unsigned long>(monitor.max_used),
+      static_cast<unsigned>(monitor.frag_pct),
+      static_cast<unsigned>(monitor.used_pct));
+}
+#else
+void logLvglMemory(const char *) {}
+#endif
 
 void clearSetupQrCanvas() {
   memset(updateQrCanvasBuffer + kSetupQrPaletteBytes, 0xFF,
@@ -799,11 +836,11 @@ lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
   lv_obj_set_style_border_width(obj, 0, 0);
   lv_obj_set_style_bg_color(obj, lv_color_hex(0x18231D), 0);
   lv_obj_set_style_text_color(obj, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_style_shadow_width(obj, 10, 0);
-  lv_obj_set_style_shadow_opa(obj, LV_OPA_20, 0);
   lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
   return obj;
 }
+
+void refreshUi(bool force = false, bool alreadyInLvglContext = false);
 
 void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **value,
             const lv_font_t *font = &lv_font_montserrat_28) {
@@ -839,6 +876,15 @@ void showPage(Page page) {
   if (navPlant) lv_obj_set_style_bg_color(navPlant, page == Page::Plant ? active : idle, 0);
   if (navSettings) lv_obj_set_style_bg_color(navSettings, page == Page::Settings ? active : idle, 0);
   uiDirty = true;
+  refreshUi(true, true);
+
+  switch (page) {
+    case Page::Home: logLvglMemory("page-home"); break;
+    case Page::All: logLvglMemory("page-all-sensors"); break;
+    case Page::Plant: logLvglMemory("page-plant-detail"); break;
+    case Page::Settings: logLvglMemory("page-settings"); break;
+    case Page::Advanced: logLvglMemory("page-advanced-zigbee"); break;
+  }
 }
 
 void navEvent(lv_event_t *event) {
@@ -936,6 +982,7 @@ void themeEvent(lv_event_t *event) {
   refreshPersonalitySelection();
   lv_obj_clear_flag(renameModal,LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
+  logLvglMemory("personality-open");
 }
 
 void startPairing(bool replacing, int targetSlot);
@@ -964,6 +1011,8 @@ void openUpdateEvent(lv_event_t *event) {
   lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(updateModal);
   uiDirty = true;
+  refreshUi(true, true);
+  logLvglMemory("network-updates-open");
 }
 
 void closeUpdateEvent(lv_event_t *event) {
@@ -1222,6 +1271,7 @@ void openPlantRename(int slot) {
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
   lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
+  logLvglMemory("rename-plant-open");
 }
 
 void renameEvent(lv_event_t *event) {
@@ -1243,6 +1293,7 @@ void openInfrastructureRename(int slot) {
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
   lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
+  logLvglMemory("rename-repeater-open");
 }
 
 void deviceNameEvent(lv_event_t *event) {
@@ -1256,6 +1307,7 @@ void deviceNameEvent(lv_event_t *event) {
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
   lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(renameModal);
+  logLvglMemory("rename-device-open");
 }
 
 
@@ -1404,6 +1456,8 @@ void refreshPairDialog() {
     return;
   }
 
+  const bool opening = lv_obj_has_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
+
   if (pairDialogState == PairDialogState::Pairing &&
       permitJoinRemaining == 0 &&
       millis() - pairStartedMs > 2500u) {
@@ -1524,6 +1578,8 @@ void refreshPairDialog() {
     label(pairPrimaryLabel, "REMOVE");
     label(pairSecondaryLabel, "CANCEL");
   }
+
+  if (opening) logLvglMemory("pairing-ui-open");
 }
 
 void buildHeader(lv_obj_t *screen) {
@@ -2682,6 +2738,7 @@ void buildUi() {
   buildPairDialog(screen);
   buildUpdateDialog(screen);
   showPage(Page::Home);
+  logLvglMemory("build-ui");
 }
 
 void formatTemp(const PlantSensor &s, char *out, size_t size) {
@@ -2704,363 +2761,471 @@ void formatSoil(const PlantSensor &s, char *out, size_t size) {
   else snprintf(out, size, "--%%");
 }
 
-void refreshUi() {
-  if (!uiDirty && millis() - lastUiRefreshMs < kUiRefreshIntervalMs) return;
-  lastUiRefreshMs = millis();
+bool appliedOrderMatches(const AppliedSensorOrder &applied,
+                         const size_t desired[kMaxSensors], size_t count) {
+  if (!applied.valid || applied.count != count) return false;
+  for (size_t i = 0; i < count; ++i) {
+    if (applied.slots[i] != desired[i]) return false;
+  }
+  return true;
+}
+
+void rememberAppliedOrder(AppliedSensorOrder &applied,
+                          const size_t desired[kMaxSensors], size_t count) {
+  applied.count = count;
+  for (size_t i = 0; i < count; ++i) applied.slots[i] = desired[i];
+  applied.valid = true;
+}
+
+void refreshUi(bool force, bool alreadyInLvglContext) {
+  const uint32_t now = millis();
+  if (!force && !uiDirty && now - lastUiRefreshMs < kUiRefreshIntervalMs) return;
+
+  bool lockedHere = false;
+  if (!alreadyInLvglContext) {
+    if (!lvgl_port_lock(-1)) return;
+    lockedHere = true;
+  }
+
+  lastUiRefreshMs = now;
   uiDirty = false;
-  if (!lvgl_port_lock(-1)) return;
 
   char text[200]{};
   const size_t count = registeredCount();
   const size_t reporting = reportedCount();
   const size_t waiting = count >= reporting ? count - reporting : 0;
-  const int homeSensor = featuredHomeSensor();
 
-  snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count), count == 1 ? "PLANT" : "PLANTS");
+  snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count),
+           count == 1 ? "PLANT" : "PLANTS");
   label(headerCount, text);
-  snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
-           static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
-  label(homeSummary, text);
-  label(allSummary, text);
 
-  size_t sorted[kMaxSensors]{};
-  const size_t sortedCount = buildSortedSlots(sorted);
+  switch (currentPage) {
+    case Page::Home: {
+      const int homeSensor = featuredHomeSensor();
+      snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
+               static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
+      label(homeSummary, text);
 
-  for (size_t order = 0; order < sortedCount; ++order) {
-    const size_t i = sorted[order];
-    lv_obj_move_to_index(rows[i].box, static_cast<int32_t>(order));
-    lv_obj_move_to_index(allRows[i].box, static_cast<int32_t>(order));
-  }
-
-  for (size_t i = 0; i < kMaxSensors; ++i) {
-    if (!sensors[i].used) {
-      lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
-      continue;
-    }
-
-    lv_obj_clear_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
-    label(rows[i].name, sensors[i].name);
-    if (hasFreshMoisture(sensors[i])) {
-      snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
-      lv_bar_set_value(rows[i].bar, sensors[i].soilMoisturePct, LV_ANIM_OFF);
-    } else {
-      snprintf(text, sizeof(text), "--%%");
-      lv_bar_set_value(rows[i].bar, 0, LV_ANIM_OFF);
-    }
-    label(rows[i].moisture, text);
-    lv_obj_set_style_bg_color(rows[i].box,
-                              lv_color_hex(homeSensor == static_cast<int>(i) ? 0x1E3529 : 0x1D2922), 0);
-
-    lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
-    label(allRows[i].name, sensors[i].name);
-    if (hasFreshMoisture(sensors[i])) snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
-    else snprintf(text, sizeof(text), "--%%");
-    label(allRows[i].moisture, text);
-
-    if (sensors[i].seenThisBoot && (sensors[i].fieldFlags & plantlink::SensorHasBattery))
-      snprintf(text, sizeof(text), "%u%%", sensors[i].batteryPct);
-    else
-      snprintf(text, sizeof(text), "--%%");
-    label(allRows[i].battery, text);
-
-    formatLastReport(sensors[i], text, sizeof(text));
-    label(allRows[i].updated, text);
-
-    const bool thirsty = sensors[i].seenThisBoot &&
-                         ((sensors[i].fieldFlags & plantlink::SensorHasWaterWarning) &&
-                          sensors[i].waterWarning);
-    lv_obj_set_style_bg_color(allRows[i].box,
-                              lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
-  }
-
-  if (homeSensor < 0 || homeSensor >= static_cast<int>(kMaxSensors) || !sensors[homeSensor].used) {
-    label(homeName, count ? "WAITING FOR REPORTS" : "WAITING FOR SENSOR");
-    if (count) {
-      snprintf(text, sizeof(text), "%u %s waiting to report",
-               static_cast<unsigned>(waiting), waiting == 1 ? "sensor" : "sensors");
-      label(homeMood, text);
-    } else {
-      label(homeMood, "Pair a sensor and I'll keep an eye on it");
-    }
-    label(homeSoil, "--%");
-    label(homeTemp, useFahrenheit ? "--.- F" : "--.- C");
-    label(homeHumidity, "--%");
-    lv_bar_set_value(homeBar, 0, LV_ANIM_OFF);
-    lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    PlantSensor &home = sensors[homeSensor];
-    label(homeName, home.name);
-    label(homeMood, mood(home));
-    formatSoil(home, text, sizeof(text)); label(homeSoil, text);
-    lv_bar_set_value(homeBar, hasFreshMoisture(home) ? home.soilMoisturePct : 0, LV_ANIM_OFF);
-    formatTemp(home, text, sizeof(text)); label(homeTemp, text);
-    formatHumidity(home, text, sizeof(text)); label(homeHumidity, text);
-    if (home.seenThisBoot && (home.fieldFlags & plantlink::SensorHasWaterWarning) && home.waterWarning)
-      lv_obj_clear_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
-    else
-      lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
-  }
-
-  const bool valid = selectedSensor >= 0 &&
-                     selectedSensor < static_cast<int>(kMaxSensors) &&
-                     sensors[selectedSensor].used;
-  if (!valid) {
-    label(detailSlot, "PLANT --");
-    label(detailName, "NO PLANT SELECTED");
-    label(detailMood, "--");
-    label(detailIeee, "--");
-    label(detailSoil, "--%");
-    label(detailTemp, useFahrenheit ? "--.- F" : "--.- C");
-    label(detailHumidity, "--%");
-    label(detailBattery, "--%");
-    label(detailSignal, "LQI --");
-    label(detailUpdated, "No sensor data yet");
-    lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
-    lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_state(renameButton, LV_STATE_DISABLED);
-    lv_obj_add_state(replaceButton, LV_STATE_DISABLED);
-    lv_obj_add_state(removeButton, LV_STATE_DISABLED);
-  } else {
-    PlantSensor &s = sensors[selectedSensor];
-    snprintf(text, sizeof(text), "PLANT %u", static_cast<unsigned>(selectedSensor + 1));
-    label(detailSlot, text);
-    label(detailName, s.name);
-    label(detailMood, mood(s));
-
-    char ieee[24]{};
-    plantlink::formatIeee(s.ieee, ieee, sizeof(ieee));
-    if (s.seenThisBoot) snprintf(text, sizeof(text), "%s   short 0x%04X", ieee, s.shortAddress);
-    else snprintf(text, sizeof(text), "%s   waiting for check-in", ieee);
-    label(detailIeee, text);
-
-    formatSoil(s, text, sizeof(text)); label(detailSoil, text);
-    lv_bar_set_value(detailBar, hasFreshMoisture(s) ? s.soilMoisturePct : 0, LV_ANIM_OFF);
-    formatTemp(s, text, sizeof(text)); label(detailTemp, text);
-    formatHumidity(s, text, sizeof(text)); label(detailHumidity, text);
-
-    if (s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasBattery))
-      snprintf(text, sizeof(text), "%u%%", s.batteryPct);
-    else
-      snprintf(text, sizeof(text), "--%%");
-    label(detailBattery, text);
-
-    if (s.seenThisBoot) snprintf(text, sizeof(text), "LQI %u", s.lqi);
-    else snprintf(text, sizeof(text), "LQI --");
-    label(detailSignal, text);
-
-    char updatedText[64]{};
-    if (!s.seenThisBoot || !s.lastSeenMs) {
-      snprintf(updatedText, sizeof(updatedText), "Waiting for this plant to check in");
-    } else {
-      const uint32_t age = (millis() - s.lastSeenMs) / 1000u;
-      if (age < 2) snprintf(updatedText, sizeof(updatedText), "Updated now");
-      else if (age < 60)
-        snprintf(updatedText, sizeof(updatedText), "Updated %lus ago",
-                 static_cast<unsigned long>(age));
-      else
-        snprintf(updatedText, sizeof(updatedText), "Updated %lum ago",
-                 static_cast<unsigned long>(age / 60u));
-    }
-
-    char routeText[64]{};
-    sensor_route_view::format(s.route, infrastructure, millis(),
-                             h2Online && networkReady, routeText, sizeof(routeText));
-    if (routeText[0]) {
-      snprintf(text, sizeof(text), "%s  |  %s", updatedText, routeText);
-    } else {
-      snprintf(text, sizeof(text), "%s", updatedText);
-    }
-    label(detailUpdated, text);
-
-    if (s.seenThisBoot && (s.fieldFlags & plantlink::SensorHasWaterWarning) && s.waterWarning)
-      lv_obj_clear_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
-    else
-      lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_state(renameButton, LV_STATE_DISABLED);
-    lv_obj_clear_state(replaceButton, LV_STATE_DISABLED);
-    lv_obj_clear_state(removeButton, LV_STATE_DISABLED);
-  }
-
-  const size_t repeaterCount = infrastructureCount();
-  const size_t repeaterOnline = onlineInfrastructureCount();
-  snprintf(text, sizeof(text), "%u REPEATERS | %u ONLINE",
-           static_cast<unsigned>(repeaterCount),
-           static_cast<unsigned>(repeaterOnline));
-  label(advancedSummary, text);
-
-  for (size_t i = 0; i < kMaxInfrastructure; ++i) {
-    if (!infrastructure[i].used) {
-      lv_obj_add_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
-      continue;
-    }
-
-    lv_obj_clear_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
-    label(infrastructureRows[i].name, infrastructure[i].name);
-    label(infrastructureRows[i].status, infrastructure[i].online ? "ONLINE" : "OFFLINE");
-    if (infrastructure[i].online) {
-      snprintf(text, sizeof(text), "LQI %u", infrastructure[i].lqi);
-    } else {
-      snprintf(text, sizeof(text), "LQI --");
-    }
-    label(infrastructureRows[i].signal, text);
-    lv_obj_set_style_bg_color(
-        infrastructureRows[i].box,
-        lv_color_hex(selectedInfrastructure == static_cast<int>(i) ? 0x1E3529 : 0x1D2922), 0);
-  }
-
-  const bool validInfrastructure =
-      selectedInfrastructure >= 0 &&
-      selectedInfrastructure < static_cast<int>(kMaxInfrastructure) &&
-      infrastructure[selectedInfrastructure].used;
-
-  if (validInfrastructure) {
-    InfrastructureNode &node = infrastructure[selectedInfrastructure];
-    char ieee[24]{};
-    plantlink::formatIeee(node.ieee, ieee, sizeof(ieee));
-    if (node.online) {
-      snprintf(text, sizeof(text), "%s  |  %s  |  short 0x%04X",
-               node.name, ieee, node.shortAddress);
-    } else {
-      snprintf(text, sizeof(text), "%s  |  %s  |  offline",
-               node.name, ieee);
-    }
-    label(advancedDetail, text);
-    lv_obj_clear_state(advancedRenameButton, LV_STATE_DISABLED);
-    lv_obj_clear_state(advancedRemoveButton, LV_STATE_DISABLED);
-  } else {
-    label(advancedDetail, repeaterCount ? "Select a repeater to manage it."
-                                       : "No repeaters paired yet.");
-    lv_obj_add_state(advancedRenameButton, LV_STATE_DISABLED);
-    lv_obj_add_state(advancedRemoveButton, LV_STATE_DISABLED);
-  }
-
-  label(settingsDeviceName, deviceName);
-  label(settingsH2, h2Online ? "ONLINE" : "OFFLINE");
-  if (networkReady) snprintf(text, sizeof(text), "READY CH %u | P %u | R %u",
-                           zigbeeChannel, h2SensorCount, h2InfrastructureCount);
-  else if (h2Online) snprintf(text, sizeof(text), "STARTING");
-  else snprintf(text, sizeof(text), "H2 OFFLINE");
-  label(settingsZigbee, text);
-  snprintf(text, sizeof(text), "%u", static_cast<unsigned>(count)); label(settingsPlants, text);
-  label(settingsUnit, useFahrenheit ? "°F" : "°C");
-  snprintf(text,sizeof(text),"%s  >",espplants_phrases::themeName(phraseTheme));
-  label(settingsTheme,text);
-  if (permitJoinRemaining) snprintf(text, sizeof(text), "PAIR %us", permitJoinRemaining);
-  else snprintf(text, sizeof(text), "ADD SENSOR");
-  label(settingsPair, text);
-
-  if (espplants_update::wifiConnected()) {
-    label(updateWifiState, "CONNECTED");
-  } else if (espplants_update::wifiConfigured() && espplants_update::wifiReconnectSuppressed()) {
-    label(updateWifiState, "DISCONNECTED");
-  } else if (espplants_update::wifiConfigured()) {
-    label(updateWifiState, "OFFLINE / CONNECTING");
-  } else {
-    label(updateWifiState, "NOT CONFIGURED");
-  }
-  snprintf(text, sizeof(text), "SSID  %s\nIP       %s",
-           espplants_update::wifiSsid(), espplants_update::wifiAddress());
-  label(updateWifiDetail, text);
-
-  const bool wifiBusy = espplants_update::checking() || espplants_update::installing();
-  if (espplants_update::wifiReconnectSuppressed())
-    label(updateDisconnectLabel, "RECONNECT WI-FI");
-  else
-    label(updateDisconnectLabel, "DISCONNECT WI-FI");
-  if ((!espplants_update::wifiConnected() && !espplants_update::wifiReconnectSuppressed()) ||
-      !espplants_update::wifiConfigured() || wifiBusy)
-    lv_obj_add_state(updateDisconnectButton, LV_STATE_DISABLED);
-  else
-    lv_obj_clear_state(updateDisconnectButton, LV_STATE_DISABLED);
-  if (!espplants_update::wifiConfigured() || wifiBusy)
-    lv_obj_add_state(updateForgetButton, LV_STATE_DISABLED);
-  else
-    lv_obj_clear_state(updateForgetButton, LV_STATE_DISABLED);
-
-  if (espplants_update::setupPortalActive()) {
-    char qr[sizeof(updateQrPayload)]{};
-    snprintf(qr, sizeof(qr), "WIFI:T:WPA;S:%s;P:%s;;",
-             espplants_update::setupSsid(), espplants_update::setupPassword());
-    if (strcmp(updateQrPayload, qr) != 0) {
-      if (renderSetupQr(qr)) {
-        strncpy(updateQrPayload, qr, sizeof(updateQrPayload) - 1);
-        updateQrPayload[sizeof(updateQrPayload) - 1] = '\0';
-        label(updateQrHint, "SCAN TO CONNECT");
-        lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
-      } else {
-        updateQrPayload[0] = '\0';
-        label(updateQrHint, "QR ERROR - JOIN MANUALLY");
-        lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xE2B276), 0);
+      size_t sorted[kMaxSensors]{};
+      const size_t sortedCount = buildSortedSlots(sorted);
+      if (!appliedOrderMatches(homeAppliedOrder, sorted, sortedCount)) {
+        for (size_t order = 0; order < sortedCount; ++order) {
+          const size_t slot = sorted[order];
+          lv_obj_move_to_index(rows[slot].box, static_cast<int32_t>(order));
+        }
+        rememberAppliedOrder(homeAppliedOrder, sorted, sortedCount);
       }
+
+      for (size_t i = 0; i < kMaxSensors; ++i) {
+        if (!sensors[i].used) {
+          lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
+          continue;
+        }
+
+        lv_obj_clear_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
+        label(rows[i].name, sensors[i].name);
+        if (hasFreshMoisture(sensors[i])) {
+          snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
+          lv_bar_set_value(rows[i].bar, sensors[i].soilMoisturePct, LV_ANIM_OFF);
+        } else {
+          snprintf(text, sizeof(text), "--%%");
+          lv_bar_set_value(rows[i].bar, 0, LV_ANIM_OFF);
+        }
+        label(rows[i].moisture, text);
+        lv_obj_set_style_bg_color(
+            rows[i].box,
+            lv_color_hex(homeSensor == static_cast<int>(i) ? 0x1E3529 : 0x1D2922), 0);
+      }
+
+      if (homeSensor < 0 || homeSensor >= static_cast<int>(kMaxSensors) ||
+          !sensors[homeSensor].used) {
+        label(homeName, count ? "WAITING FOR REPORTS" : "WAITING FOR SENSOR");
+        if (count) {
+          snprintf(text, sizeof(text), "%u %s waiting to report",
+                   static_cast<unsigned>(waiting), waiting == 1 ? "sensor" : "sensors");
+          label(homeMood, text);
+        } else {
+          label(homeMood, "Pair a sensor and I'll keep an eye on it");
+        }
+        label(homeSoil, "--%");
+        label(homeTemp, useFahrenheit ? "--.- F" : "--.- C");
+        label(homeHumidity, "--%");
+        lv_bar_set_value(homeBar, 0, LV_ANIM_OFF);
+        lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+      } else {
+        PlantSensor &home = sensors[homeSensor];
+        label(homeName, home.name);
+        label(homeMood, mood(home));
+        formatSoil(home, text, sizeof(text));
+        label(homeSoil, text);
+        lv_bar_set_value(homeBar, hasFreshMoisture(home) ? home.soilMoisturePct : 0,
+                         LV_ANIM_OFF);
+        formatTemp(home, text, sizeof(text));
+        label(homeTemp, text);
+        formatHumidity(home, text, sizeof(text));
+        label(homeHumidity, text);
+        if (home.seenThisBoot &&
+            (home.fieldFlags & plantlink::SensorHasWaterWarning) && home.waterWarning)
+          lv_obj_clear_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+        else
+          lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+      }
+      break;
     }
-    lv_obj_clear_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
-    if (updateQrPayload[0]) lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(updatePortalInfo, 150, 268);
-    lv_obj_set_width(updatePortalInfo, 196);
-    snprintf(text, sizeof(text),
-             "PHONE SETUP READY\nSSID: %s\nPassword: %s\n\nScan QR. If the captive page does not open, use 192.168.4.1",
-             espplants_update::setupSsid(), espplants_update::setupPassword());
-    label(updatePortalInfo, text);
-  } else {
-    updateQrPayload[0] = '\0';
-    lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(updatePortalInfo, 20, 260);
-    lv_obj_set_width(updatePortalInfo, 326);
-    label(updatePortalInfo,
-          "Tap SET UP / CHANGE WI-FI. Scan the QR when it appears.");
+
+    case Page::All: {
+      snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
+               static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
+      label(allSummary, text);
+
+      size_t sorted[kMaxSensors]{};
+      const size_t sortedCount = buildSortedSlots(sorted);
+      if (!appliedOrderMatches(allAppliedOrder, sorted, sortedCount)) {
+        for (size_t order = 0; order < sortedCount; ++order) {
+          const size_t slot = sorted[order];
+          lv_obj_move_to_index(allRows[slot].box, static_cast<int32_t>(order));
+        }
+        rememberAppliedOrder(allAppliedOrder, sorted, sortedCount);
+      }
+
+      for (size_t i = 0; i < kMaxSensors; ++i) {
+        if (!sensors[i].used) {
+          lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
+          continue;
+        }
+
+        lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
+        label(allRows[i].name, sensors[i].name);
+        if (hasFreshMoisture(sensors[i]))
+          snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
+        else
+          snprintf(text, sizeof(text), "--%%");
+        label(allRows[i].moisture, text);
+
+        if (sensors[i].seenThisBoot &&
+            (sensors[i].fieldFlags & plantlink::SensorHasBattery))
+          snprintf(text, sizeof(text), "%u%%", sensors[i].batteryPct);
+        else
+          snprintf(text, sizeof(text), "--%%");
+        label(allRows[i].battery, text);
+
+        formatLastReport(sensors[i], text, sizeof(text));
+        label(allRows[i].updated, text);
+
+        const bool thirsty =
+            sensors[i].seenThisBoot &&
+            ((sensors[i].fieldFlags & plantlink::SensorHasWaterWarning) &&
+             sensors[i].waterWarning);
+        lv_obj_set_style_bg_color(allRows[i].box,
+                                  lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
+      }
+      break;
+    }
+
+    case Page::Plant: {
+      const bool valid = selectedSensor >= 0 &&
+                         selectedSensor < static_cast<int>(kMaxSensors) &&
+                         sensors[selectedSensor].used;
+      if (!valid) {
+        label(detailSlot, "PLANT --");
+        label(detailName, "NO PLANT SELECTED");
+        label(detailMood, "--");
+        label(detailIeee, "--");
+        label(detailSoil, "--%");
+        label(detailTemp, useFahrenheit ? "--.- F" : "--.- C");
+        label(detailHumidity, "--%");
+        label(detailBattery, "--%");
+        label(detailSignal, "LQI --");
+        label(detailUpdated, "No sensor data yet");
+        lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
+        lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_state(renameButton, LV_STATE_DISABLED);
+        lv_obj_add_state(replaceButton, LV_STATE_DISABLED);
+        lv_obj_add_state(removeButton, LV_STATE_DISABLED);
+      } else {
+        PlantSensor &s = sensors[selectedSensor];
+        snprintf(text, sizeof(text), "PLANT %u",
+                 static_cast<unsigned>(selectedSensor + 1));
+        label(detailSlot, text);
+        label(detailName, s.name);
+        label(detailMood, mood(s));
+
+        char ieee[24]{};
+        plantlink::formatIeee(s.ieee, ieee, sizeof(ieee));
+        if (s.seenThisBoot)
+          snprintf(text, sizeof(text), "%s   short 0x%04X", ieee, s.shortAddress);
+        else
+          snprintf(text, sizeof(text), "%s   waiting for check-in", ieee);
+        label(detailIeee, text);
+
+        formatSoil(s, text, sizeof(text));
+        label(detailSoil, text);
+        lv_bar_set_value(detailBar,
+                         hasFreshMoisture(s) ? s.soilMoisturePct : 0,
+                         LV_ANIM_OFF);
+        formatTemp(s, text, sizeof(text));
+        label(detailTemp, text);
+        formatHumidity(s, text, sizeof(text));
+        label(detailHumidity, text);
+
+        if (s.seenThisBoot &&
+            (s.fieldFlags & plantlink::SensorHasBattery))
+          snprintf(text, sizeof(text), "%u%%", s.batteryPct);
+        else
+          snprintf(text, sizeof(text), "--%%");
+        label(detailBattery, text);
+
+        if (s.seenThisBoot)
+          snprintf(text, sizeof(text), "LQI %u", s.lqi);
+        else
+          snprintf(text, sizeof(text), "LQI --");
+        label(detailSignal, text);
+
+        char updatedText[64]{};
+        if (!s.seenThisBoot || !s.lastSeenMs) {
+          snprintf(updatedText, sizeof(updatedText), "Waiting for this plant to check in");
+        } else {
+          const uint32_t age = (millis() - s.lastSeenMs) / 1000u;
+          if (age < 2)
+            snprintf(updatedText, sizeof(updatedText), "Updated now");
+          else if (age < 60)
+            snprintf(updatedText, sizeof(updatedText), "Updated %lus ago",
+                     static_cast<unsigned long>(age));
+          else
+            snprintf(updatedText, sizeof(updatedText), "Updated %lum ago",
+                     static_cast<unsigned long>(age / 60u));
+        }
+
+        char routeText[64]{};
+        sensor_route_view::format(s.route, infrastructure, millis(),
+                                  h2Online && networkReady, routeText,
+                                  sizeof(routeText));
+        if (routeText[0])
+          snprintf(text, sizeof(text), "%s  |  %s", updatedText, routeText);
+        else
+          snprintf(text, sizeof(text), "%s", updatedText);
+        label(detailUpdated, text);
+
+        if (s.seenThisBoot &&
+            (s.fieldFlags & plantlink::SensorHasWaterWarning) &&
+            s.waterWarning)
+          lv_obj_clear_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+        else
+          lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_state(renameButton, LV_STATE_DISABLED);
+        lv_obj_clear_state(replaceButton, LV_STATE_DISABLED);
+        lv_obj_clear_state(removeButton, LV_STATE_DISABLED);
+      }
+      break;
+    }
+
+    case Page::Settings: {
+      label(settingsDeviceName, deviceName);
+      label(settingsH2, h2Online ? "ONLINE" : "OFFLINE");
+      if (networkReady)
+        snprintf(text, sizeof(text), "READY CH %u | P %u | R %u", zigbeeChannel,
+                 h2SensorCount, h2InfrastructureCount);
+      else if (h2Online)
+        snprintf(text, sizeof(text), "STARTING");
+      else
+        snprintf(text, sizeof(text), "H2 OFFLINE");
+      label(settingsZigbee, text);
+      snprintf(text, sizeof(text), "%u", static_cast<unsigned>(count));
+      label(settingsPlants, text);
+      label(settingsUnit, useFahrenheit ? "°F" : "°C");
+      snprintf(text, sizeof(text), "%s  >", espplants_phrases::themeName(phraseTheme));
+      label(settingsTheme, text);
+      if (permitJoinRemaining)
+        snprintf(text, sizeof(text), "PAIR %us", permitJoinRemaining);
+      else
+        snprintf(text, sizeof(text), "ADD SENSOR");
+      label(settingsPair, text);
+      break;
+    }
+
+    case Page::Advanced: {
+      const size_t repeaterCount = infrastructureCount();
+      const size_t repeaterOnline = onlineInfrastructureCount();
+      snprintf(text, sizeof(text), "%u REPEATERS | %u ONLINE",
+               static_cast<unsigned>(repeaterCount),
+               static_cast<unsigned>(repeaterOnline));
+      label(advancedSummary, text);
+
+      for (size_t i = 0; i < kMaxInfrastructure; ++i) {
+        if (!infrastructure[i].used) {
+          lv_obj_add_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
+          continue;
+        }
+
+        lv_obj_clear_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
+        label(infrastructureRows[i].name, infrastructure[i].name);
+        label(infrastructureRows[i].status,
+              infrastructure[i].online ? "ONLINE" : "OFFLINE");
+        if (infrastructure[i].online)
+          snprintf(text, sizeof(text), "LQI %u", infrastructure[i].lqi);
+        else
+          snprintf(text, sizeof(text), "LQI --");
+        label(infrastructureRows[i].signal, text);
+        lv_obj_set_style_bg_color(
+            infrastructureRows[i].box,
+            lv_color_hex(selectedInfrastructure == static_cast<int>(i) ? 0x1E3529
+                                                                        : 0x1D2922),
+            0);
+      }
+
+      const bool validInfrastructure =
+          selectedInfrastructure >= 0 &&
+          selectedInfrastructure < static_cast<int>(kMaxInfrastructure) &&
+          infrastructure[selectedInfrastructure].used;
+
+      if (validInfrastructure) {
+        InfrastructureNode &node = infrastructure[selectedInfrastructure];
+        char ieee[24]{};
+        plantlink::formatIeee(node.ieee, ieee, sizeof(ieee));
+        if (node.online)
+          snprintf(text, sizeof(text), "%s  |  %s  |  short 0x%04X", node.name,
+                   ieee, node.shortAddress);
+        else
+          snprintf(text, sizeof(text), "%s  |  %s  |  offline", node.name, ieee);
+        label(advancedDetail, text);
+        lv_obj_clear_state(advancedRenameButton, LV_STATE_DISABLED);
+        lv_obj_clear_state(advancedRemoveButton, LV_STATE_DISABLED);
+      } else {
+        label(advancedDetail, repeaterCount ? "Select a repeater to manage it."
+                                           : "No repeaters paired yet.");
+        lv_obj_add_state(advancedRenameButton, LV_STATE_DISABLED);
+        lv_obj_add_state(advancedRemoveButton, LV_STATE_DISABLED);
+      }
+      break;
+    }
   }
 
-  snprintf(text, sizeof(text), "v%s", espplants_update::currentVersion());
-  label(updateCurrentVersion, text);
+  const bool updateOpen = updateModal &&
+                          !lv_obj_has_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
+  if (updateOpen) {
+    if (espplants_update::wifiConnected()) {
+      label(updateWifiState, "CONNECTED");
+    } else if (espplants_update::wifiConfigured() &&
+               espplants_update::wifiReconnectSuppressed()) {
+      label(updateWifiState, "DISCONNECTED");
+    } else if (espplants_update::wifiConfigured()) {
+      label(updateWifiState, "OFFLINE / CONNECTING");
+    } else {
+      label(updateWifiState, "NOT CONFIGURED");
+    }
+    snprintf(text, sizeof(text), "SSID  %s\nIP       %s",
+             espplants_update::wifiSsid(), espplants_update::wifiAddress());
+    label(updateWifiDetail, text);
 
-  if (!h2Online) {
-    label(updateH2Version, "H2 GATEWAY: unavailable");
-  } else if (strncmp(h2BuildId, "ESPPLANTS-H2-", 13) == 0 && h2BuildId[13]) {
-    snprintf(text, sizeof(text), "H2 GATEWAY: v%s", h2BuildId + 13);
-    label(updateH2Version, text);
-  } else if (h2BuildId[0]) {
-    snprintf(text, sizeof(text), "H2 GATEWAY: %s", h2BuildId);
-    label(updateH2Version, text);
-  } else {
-    label(updateH2Version, "H2 GATEWAY: reading version...");
+    const bool wifiBusy =
+        espplants_update::checking() || espplants_update::installing();
+    if (espplants_update::wifiReconnectSuppressed())
+      label(updateDisconnectLabel, "RECONNECT WI-FI");
+    else
+      label(updateDisconnectLabel, "DISCONNECT WI-FI");
+    if ((!espplants_update::wifiConnected() &&
+         !espplants_update::wifiReconnectSuppressed()) ||
+        !espplants_update::wifiConfigured() || wifiBusy)
+      lv_obj_add_state(updateDisconnectButton, LV_STATE_DISABLED);
+    else
+      lv_obj_clear_state(updateDisconnectButton, LV_STATE_DISABLED);
+    if (!espplants_update::wifiConfigured() || wifiBusy)
+      lv_obj_add_state(updateForgetButton, LV_STATE_DISABLED);
+    else
+      lv_obj_clear_state(updateForgetButton, LV_STATE_DISABLED);
+
+    if (espplants_update::setupPortalActive()) {
+      char qr[sizeof(updateQrPayload)]{};
+      snprintf(qr, sizeof(qr), "WIFI:T:WPA;S:%s;P:%s;;",
+               espplants_update::setupSsid(), espplants_update::setupPassword());
+      if (strcmp(updateQrPayload, qr) != 0) {
+        if (renderSetupQr(qr)) {
+          strncpy(updateQrPayload, qr, sizeof(updateQrPayload) - 1);
+          updateQrPayload[sizeof(updateQrPayload) - 1] = '\0';
+          label(updateQrHint, "SCAN TO CONNECT");
+          lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
+        } else {
+          updateQrPayload[0] = '\0';
+          label(updateQrHint, "QR ERROR - JOIN MANUALLY");
+          lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xE2B276), 0);
+        }
+      }
+      lv_obj_clear_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
+      if (updateQrPayload[0])
+        lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+      else
+        lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_pos(updatePortalInfo, 150, 268);
+      lv_obj_set_width(updatePortalInfo, 196);
+      snprintf(text, sizeof(text),
+               "PHONE SETUP READY\nSSID: %s\nPassword: %s\n\nScan QR. If the captive page does not open, use 192.168.4.1",
+               espplants_update::setupSsid(), espplants_update::setupPassword());
+      label(updatePortalInfo, text);
+    } else {
+      updateQrPayload[0] = '\0';
+      lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_pos(updatePortalInfo, 20, 260);
+      lv_obj_set_width(updatePortalInfo, 326);
+      label(updatePortalInfo,
+            "Tap SET UP / CHANGE WI-FI. Scan the QR when it appears.");
+    }
+
+    snprintf(text, sizeof(text), "v%s", espplants_update::currentVersion());
+    label(updateCurrentVersion, text);
+
+    if (!h2Online) {
+      label(updateH2Version, "H2 GATEWAY: unavailable");
+    } else if (strncmp(h2BuildId, "ESPPLANTS-H2-", 13) == 0 && h2BuildId[13]) {
+      snprintf(text, sizeof(text), "H2 GATEWAY: v%s", h2BuildId + 13);
+      label(updateH2Version, text);
+    } else if (h2BuildId[0]) {
+      snprintf(text, sizeof(text), "H2 GATEWAY: %s", h2BuildId);
+      label(updateH2Version, text);
+    } else {
+      label(updateH2Version, "H2 GATEWAY: reading version...");
+    }
+
+    if (strcmp(espplants_update::latestVersion(), "--") == 0) {
+      label(updateLatestVersion, "--");
+    } else {
+      snprintf(text, sizeof(text), "v%s", espplants_update::latestVersion());
+      label(updateLatestVersion, text);
+    }
+    label(updateStatus, espplants_update::statusText());
+
+    const bool updateBusy =
+        espplants_update::checking() || espplants_update::installing();
+    if (espplants_update::checking())
+      label(updateCheckLabel, "CHECKING...");
+    else
+      label(updateCheckLabel, "CHECK NOW");
+    if (!espplants_update::wifiConnected() || updateBusy)
+      lv_obj_add_state(updateCheckButton, LV_STATE_DISABLED);
+    else
+      lv_obj_clear_state(updateCheckButton, LV_STATE_DISABLED);
+
+    if (espplants_update::installing()) {
+      snprintf(text, sizeof(text), "INSTALLING... %d%%",
+               espplants_update::updateProgress());
+      label(updateInstallLabel, text);
+    } else if (espplants_update::updateAvailable()) {
+      label(updateInstallLabel, "INSTALL UPDATE");
+    } else {
+      label(updateInstallLabel, "NO UPDATE READY");
+    }
+    if (!espplants_update::wifiConnected() ||
+        !espplants_update::updateAvailable() || updateBusy)
+      lv_obj_add_state(updateInstallButton, LV_STATE_DISABLED);
+    else
+      lv_obj_clear_state(updateInstallButton, LV_STATE_DISABLED);
   }
 
-  if (strcmp(espplants_update::latestVersion(), "--") == 0) {
-    label(updateLatestVersion, "--");
-  } else {
-    snprintf(text, sizeof(text), "v%s", espplants_update::latestVersion());
-    label(updateLatestVersion, text);
-  }
-  label(updateStatus, espplants_update::statusText());
+  if (pairDialogState != PairDialogState::Hidden) refreshPairDialog();
 
-  const bool updateBusy = espplants_update::checking() || espplants_update::installing();
-  if (espplants_update::checking()) label(updateCheckLabel, "CHECKING...");
-  else label(updateCheckLabel, "CHECK NOW");
-  if (!espplants_update::wifiConnected() || updateBusy)
-    lv_obj_add_state(updateCheckButton, LV_STATE_DISABLED);
-  else
-    lv_obj_clear_state(updateCheckButton, LV_STATE_DISABLED);
-
-  if (espplants_update::installing()) {
-    snprintf(text, sizeof(text), "INSTALLING... %d%%", espplants_update::updateProgress());
-    label(updateInstallLabel, text);
-  } else if (espplants_update::updateAvailable()) {
-    label(updateInstallLabel, "INSTALL UPDATE");
-  } else {
-    label(updateInstallLabel, "NO UPDATE READY");
-  }
-  if (!espplants_update::wifiConnected() || !espplants_update::updateAvailable() || updateBusy)
-    lv_obj_add_state(updateInstallButton, LV_STATE_DISABLED);
-  else
-    lv_obj_clear_state(updateInstallButton, LV_STATE_DISABLED);
-
-  refreshPairDialog();
-
-  lvgl_port_unlock();
+  if (lockedHere) lvgl_port_unlock();
 }
+
 void handleNetworkStatus(const plantlink::Frame &frame) {
   if (frame.payloadLength < 4) return;
   networkReady = frame.payload[0] != 0;
