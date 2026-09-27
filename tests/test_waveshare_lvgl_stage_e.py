@@ -10,9 +10,12 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_alpha48_identity():
-    assert VERSION.read_text(encoding="utf-8").strip() == "0.2.0-alpha.48"
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.48"' in read(BUILD)
+def test_stage_e_or_later_identity():
+    version = VERSION.read_text(encoding="utf-8").strip()
+    assert version.startswith("0.2.0-alpha.")
+    alpha = int(version.rsplit(".", 1)[1])
+    assert alpha >= 48
+    assert f'#define ESP_PLANTS_WAVESHARE_VERSION "{version}"' in read(BUILD)
 
 
 def test_broad_ui_dirty_flag_is_removed():

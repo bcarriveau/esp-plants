@@ -384,6 +384,32 @@ void logLvglMemory(const char *reason) {
 void logLvglMemory(const char *) {}
 #endif
 
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+void logDisplayRuntimeConfig() {
+  lv_disp_t *disp = lv_disp_get_default();
+  lv_disp_drv_t *drv = disp ? disp->driver : nullptr;
+  lv_disp_draw_buf_t *drawBuf = drv ? drv->draw_buf : nullptr;
+  Serial.printf(
+      "[display-runtime] tearing_mode=%d configured_rgb_buffers=%d full_refresh=%d "
+      "direct_mode=%d resolution=%dx%d draw_buf_px=%lu buf1=%p buf2=%p\n",
+      static_cast<int>(LVGL_PORT_AVOID_TEARING_MODE),
+      static_cast<int>(LVGL_PORT_DISP_BUFFER_NUM),
+      drv ? static_cast<int>(drv->full_refresh) : -1,
+      drv ? static_cast<int>(drv->direct_mode) : -1,
+      drv ? static_cast<int>(drv->hor_res) : -1,
+      drv ? static_cast<int>(drv->ver_res) : -1,
+      drawBuf ? static_cast<unsigned long>(drawBuf->size) : 0UL,
+      drawBuf ? static_cast<void *>(drawBuf->buf1) : nullptr,
+      drawBuf ? static_cast<void *>(drawBuf->buf2) : nullptr);
+#if defined(LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE)
+  Serial.printf("[display-runtime] rgb_bounce_buffer_pixels=%lu\n",
+                static_cast<unsigned long>(LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE));
+#endif
+}
+#else
+void logDisplayRuntimeConfig() {}
+#endif
+
 void clearSetupQrCanvas() {
   memset(updateQrCanvasBuffer + kSetupQrPaletteBytes, 0xFF,
          kSetupQrRowBytes * static_cast<size_t>(kSetupQrSize));
@@ -3898,7 +3924,12 @@ void setup() {
 
   Serial.println("[display] initializing Waveshare 800x480...");
   lcd_init();
-  if (lvgl_port_lock(-1)) { buildUi(); lvgl_port_unlock(); }
+  if (lvgl_port_lock(-1)) {
+    logDisplayRuntimeConfig();
+    logLvglMemory("lvgl-init-pre-ui");
+    buildUi();
+    lvgl_port_unlock();
+  }
   Serial.println("[display] ready");
 
   espplants_update::begin();
