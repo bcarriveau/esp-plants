@@ -16,8 +16,8 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_waveshare_identity_and_allocator_policy_are_intentional():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.47"
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.47"' in read(BUILD)
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.48"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.48"' in read(BUILD)
     lv_conf = read(LV_CONF)
     assert "#define LV_MEM_CUSTOM 0" in lv_conf
     assert "#define LV_MEM_SIZE (128U * 1024U)" in lv_conf
@@ -80,9 +80,9 @@ def test_refresh_is_page_local_and_modals_are_gated():
     refresh = function_block(source, "void refreshUi(bool force, bool alreadyInLvglContext)", "void handleNetworkStatus")
     for page in ("Home", "All", "Plant", "Settings", "Advanced"):
         assert f"case Page::{page}:" in refresh
-    assert "const bool updateOpen = updateModal &&" in refresh
-    assert "if (updateOpen)" in refresh
-    assert "if (pairDialogState != PairDialogState::Hidden) refreshPairDialog();" in refresh
+    assert "if (updateModalOpen && (force || dirty.update || intervalElapsed))" in refresh
+    assert "pairDialogState != PairDialogState::Hidden &&" in refresh
+    assert "refreshPairDialog();" in refresh
     show = function_block(source, "void showPage(Page page)", "void navEvent")
     assert "refreshUi(true, true);" in show
 

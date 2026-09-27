@@ -156,7 +156,48 @@ bool networkReady = false;
 bool useFahrenheit = true;
 // Alpha.23 persistent phrase theme selector
 espplants_phrases::Theme phraseTheme = espplants_phrases::Theme::MIXED;
-bool uiDirty = true;
+struct UiDirtyState {
+  bool header = true;
+  bool sensorOrder = true;
+  bool home = true;
+  bool all = true;
+  bool plant = true;
+  bool settings = true;
+  bool advanced = true;
+  bool update = true;
+  bool pair = true;
+};
+
+UiDirtyState dirty;
+bool updateModalOpen = false;
+
+void markSensorRegistryDirty() {
+  dirty.header = true;
+  dirty.sensorOrder = true;
+  dirty.home = true;
+  dirty.all = true;
+  dirty.plant = true;
+  dirty.settings = true;
+}
+
+void markSensorValuesDirty(bool orderMayChange) {
+  if (orderMayChange) dirty.sensorOrder = true;
+  dirty.home = true;
+  dirty.all = true;
+  dirty.plant = true;
+}
+
+void markInfrastructureDirty() {
+  dirty.advanced = true;
+  dirty.plant = true;
+}
+
+void markNetworkStateDirty() {
+  dirty.settings = true;
+  dirty.plant = true;
+  dirty.update = true;
+  dirty.pair = true;
+}
 uint8_t zigbeeChannel = 0;
 uint8_t h2SensorCount = 0;
 uint8_t h2InfrastructureCount = 0;
@@ -168,6 +209,8 @@ int manualHomeSensor = -1;
 uint32_t manualHomeUntilMs = 0;
 char deviceName[kDeviceNameBytes] = "ESP PLANTS";
 Page currentPage = Page::Home;
+size_t sortedSensorSlots[kMaxSensors]{};
+size_t sortedSensorCount = 0;
 
 PairDialogState pairDialogState = PairDialogState::Hidden;
 bool pairInfrastructure = false;
@@ -604,7 +647,7 @@ void clearInfrastructureSlot(size_t slot) {
       }
     }
   }
-  uiDirty = true;
+  markInfrastructureDirty();
 }
 
 size_t registeredCount() {
@@ -664,11 +707,16 @@ size_t buildSortedSlots(size_t out[kMaxSensors]) {
   return count;
 }
 
+void refreshSortedSensorSlots() {
+  if (!dirty.sensorOrder) return;
+  sortedSensorCount = buildSortedSlots(sortedSensorSlots);
+  dirty.sensorOrder = false;
+}
+
 int driestReportedSensor() {
-  size_t sorted[kMaxSensors]{};
-  const size_t count = buildSortedSlots(sorted);
-  if (!count || !hasFreshMoisture(sensors[sorted[0]])) return -1;
-  return static_cast<int>(sorted[0]);
+  refreshSortedSensorSlots();
+  if (!sortedSensorCount || !hasFreshMoisture(sensors[sortedSensorSlots[0]])) return -1;
+  return static_cast<int>(sortedSensorSlots[0]);
 }
 
 int featuredHomeSensor() {
@@ -767,7 +815,7 @@ PlantSensor *findOrCreateSensor(const uint8_t ieee[8], uint16_t shortAddress,
     plantlink::formatIeee(ieee, formatted, sizeof(formatted));
     Serial.printf("[registry] assigned ieee=%s -> slot=%u name=\"%s\"\n",
                   formatted, static_cast<unsigned>(slot + 1), s.name);
-    uiDirty = true;
+    markSensorRegistryDirty();
     return &s;
   }
   Serial.println("[registry] no free plant slots");
@@ -804,7 +852,8 @@ void requestJoin(uint8_t seconds) {
   sendFrame(plantlink::MessageType::PermitJoin, &seconds, 1);
   permitJoinRemaining = seconds;
   permitJoinGuardUntilMs = seconds ? millis() + 3000u : 0;
-  uiDirty = true;
+  dirty.settings = true;
+  dirty.pair = true;
   Serial.printf("[plantlink] permit join requested: %u s\n", seconds);
 }
 
@@ -841,7 +890,7 @@ void clearPlantSlot(size_t slot) {
   if (selectedSensor == static_cast<int>(slot)) selectFirstRegisteredPlant();
 
   Serial.printf("[registry] cleared slot=%u\n", static_cast<unsigned>(slot + 1));
-  uiDirty = true;
+  markSensorRegistryDirty();
 }
 
 PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t shortAddress) {
@@ -862,7 +911,7 @@ PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t s
   selectedSensor = static_cast<int>(slot);
   manualHomeSensor = -1;
   manualHomeUntilMs = 0;
-  uiDirty = true;
+  markSensorRegistryDirty();
 
   char formatted[24]{};
   plantlink::formatIeee(ieee, formatted, sizeof(formatted));
@@ -918,7 +967,6 @@ void showPage(Page page) {
   if (navAll) lv_obj_set_style_bg_color(navAll, page == Page::All ? active : idle, 0);
   if (navPlant) lv_obj_set_style_bg_color(navPlant, page == Page::Plant ? active : idle, 0);
   if (navSettings) lv_obj_set_style_bg_color(navSettings, page == Page::Settings ? active : idle, 0);
-  uiDirty = true;
   refreshUi(true, true);
 
   switch (page) {
@@ -939,8 +987,12 @@ void refreshHomeVirtualList(bool forceValues = false) {
   if (!homeList || !homeVirtualContent || homeVirtualBinding) return;
   homeVirtualBinding = true;
 
+  refreshSortedSensorSlots();
   size_t logicalSlots[kMaxSensors]{};
-  const size_t logicalCount = buildSortedSlots(logicalSlots);
+  const size_t logicalCount = sortedSensorCount;
+  if (logicalCount > 0) {
+    memcpy(logicalSlots, sortedSensorSlots, logicalCount * sizeof(size_t));
+  }
   const bool logicalChanged =
       logicalCount != homeLogicalCount ||
       (logicalCount > 0 &&
@@ -1025,15 +1077,20 @@ void rowEvent(lv_event_t *event) {
   manualHomeSensor = row->boundSlot;
   manualHomeUntilMs = millis() + kHomeManualSelectionMs;
   selectedSensor = row->boundSlot;
-  uiDirty = true;
+  dirty.home = true;
+  dirty.plant = true;
 }
 
 void refreshAllVirtualList(bool forceValues = false) {
   if (!allList || !allVirtualContent || allVirtualBinding) return;
   allVirtualBinding = true;
 
+  refreshSortedSensorSlots();
   size_t logicalSlots[kMaxSensors]{};
-  const size_t logicalCount = buildSortedSlots(logicalSlots);
+  const size_t logicalCount = sortedSensorCount;
+  if (logicalCount > 0) {
+    memcpy(logicalSlots, sortedSensorSlots, logicalCount * sizeof(size_t));
+  }
   const bool logicalChanged =
       logicalCount != allLogicalCount ||
       (logicalCount > 0 &&
@@ -1144,7 +1201,9 @@ void unitEvent(lv_event_t *event) {
   useFahrenheit = !useFahrenheit;
   preferences.putBool("fahrenheit", useFahrenheit);
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
-  uiDirty = true;
+  dirty.home = true;
+  dirty.plant = true;
+  dirty.settings = true;
 }
 
 static const char *kPersonalityMap[] = {
@@ -1230,7 +1289,8 @@ void openUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
   lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(updateModal);
-  uiDirty = true;
+  updateModalOpen = true;
+  dirty.update = true;
   refreshUi(true, true);
   logLvglMemory("network-updates-open");
 }
@@ -1239,12 +1299,13 @@ void closeUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
   if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
+  updateModalOpen = false;
 }
 
 void wifiSetupEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   espplants_update::startWifiSetup();
-  uiDirty = true;
+  dirty.update = true;
 }
 
 void wifiDisconnectEvent(lv_event_t *event) {
@@ -1253,7 +1314,7 @@ void wifiDisconnectEvent(lv_event_t *event) {
     espplants_update::reconnectWifi();
   else
     espplants_update::disconnectWifi();
-  uiDirty = true;
+  dirty.update = true;
 }
 
 void wifiForgetAskEvent(lv_event_t *event) {
@@ -1271,19 +1332,19 @@ void wifiForgetConfirmEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   espplants_update::forgetWifi();
   if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
-  uiDirty = true;
+  dirty.update = true;
 }
 
 void updateCheckEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   espplants_update::requestCheck();
-  uiDirty = true;
+  dirty.update = true;
 }
 
 void updateInstallEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   espplants_update::requestInstall();
-  uiDirty = true;
+  dirty.update = true;
 }
 
 void infrastructureAddEvent(lv_event_t *event) {
@@ -1380,7 +1441,7 @@ void infrastructureRowEvent(lv_event_t *event) {
       row->boundSlot >= static_cast<int>(kMaxInfrastructure) ||
       !infrastructure[row->boundSlot].used) return;
   selectedInfrastructure = row->boundSlot;
-  uiDirty = true;
+  dirty.advanced = true;
 }
 
 void infrastructureRenameEvent(lv_event_t *event) {
@@ -1442,7 +1503,8 @@ void saveRename() {
     label(headerTitle, deviceName);
     label(settingsDeviceName, deviceName);
     Serial.printf("[settings] device name=\"%s\"\n", deviceName);
-    uiDirty = true;
+    dirty.header = true;
+    dirty.settings = true;
     closeRename();
     return;
   }
@@ -1460,7 +1522,7 @@ void saveRename() {
     saveInfrastructureSlot(static_cast<size_t>(selectedInfrastructure));
     Serial.printf("[registry] renamed repeater slot=%u name=\"%s\"\n",
                   static_cast<unsigned>(selectedInfrastructure + 1), node.name);
-    uiDirty = true;
+    markInfrastructureDirty();
     closeRename();
     return;
   }
@@ -1477,7 +1539,9 @@ void saveRename() {
   saveSlot(static_cast<size_t>(selectedSensor));
   Serial.printf("[registry] renamed slot=%u name=\"%s\"\n",
                 static_cast<unsigned>(selectedSensor + 1), s.name);
-  uiDirty = true;
+  dirty.home = true;
+  dirty.all = true;
+  dirty.plant = true;
   closeRename();
 }
 
@@ -1511,7 +1575,9 @@ void renameKeyboardEvent(lv_event_t *event) {
         Serial.printf("[settings] phrase theme=%s\n",
                       espplants_phrases::themeName(phraseTheme));
       }
-      uiDirty=true;
+      dirty.home = true;
+      dirty.plant = true;
+      dirty.settings = true;
       closeRename();
       return;
     }
@@ -1621,7 +1687,8 @@ void closePairDialog() {
   pairInfrastructure = false;
   pairRemovingInfrastructure = false;
   if (pairModal) lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
-  uiDirty = true;
+  dirty.settings = true;
+  dirty.pair = false;
 }
 
 void startPairing(bool replacing, int targetSlot) {
@@ -1636,7 +1703,7 @@ void startPairing(bool replacing, int targetSlot) {
     pairTargetSlot = -1;
     pairFoundSlot = -1;
     pairDialogState = PairDialogState::TimedOut;
-    uiDirty = true;
+    dirty.pair = true;
     return;
   }
 
@@ -1652,7 +1719,7 @@ void startPairing(bool replacing, int targetSlot) {
     permitJoinRemaining = 0;
     pairDialogState = PairDialogState::TimedOut;
   }
-  uiDirty = true;
+  dirty.pair = true;
 }
 
 void startInfrastructurePairing() {
@@ -1666,7 +1733,7 @@ void startInfrastructurePairing() {
 
   if (infrastructureCount() >= kMaxInfrastructure) {
     pairDialogState = PairDialogState::TimedOut;
-    uiDirty = true;
+    dirty.pair = true;
     return;
   }
 
@@ -1677,7 +1744,7 @@ void startInfrastructurePairing() {
     permitJoinRemaining = 0;
     pairDialogState = PairDialogState::TimedOut;
   }
-  uiDirty = true;
+  dirty.pair = true;
 }
 
 void showRemoveConfirm(int targetSlot) {
@@ -1689,7 +1756,7 @@ void showRemoveConfirm(int targetSlot) {
   pairTargetSlot = targetSlot;
   pairFoundSlot = -1;
   pairDialogState = PairDialogState::RemoveConfirm;
-  uiDirty = true;
+  dirty.pair = true;
 }
 
 void showInfrastructureRemoveConfirm(int targetSlot) {
@@ -1702,7 +1769,7 @@ void showInfrastructureRemoveConfirm(int targetSlot) {
   pairFoundSlot = -1;
   pairFoundInfrastructure = -1;
   pairDialogState = PairDialogState::RemoveConfirm;
-  uiDirty = true;
+  dirty.pair = true;
 }
 
 void pairPrimaryEvent(lv_event_t *event) {
@@ -3097,7 +3164,34 @@ void formatSoil(const PlantSensor &s, char *out, size_t size) {
 
 void refreshUi(bool force, bool alreadyInLvglContext) {
   const uint32_t now = millis();
-  if (!force && !uiDirty && now - lastUiRefreshMs < kUiRefreshIntervalMs) return;
+  const bool intervalElapsed = now - lastUiRefreshMs >= kUiRefreshIntervalMs;
+
+  if (currentPage == Page::Home && manualHomeSensor >= 0 &&
+      static_cast<int32_t>(manualHomeUntilMs - now) <= 0) {
+    manualHomeSensor = -1;
+    manualHomeUntilMs = 0;
+    dirty.home = true;
+  }
+
+  bool pageDirty = false;
+  switch (currentPage) {
+    case Page::Home: pageDirty = dirty.home; break;
+    case Page::All: pageDirty = dirty.all; break;
+    case Page::Plant: pageDirty = dirty.plant; break;
+    case Page::Settings: pageDirty = dirty.settings; break;
+    case Page::Advanced: pageDirty = dirty.advanced; break;
+  }
+
+  const bool timedPageWork = intervalElapsed &&
+      (currentPage == Page::All || currentPage == Page::Plant);
+  const bool timedModalWork = intervalElapsed &&
+      (updateModalOpen || pairDialogState != PairDialogState::Hidden);
+  const bool modalDirty =
+      (updateModalOpen && dirty.update) ||
+      (pairDialogState != PairDialogState::Hidden && dirty.pair);
+
+  if (!force && !dirty.header && !pageDirty && !modalDirty &&
+      !timedPageWork && !timedModalWork) return;
 
   bool lockedHere = false;
   if (!alreadyInLvglContext) {
@@ -3105,20 +3199,23 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
     lockedHere = true;
   }
 
-  lastUiRefreshMs = now;
-  uiDirty = false;
+  if (intervalElapsed) lastUiRefreshMs = now;
 
   char text[200]{};
   const size_t count = registeredCount();
   const size_t reporting = reportedCount();
   const size_t waiting = count >= reporting ? count - reporting : 0;
 
-  snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count),
-           count == 1 ? "PLANT" : "PLANTS");
-  label(headerCount, text);
+  if (force || dirty.header) {
+    snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count),
+             count == 1 ? "PLANT" : "PLANTS");
+    label(headerCount, text);
+    dirty.header = false;
+  }
 
   switch (currentPage) {
     case Page::Home: {
+      if (!force && !dirty.home) break;
       const int homeSensor = featuredHomeSensor();
       snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
                static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
@@ -3159,19 +3256,22 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         else
           lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
       }
+      dirty.home = false;
       break;
     }
 
     case Page::All: {
+      if (!force && !dirty.all && !intervalElapsed) break;
       snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
                static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
       label(allSummary, text);
-
       refreshAllVirtualList(true);
+      dirty.all = false;
       break;
     }
 
     case Page::Plant: {
+      if (!force && !dirty.plant && !intervalElapsed) break;
       const bool valid = selectedSensor >= 0 &&
                          selectedSensor < static_cast<int>(kMaxSensors) &&
                          sensors[selectedSensor].used;
@@ -3265,10 +3365,12 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         lv_obj_clear_state(replaceButton, LV_STATE_DISABLED);
         lv_obj_clear_state(removeButton, LV_STATE_DISABLED);
       }
+      dirty.plant = false;
       break;
     }
 
     case Page::Settings: {
+      if (!force && !dirty.settings) break;
       label(settingsDeviceName, deviceName);
       label(settingsH2, h2Online ? "ONLINE" : "OFFLINE");
       if (networkReady)
@@ -3289,10 +3391,12 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
       else
         snprintf(text, sizeof(text), "ADD SENSOR");
       label(settingsPair, text);
+      dirty.settings = false;
       break;
     }
 
     case Page::Advanced: {
+      if (!force && !dirty.advanced) break;
       const size_t repeaterCount = infrastructureCount();
       const size_t repeaterOnline = onlineInfrastructureCount();
       snprintf(text, sizeof(text), "%u REPEATERS | %u ONLINE",
@@ -3325,13 +3429,12 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         lv_obj_add_state(advancedRenameButton, LV_STATE_DISABLED);
         lv_obj_add_state(advancedRemoveButton, LV_STATE_DISABLED);
       }
+      dirty.advanced = false;
       break;
     }
   }
 
-  const bool updateOpen = updateModal &&
-                          !lv_obj_has_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
-  if (updateOpen) {
+  if (updateModalOpen && (force || dirty.update || intervalElapsed)) {
     if (espplants_update::wifiConnected()) {
       label(updateWifiState, "CONNECTED");
     } else if (espplants_update::wifiConfigured() &&
@@ -3448,15 +3551,28 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
       lv_obj_add_state(updateInstallButton, LV_STATE_DISABLED);
     else
       lv_obj_clear_state(updateInstallButton, LV_STATE_DISABLED);
+
+    dirty.update = false;
   }
 
-  if (pairDialogState != PairDialogState::Hidden) refreshPairDialog();
+  if (pairDialogState != PairDialogState::Hidden &&
+      (force || dirty.pair || intervalElapsed)) {
+    refreshPairDialog();
+    dirty.pair = false;
+  }
 
   if (lockedHere) lvgl_port_unlock();
 }
 
 void handleNetworkStatus(const plantlink::Frame &frame) {
   if (frame.payloadLength < 4) return;
+
+  const bool previousNetworkReady = networkReady;
+  const uint8_t previousChannel = zigbeeChannel;
+  const uint8_t previousSensorCount = h2SensorCount;
+  const uint8_t previousInfrastructureCount = h2InfrastructureCount;
+  const uint8_t previousPermitJoin = permitJoinRemaining;
+
   networkReady = frame.payload[0] != 0;
   zigbeeChannel = frame.payload[1];
   h2SensorCount = frame.payload[2];
@@ -3474,7 +3590,19 @@ void handleNetworkStatus(const plantlink::Frame &frame) {
     Serial.println("[plantlink] ignored stale permit-join=0 while awaiting H2 acknowledgement");
   }
   h2InfrastructureCount = frame.payloadLength >= 5 ? frame.payload[4] : 0;
-  uiDirty = true;
+
+  if (networkReady != previousNetworkReady) {
+    dirty.plant = true;
+    dirty.pair = true;
+  }
+  if (networkReady != previousNetworkReady ||
+      zigbeeChannel != previousChannel ||
+      h2SensorCount != previousSensorCount ||
+      h2InfrastructureCount != previousInfrastructureCount ||
+      permitJoinRemaining != previousPermitJoin) {
+    dirty.settings = true;
+  }
+  if (permitJoinRemaining != previousPermitJoin) dirty.pair = true;
 }
 
 PlantSensor *acceptPairingSensor(const uint8_t ieee[8], uint16_t shortAddress,
@@ -3507,7 +3635,8 @@ PlantSensor *acceptPairingSensor(const uint8_t ieee[8], uint16_t shortAddress,
   selectedSensor = static_cast<int>(slot);
   pairFoundSlot = static_cast<int>(slot);
   pairDialogState = PairDialogState::Found;
-  uiDirty = true;
+  dirty.pair = true;
+  dirty.plant = true;
   if (slotOut) *slotOut = slot;
   return s;
 }
@@ -3540,7 +3669,8 @@ void handleInfrastructureReport(const plantlink::Frame &frame) {
     pairDialogState = PairDialogState::Found;
   }
 
-  uiDirty = true;
+  markInfrastructureDirty();
+  if (pairDialogState != PairDialogState::Hidden) dirty.pair = true;
 }
 
 void handleDeviceJoined(const plantlink::Frame &frame) {
@@ -3566,7 +3696,7 @@ void handleDeviceJoined(const plantlink::Frame &frame) {
   s->shortAddress = shortAddress;
   Serial.printf("[zigbee] device seen: %s short=0x%04X slot=%u\n", ieee,
                 shortAddress, static_cast<unsigned>(slot + 1));
-  uiDirty = true;
+  dirty.plant = true;
 }
 
 void handleDeviceLeft(const plantlink::Frame &frame) {
@@ -3585,7 +3715,7 @@ void handleDeviceLeft(const plantlink::Frame &frame) {
       node->shortAddress = 0xffff;
       Serial.printf("[zigbee] repeater left: %s slot=%u now offline\n",
                     ieee, static_cast<unsigned>(infrastructureSlot + 1));
-      uiDirty = true;
+      markInfrastructureDirty();
       return;
     }
 
@@ -3599,7 +3729,7 @@ void handleDeviceLeft(const plantlink::Frame &frame) {
   s->shortAddress = 0xffff;
   Serial.printf("[zigbee] registered sensor left: %s slot=%u now waiting\n",
                 ieee, static_cast<unsigned>(slot + 1));
-  uiDirty = true;
+  markSensorValuesDirty(true);
 }
 
 void handleSensorReport(const plantlink::Frame &frame) {
@@ -3610,7 +3740,7 @@ void handleSensorReport(const plantlink::Frame &frame) {
   PlantSensor *s = findSensor(report.ieee, &slot);
   if (frame.flags & plantlink::FlagRouteOnly) {
     if (s && report.fieldFlags == 0 && s->route.update(report)) {
-      uiDirty = true;
+      dirty.plant = true;
     }
     return;
   }
@@ -3622,6 +3752,10 @@ void handleSensorReport(const plantlink::Frame &frame) {
     Serial.printf("[sensor] ignored report from unregistered ieee=%s\n", ieee);
     return;
   }
+
+  const bool wasSeenThisBoot = s->seenThisBoot;
+  const bool hadFreshMoisture = hasFreshMoisture(*s);
+  const uint8_t previousSoilMoisture = s->soilMoisturePct;
 
   s->seenThisBoot = true;
   s->route.update(report);
@@ -3649,7 +3783,12 @@ void handleSensorReport(const plantlink::Frame &frame) {
   s->lqi = report.lqi;
   s->rssi = report.rssiDbm;
   s->lastSeenMs = millis();
-  uiDirty = true;
+
+  const bool orderMayChange =
+      !wasSeenThisBoot ||
+      (moistureReported &&
+       (!hadFreshMoisture || previousSoilMoisture != report.soilMoisturePct));
+  markSensorValuesDirty(orderMayChange);
 
   char ieee[24]{}; plantlink::formatIeee(report.ieee, ieee, sizeof(ieee));
   Serial.printf("[sensor] slot=%u name=\"%s\" %s", static_cast<unsigned>(slot + 1), s->name, ieee);
@@ -3668,12 +3807,15 @@ void handleSensorReport(const plantlink::Frame &frame) {
 
 void clearRoutes() {
   for (auto &sensor : sensors) sensor.route = {};
-  uiDirty = true;
+  dirty.plant = true;
 }
 
 void handleFrame(const plantlink::Frame &frame) {
   lastH2RxMs = millis();
-  if (!h2Online) { h2Online = true; uiDirty = true; }
+  if (!h2Online) {
+    h2Online = true;
+    markNetworkStateDirty();
+  }
   switch (frame.type) {
     case plantlink::MessageType::Heartbeat:
       if (frame.payloadLength == 8) {
@@ -3690,7 +3832,7 @@ void handleFrame(const plantlink::Frame &frame) {
       strncpy(h2BuildId, build, sizeof(h2BuildId) - 1);
       h2BuildId[sizeof(h2BuildId) - 1] = '\0';
       Serial.printf("[plantlink] H2 hello: %s\n", build);
-      uiDirty = true;
+      dirty.update = true;
       break;
     }
     case plantlink::MessageType::NetworkStatus: handleNetworkStatus(frame); break;
@@ -3711,7 +3853,10 @@ void servicePlantLink() {
     sendHello();
   }
   if (h2Online && now - lastH2RxMs > kLinkTimeoutMs) {
-    h2Online = false; networkReady = false; permitJoinRemaining = 0; uiDirty = true;
+    h2Online = false;
+    networkReady = false;
+    permitJoinRemaining = 0;
+    markNetworkStateDirty();
     clearRoutes();
     haveH2Uptime = false;
   }

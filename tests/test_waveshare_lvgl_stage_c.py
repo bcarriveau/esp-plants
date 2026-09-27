@@ -15,9 +15,9 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_stage_c_identity_and_platformio_are_preserved():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.47"
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.48"
     source = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.47"' in source
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.48"' in source
     pio = read(PIO)
     assert "upload_port = COM11" in pio
     assert "lvgl/lvgl@8.3.11" in pio
@@ -60,7 +60,8 @@ def test_home_virtual_content_height_and_scroll_binding_are_explicit():
     assert "firstVisible > 0 ? firstVisible - 1 : 0" in helper
     assert "clampScrollY" in helper
     refresh = function_block(source, "void refreshHomeVirtualList", "void homeListScrollEvent")
-    assert "buildSortedSlots(logicalSlots)" in refresh
+    assert "refreshSortedSensorSlots();" in refresh
+    assert "const size_t logicalCount = sortedSensorCount;" in refresh
     assert "lv_obj_set_height(homeVirtualContent" in refresh
     assert "lv_obj_get_scroll_y(homeList)" in refresh
     assert "lv_obj_scroll_to_y(homeList, clamped, LV_ANIM_OFF)" in refresh
@@ -93,7 +94,8 @@ def test_home_logical_source_capacity_sort_and_freshness_are_unchanged():
     source = read(MAIN)
     assert "constexpr size_t kMaxSensors = 32;" in source
     assert "PlantSensor sensors[kMaxSensors];" in source
-    assert "const size_t logicalCount = buildSortedSlots(logicalSlots);" in source
+    assert "sortedSensorCount = buildSortedSlots(sortedSensorSlots);" in source
+    assert "if (!dirty.sensorOrder) return;" in source
     assert "sensor.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture" in source
     assert 'snprintf(out, size, "WAITING")' in source
 

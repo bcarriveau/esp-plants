@@ -1,5 +1,5 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.47"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.48"
 #define ESP_PLANTS_WAVESHARE_7_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
 #ifdef ESP_PLANTS_WAVESHARE_7B
@@ -12,7 +12,7 @@
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Virtualize the All Sensors list with a fixed seven-row pool and explicit logical scroll height while preserving 32-sensor data capacity, sorting, freshness, battery, last-report age, and thirsty highlighting."
+  "Replace broad UI dirty refreshes with page-specific dirty state, cached sensor ordering, and time-only refresh work while preserving virtual lists and existing behavior."
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif
