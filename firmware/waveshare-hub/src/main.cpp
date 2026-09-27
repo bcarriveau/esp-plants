@@ -234,6 +234,7 @@ lv_obj_t *settingsPage = nullptr;
 lv_obj_t *advancedPage = nullptr;
 lv_obj_t *headerTitle = nullptr;
 lv_obj_t *headerCount = nullptr;
+lv_obj_t *headerUpdateButton = nullptr;
 lv_obj_t *navHome = nullptr;
 lv_obj_t *navAll = nullptr;
 lv_obj_t *navPlant = nullptr;
@@ -311,6 +312,8 @@ lv_obj_t *updateForgetButton = nullptr;
 lv_obj_t *wifiForgetConfirm = nullptr;
 lv_obj_t *updateInstallButton = nullptr;
 lv_obj_t *updateInstallLabel = nullptr;
+lv_obj_t *releaseNotesModal = nullptr;
+lv_obj_t *releaseNotesLabel = nullptr;
 lv_obj_t *advancedSummary = nullptr;
 lv_obj_t *advancedDetail = nullptr;
 lv_obj_t *advancedRenameButton = nullptr;
@@ -1410,6 +1413,8 @@ void advancedBackEvent(lv_event_t *event) {
   showPage(Page::Settings);
 }
 
+void closeReleaseNotes();
+
 void openUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
   lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
@@ -1423,6 +1428,7 @@ void openUpdateEvent(lv_event_t *event) {
 void closeUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
   if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
+  closeReleaseNotes();
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
   updateModalOpen = false;
 }
@@ -1460,8 +1466,33 @@ void wifiForgetConfirmEvent(lv_event_t *event) {
   dirty.update = true;
 }
 
+void closeReleaseNotes() {
+  if (releaseNotesModal) lv_obj_add_flag(releaseNotesModal, LV_OBJ_FLAG_HIDDEN);
+}
+
+void releaseNotesBackEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  closeReleaseNotes();
+  dirty.update = true;
+}
+
+void releaseNotesCheckEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  closeReleaseNotes();
+  espplants_update::requestCheck();
+  dirty.update = true;
+}
+
 void updateCheckEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (espplants_update::updateAvailable() &&
+      espplants_update::releaseNotesAvailable() && releaseNotesModal &&
+      !espplants_update::checking()) {
+    label(releaseNotesLabel, espplants_update::releaseNotes());
+    lv_obj_clear_flag(releaseNotesModal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(releaseNotesModal);
+    return;
+  }
   espplants_update::requestCheck();
   dirty.update = true;
 }
@@ -2101,6 +2132,20 @@ void buildHeader(lv_obj_t *screen) {
   lv_obj_set_style_text_color(tag, lv_color_hex(0x9DB5A5), 0);
   lv_obj_set_pos(tag, 24, 43);
 
+  headerUpdateButton = lv_btn_create(header);
+  lv_obj_set_size(headerUpdateButton, 104, 34);
+  lv_obj_set_pos(headerUpdateButton, 548, 16);
+  lv_obj_set_style_radius(headerUpdateButton, 10, 0);
+  lv_obj_set_style_bg_color(headerUpdateButton, lv_color_hex(0xB86E2F), 0);
+  lv_obj_set_style_shadow_width(headerUpdateButton, 0, 0);
+  lv_obj_add_event_cb(headerUpdateButton, openUpdateEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *updateLabel = lv_label_create(headerUpdateButton);
+  lv_label_set_text(updateLabel, "UPDATE");
+  lv_obj_set_style_text_font(updateLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(updateLabel, lv_color_hex(0xFFF4E6), 0);
+  lv_obj_center(updateLabel);
+  lv_obj_add_flag(headerUpdateButton, LV_OBJ_FLAG_HIDDEN);
+
   headerCount = lv_label_create(header);
   lv_label_set_text(headerCount, "0 PLANTS");
   lv_obj_set_style_text_font(headerCount, &lv_font_montserrat_18, 0);
@@ -2143,7 +2188,7 @@ void buildHome(lv_obj_t *screen) {
   homeMood = lv_label_create(featured);
   lv_label_set_text(homeMood, "Pair a sensor and I'll keep an eye on it");
   lv_obj_set_style_text_font(homeMood, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(homeMood, lv_color_hex(0xA5C3AD), 0);
+  lv_obj_set_style_text_color(homeMood, lv_color_hex(0xCBE6D2), 0);
   lv_obj_set_pos(homeMood, 24, 82);
   lv_obj_set_width(homeMood, 445);
   lv_label_set_long_mode(homeMood, LV_LABEL_LONG_WRAP);
@@ -2380,7 +2425,7 @@ void buildPlant(lv_obj_t *screen) {
 
   detailMood = lv_label_create(p);
   lv_obj_set_style_text_font(detailMood, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(detailMood, lv_color_hex(0xA5C3AD), 0);
+  lv_obj_set_style_text_color(detailMood, lv_color_hex(0xCBE6D2), 0);
   lv_obj_set_pos(detailMood, 24, 80);
 
   detailIeee = lv_label_create(p);
@@ -3056,6 +3101,66 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_height(note, 50);
   lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 
+  releaseNotesModal = lv_obj_create(updateModal);
+  lv_obj_set_pos(releaseNotesModal, 0, 0);
+  lv_obj_set_size(releaseNotesModal, 800, 480);
+  lv_obj_set_style_radius(releaseNotesModal, 0, 0);
+  lv_obj_set_style_border_width(releaseNotesModal, 0, 0);
+  lv_obj_set_style_bg_color(releaseNotesModal, lv_color_hex(0x101814), 0);
+  lv_obj_set_style_pad_all(releaseNotesModal, 0, 0);
+  lv_obj_clear_flag(releaseNotesModal, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *notesTop = lv_obj_create(releaseNotesModal);
+  lv_obj_set_pos(notesTop, 0, 0);
+  lv_obj_set_size(notesTop, 800, 70);
+  lv_obj_set_style_radius(notesTop, 0, 0);
+  lv_obj_set_style_border_width(notesTop, 0, 0);
+  lv_obj_set_style_bg_color(notesTop, lv_color_hex(0x0C2518), 0);
+  lv_obj_set_style_pad_all(notesTop, 0, 0);
+  lv_obj_clear_flag(notesTop, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *notesTitle = lv_label_create(notesTop);
+  lv_label_set_text(notesTitle, "RELEASE NOTES");
+  lv_obj_set_style_text_font(notesTitle, &lv_font_montserrat_28, 0);
+  lv_obj_set_style_text_color(notesTitle, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_pos(notesTitle, 22, 18);
+
+  lv_obj_t *notesBack = lv_btn_create(notesTop);
+  lv_obj_set_size(notesBack, 94, 42);
+  lv_obj_set_pos(notesBack, 684, 14);
+  lv_obj_set_style_radius(notesBack, 11, 0);
+  lv_obj_set_style_bg_color(notesBack, lv_color_hex(0x233029), 0);
+  lv_obj_add_event_cb(notesBack, releaseNotesBackEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *notesBackLabel = lv_label_create(notesBack);
+  lv_label_set_text(notesBackLabel, "BACK");
+  lv_obj_set_style_text_font(notesBackLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(notesBackLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(notesBackLabel);
+
+  lv_obj_t *notesScroll = card(releaseNotesModal, 18, 82, 764, 300);
+  lv_obj_set_style_pad_all(notesScroll, 18, 0);
+  lv_obj_set_scroll_dir(notesScroll, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(notesScroll, LV_SCROLLBAR_MODE_AUTO);
+  releaseNotesLabel = lv_label_create(notesScroll);
+  lv_label_set_text(releaseNotesLabel, "");
+  lv_obj_set_width(releaseNotesLabel, 724);
+  lv_obj_set_style_text_font(releaseNotesLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(releaseNotesLabel, lv_color_hex(0xD1DED5), 0);
+  lv_label_set_long_mode(releaseNotesLabel, LV_LABEL_LONG_WRAP);
+
+  lv_obj_t *notesCheck = lv_btn_create(releaseNotesModal);
+  lv_obj_set_size(notesCheck, 180, 48);
+  lv_obj_set_pos(notesCheck, 602, 400);
+  lv_obj_set_style_radius(notesCheck, 11, 0);
+  lv_obj_set_style_bg_color(notesCheck, lv_color_hex(0x244F39), 0);
+  lv_obj_add_event_cb(notesCheck, releaseNotesCheckEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_t *notesCheckLabel = lv_label_create(notesCheck);
+  lv_label_set_text(notesCheckLabel, "CHECK AGAIN");
+  lv_obj_set_style_text_font(notesCheckLabel, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(notesCheckLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(notesCheckLabel);
+  lv_obj_add_flag(releaseNotesModal, LV_OBJ_FLAG_HIDDEN);
+
   wifiForgetConfirm = lv_obj_create(updateModal);
   lv_obj_set_pos(wifiForgetConfirm, 180, 120);
   lv_obj_set_size(wifiForgetConfirm, 440, 240);
@@ -3151,6 +3256,10 @@ void buildRename(lv_obj_t *screen) {
   lv_obj_set_style_border_color(renameInput, lv_color_hex(0x3F7A4E), 0);
   lv_obj_set_style_bg_color(renameInput, lv_color_hex(0x131C17), 0);
   lv_obj_set_style_text_color(renameInput, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_style_border_width(renameInput, 3, LV_PART_CURSOR);
+  lv_obj_set_style_border_color(renameInput, lv_color_hex(0xF2C66D), LV_PART_CURSOR);
+  lv_obj_set_style_bg_color(renameInput, lv_color_hex(0xF2C66D), LV_PART_CURSOR);
+  lv_obj_set_style_bg_opa(renameInput, LV_OPA_COVER, LV_PART_CURSOR);
 
   renameKeyboard = lv_btnmatrix_create(renameModal);
   lv_obj_set_pos(renameKeyboard, 18, 158);
@@ -3346,6 +3455,12 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
     snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count),
              count == 1 ? "PLANT" : "PLANTS");
     label(headerCount, text);
+    if (headerUpdateButton) {
+      if (espplants_update::updateAvailable())
+        lv_obj_clear_flag(headerUpdateButton, LV_OBJ_FLAG_HIDDEN);
+      else
+        lv_obj_add_flag(headerUpdateButton, LV_OBJ_FLAG_HIDDEN);
+    }
     dirty.header = false;
   }
 
@@ -3661,11 +3776,22 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
       label(updateLatestVersion, text);
     }
     label(updateStatus, espplants_update::statusText());
+    const bool actionableUpdate = espplants_update::updateAvailable();
+    const bool h2OnlyVisual = actionableUpdate &&
+        strstr(espplants_update::statusText(), "H2 update available") != nullptr;
+    lv_obj_set_style_text_color(updateStatus,
+        actionableUpdate ? lv_color_hex(0xF2C66D) : lv_color_hex(0xA5C3AD), 0);
+    lv_obj_set_style_text_color(updateLatestVersion,
+        actionableUpdate && !h2OnlyVisual ? lv_color_hex(0xF2C66D) : lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(updateH2Version,
+        h2OnlyVisual ? lv_color_hex(0xF2C66D) : lv_color_hex(0x9DB5A5), 0);
 
     const bool updateBusy =
         espplants_update::checking() || espplants_update::installing();
     if (espplants_update::checking())
       label(updateCheckLabel, "CHECKING...");
+    else if (actionableUpdate && espplants_update::releaseNotesAvailable())
+      label(updateCheckLabel, "RELEASE NOTES");
     else
       label(updateCheckLabel, "CHECK NOW");
     if (!espplants_update::wifiConnected() || updateBusy)
@@ -4054,7 +4180,14 @@ void setup() {
 
 void loop() {
   servicePlantLink();
+  static bool lastActionableUpdate = false;
   espplants_update::service();
+  const bool actionableUpdate = espplants_update::updateAvailable();
+  if (actionableUpdate != lastActionableUpdate) {
+    lastActionableUpdate = actionableUpdate;
+    dirty.header = true;
+    dirty.update = true;
+  }
   refreshUi();
   serviceRuntimeTelemetry();
   delay(2);

@@ -46,6 +46,8 @@ constexpr uint32_t kPortalConnectTimeoutMs = 20UL * 1000UL;
 constexpr uint32_t kPortalSuccessHoldMs = 10UL * 1000UL;
 // Match the proven Aircraft Radar network/update timing. Automatic release
 // checks are deliberately kept out of the noisy boot/network-settle window.
+constexpr size_t kMaxReleaseNotesBytes = 4096;
+
 constexpr uint32_t kInitialAutoCheckDelayMs = 5UL * 60UL * 1000UL;
 constexpr uint32_t kTimeSyncRetryMs = 15UL * 1000UL;
 constexpr uint32_t kTimePersistIntervalSeconds = 6UL * 60UL * 60UL;
@@ -145,8 +147,26 @@ char setupSsidText[33] = "--";
 char setupPasswordText[33] = "--";
 char latestVersionText[32] = "--";
 char statusTextBuffer[160] = "Wi-Fi not configured";
+char *releaseNotesText = nullptr;
 
 espplants_ota_installer::Release pendingRelease{};
+
+void clearReleaseNotes() {
+  if (releaseNotesText) heap_caps_free(releaseNotesText);
+  releaseNotesText = nullptr;
+}
+
+void storeReleaseNotes(const char *notes) {
+  clearReleaseNotes();
+  if (!notes || !notes[0]) return;
+  const size_t sourceLength = strlen(notes);
+  const size_t length = sourceLength > kMaxReleaseNotesBytes ? kMaxReleaseNotesBytes : sourceLength;
+  releaseNotesText = static_cast<char *>(heap_caps_malloc(
+      length + 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!releaseNotesText) return;
+  memcpy(releaseNotesText, notes, length);
+  releaseNotesText[length] = 0;
+}
 
 volatile bool setupPortalRunning = false;
 bool portalConnectionPending = false;
@@ -1173,6 +1193,7 @@ bool checkGithubRelease() {
   hasUpdate = false;
   h2OnlyUpdate = false;
   pendingRelease = espplants_ota_installer::Release{};
+  clearReleaseNotes();
 
   PsramText releasesBody;
   int code = 0;
@@ -1206,6 +1227,7 @@ bool checkGithubRelease() {
   bool haveBestRelease = false;
   espplants_ota_installer::Release bestRelease{};
   String bestVersion;
+  const char *bestReleaseNotes = nullptr;
 
   for (JsonObject githubRelease : releases.as<JsonArray>()) {
     if (githubRelease["draft"] | false) continue;
@@ -1260,11 +1282,13 @@ bool checkGithubRelease() {
       haveBestRelease = true;
       bestRelease = candidate;
       bestVersion = candidateVersion;
+      bestReleaseNotes = githubRelease["body"] | "";
     }
   }
 
   if (haveBestRelease) {
     pendingRelease = bestRelease;
+    storeReleaseNotes(bestReleaseNotes);
     snprintf(latestVersionText, sizeof(latestVersionText), "%s", bestVersion.c_str());
     const int comparison =
         compareVersions(String(ESP_PLANTS_WAVESHARE_VERSION), bestVersion);
@@ -1782,6 +1806,8 @@ const char *setupPassword() { return setupPasswordText; }
 bool checking() { return checkTaskRunning; }
 bool installing() { return installTaskRunning; }
 bool updateAvailable() { return hasUpdate; }
+bool releaseNotesAvailable() { return releaseNotesText && releaseNotesText[0]; }
+const char *releaseNotes() { return releaseNotesText ? releaseNotesText : ""; }
 int updateProgress() { return installProgressPct; }
 const char *currentVersion() { return ESP_PLANTS_WAVESHARE_VERSION; }
 const char *latestVersion() { return latestVersionText; }

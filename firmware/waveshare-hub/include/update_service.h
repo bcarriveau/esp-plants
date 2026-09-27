@@ -26,6 +26,8 @@ const char *setupPassword();
 bool checking();
 bool installing();
 bool updateAvailable();
+bool releaseNotesAvailable();
+const char *releaseNotes();
 int updateProgress();
 const char *currentVersion();
 const char *latestVersion();
