@@ -7,7 +7,7 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_alpha29_replaces_temporary_topology_dump_with_last_hop_resolution():
+def test_alpha30_keeps_last_hop_resolution_and_debounces_repeater_offline_state():
     main = read("firmware/m5-h2-zigbee/src/main.cpp")
     route = read("firmware/m5-h2-zigbee/include/sensor_route.h")
 
@@ -36,6 +36,22 @@ def test_alpha29_replaces_temporary_topology_dump_with_last_hop_resolution():
     assert "Two routers with the same current LQI are ambiguous. Never guess." in route
 
 
+
+def test_repeater_offline_requires_a_sustained_neighbor_table_absence():
+    main = read("firmware/m5-h2-zigbee/src/main.cpp")
+    assert "constexpr uint32_t kInfrastructureOfflineTimeoutMs = 45000;" in main
+
+    service = main.split("void serviceInfrastructureRegistry()", 1)[1].split(
+        "void handlePlantFrame", 1
+    )[0]
+    pre_scan = service.split("esp_zb_nwk_info_iterator_t iterator", 1)[0]
+    assert "seenThisScan" in service
+    assert "infrastructure[i].online = false" not in pre_scan
+    assert "now - node.lastSeenMs >= kInfrastructureOfflineTimeoutMs" in service
+    assert "node.online = false;" in service
+    assert "sendInfrastructureReport(node);" in service
+
+
 def test_route_state_is_transient_and_direct_is_silent():
     main = read("firmware/m5-h2-zigbee/src/main.cpp")
     view = read("firmware/waveshare-hub/include/sensor_route_view.h")
@@ -52,6 +68,6 @@ def test_firmware_versions_advance_independently():
     h2 = read("firmware/m5-h2-zigbee/include/build_version.h")
     ws = read("firmware/waveshare-hub/include/build_version.h")
     root_version = read("VERSION").strip()
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.29"' in h2
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.42"' in ws
-    assert root_version == "0.2.0-alpha.42"
+    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.30"' in h2
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.43"' in ws
+    assert root_version == "0.2.0-alpha.43"

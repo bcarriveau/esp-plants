@@ -42,3 +42,57 @@ def test_topology_refresh_cannot_refresh_measurements_or_pair_sensors():
     for record in ("PersistedPlant", "PersistedInfrastructure"):
         fields = source.split(f"struct {record} {{", 1)[1].split("};", 1)[0]
         assert "route" not in fields.lower()
+
+def test_advanced_zigbee_layout_has_explicit_columns_and_bottom_clearance():
+    source = (ROOT / "firmware/waveshare-hub/src/main.cpp").read_text(encoding="utf-8")
+    advanced = source.split("void buildAdvanced(", 1)[1].split("void buildNav", 1)[0]
+
+    # The Advanced card is 772x334 at screen (14,76). Explicit zero padding makes
+    # every child bound deterministic instead of relying on inherited theme padding.
+    assert "lv_obj_set_style_pad_all(p, 0, 0);" in advanced
+
+    # Headers are independent labels aligned to the row columns.
+    for text in (
+        'lv_obj_set_pos(repeaterHead, 20, 76);',
+        'lv_obj_set_pos(statusHead, 448, 76);',
+        'lv_obj_set_pos(signalHead, 588, 76);',
+        'lv_obj_set_size(list, 752, 150);',
+        'lv_obj_set_pos(advancedDetail, 18, 263);',
+        'lv_obj_set_width(advancedDetail, 440);',
+        'lv_obj_set_size(advancedRenameButton, 126, 42);',
+        'lv_obj_set_pos(advancedRenameButton, 478, 255);',
+        'lv_obj_set_size(advancedRemoveButton, 126, 42);',
+        'lv_obj_set_pos(advancedRemoveButton, 616, 255);',
+    ):
+        assert text in advanced
+
+    card_w, card_h = 772, 334
+    # Child rectangles: x, y, w, h. Text headers use conservative 18 px height.
+    rects = {
+        "back": (530, 12, 92, 42),
+        "add": (632, 12, 118, 42),
+        "repeater_head": (20, 76, 390, 18),
+        "status_head": (448, 76, 110, 18),
+        "signal_head": (588, 76, 145, 18),
+        "list": (10, 96, 752, 150),
+        "detail": (18, 263, 440, 18),
+        "rename": (478, 255, 126, 42),
+        "remove": (616, 255, 126, 42),
+    }
+    for name, (x, y, w, h) in rects.items():
+        assert x >= 0 and y >= 0, name
+        assert x + w <= card_w, name
+        assert y + h <= card_h, name
+
+    # List clears the management row; management controls clear each other.
+    assert 96 + 150 < 255
+    assert 18 + 440 < 478
+    assert 478 + 126 < 616
+
+    # Card ends at screen y=410 and the locked bottom navigation starts at y=422.
+    assert 66 + 10 + card_h == 410
+    assert 410 < 422
+    # Lowest management control ends at screen y=373, leaving 49 px before nav.
+    assert 66 + 10 + 255 + 42 == 373
+    assert 373 < 422
+

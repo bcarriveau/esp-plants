@@ -31,6 +31,7 @@ constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kCapturedApsBytes = 128;
 constexpr uint32_t kStatusIntervalMs = 1500;
 constexpr uint32_t kInfrastructureScanIntervalMs = 3000;
+constexpr uint32_t kInfrastructureOfflineTimeoutMs = 45000;
 constexpr uint32_t kRouterJoinSettleMs = 15000;
 constexpr uint32_t kRouterJoinActivityFreshMs = kInfrastructureScanIntervalMs + 1500;
 constexpr uint8_t kCoordinatorMaxChildren = 48;
@@ -643,9 +644,9 @@ void serviceInfrastructureRegistry() {
   lastInfrastructureScanMs = now;
 
   bool wasOnline[kMaxInfrastructure]{};
+  bool seenThisScan[kMaxInfrastructure]{};
   for (size_t i = 0; i < kMaxInfrastructure; ++i) {
     wasOnline[i] = infrastructure[i].used && infrastructure[i].online;
-    if (infrastructure[i].used) infrastructure[i].online = false;
   }
 
   esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
@@ -661,6 +662,7 @@ void serviceInfrastructureRegistry() {
     if (!node) continue;
 
     const size_t slot = static_cast<size_t>(node - infrastructure);
+    if (slot < kMaxInfrastructure) seenThisScan[slot] = true;
     const bool appearedDuringJoin =
         permitJoinRemaining() > 0 &&
         slot < kMaxInfrastructure &&
@@ -689,8 +691,24 @@ void serviceInfrastructureRegistry() {
   }
   esp_zb_lock_release();
 
-  for (const auto &node : infrastructure) {
-    if (node.used) sendInfrastructureReport(node);
+  // A router can briefly disappear from one neighbor-table scan even while it is
+  // still forwarding traffic. Keep its last known state through short gaps and
+  // declare it offline only after several Zigbee link-status periods without a
+  // neighbor-table sighting.
+  for (size_t i = 0; i < kMaxInfrastructure; ++i) {
+    InfrastructureState &node = infrastructure[i];
+    if (!node.used) continue;
+    if (node.online && !seenThisScan[i] && node.lastSeenMs != 0 &&
+        now - node.lastSeenMs >= kInfrastructureOfflineTimeoutMs) {
+      node.online = false;
+      char ieeeText[24]{};
+      plantlink::formatIeee(node.ieee, ieeeText, sizeof(ieeeText));
+      Serial.printf(
+          "[zigbee] router/repeater offline ieee=%s short=0x%04X after %lus without neighbor-table sighting\n",
+          ieeeText, node.shortAddress,
+          static_cast<unsigned long>(kInfrastructureOfflineTimeoutMs / 1000u));
+    }
+    sendInfrastructureReport(node);
   }
   sendNetworkStatus();
 }

@@ -2075,6 +2075,9 @@ void buildAdvanced(lv_obj_t *screen) {
   lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *p = card(advancedPage, 14, 10, 772, 334);
+  // Advanced Zigbee uses explicit zero card padding so its measured child
+  // geometry is deterministic inside the locked 772x334 content card.
+  lv_obj_set_style_pad_all(p, 0, 0);
 
   lv_obj_t *title = lv_label_create(p);
   lv_label_set_text(title, "ZIGBEE NETWORK");
@@ -2112,15 +2115,30 @@ void buildAdvanced(lv_obj_t *screen) {
   lv_obj_set_style_text_color(addLabel, lv_color_hex(0xE5ECE7), 0);
   lv_obj_center(addLabel);
 
-  lv_obj_t *head = lv_label_create(p);
-  lv_label_set_text(head, "REPEATER / ROUTER                     STATUS        SIGNAL");
-  lv_obj_set_style_text_font(head, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(head, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(head, 18, 76);
+  lv_obj_t *repeaterHead = lv_label_create(p);
+  lv_label_set_text(repeaterHead, "REPEATER / ROUTER");
+  lv_obj_set_style_text_font(repeaterHead, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(repeaterHead, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(repeaterHead, 20, 76);
+  lv_obj_set_width(repeaterHead, 390);
+
+  lv_obj_t *statusHead = lv_label_create(p);
+  lv_label_set_text(statusHead, "STATUS");
+  lv_obj_set_style_text_font(statusHead, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(statusHead, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(statusHead, 448, 76);
+  lv_obj_set_width(statusHead, 110);
+
+  lv_obj_t *signalHead = lv_label_create(p);
+  lv_label_set_text(signalHead, "SIGNAL");
+  lv_obj_set_style_text_font(signalHead, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(signalHead, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_pos(signalHead, 588, 76);
+  lv_obj_set_width(signalHead, 145);
 
   lv_obj_t *list = lv_obj_create(p);
   lv_obj_set_pos(list, 10, 96);
-  lv_obj_set_size(list, 752, 166);
+  lv_obj_set_size(list, 752, 150);
   lv_obj_set_style_border_width(list, 0, 0);
   lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
   lv_obj_set_style_pad_all(list, 0, 0);
@@ -2165,13 +2183,13 @@ void buildAdvanced(lv_obj_t *screen) {
   lv_label_set_text(advancedDetail, "Select a repeater to manage it.");
   lv_obj_set_style_text_font(advancedDetail, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(advancedDetail, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(advancedDetail, 18, 277);
-  lv_obj_set_width(advancedDetail, 430);
+  lv_obj_set_pos(advancedDetail, 18, 263);
+  lv_obj_set_width(advancedDetail, 440);
   lv_label_set_long_mode(advancedDetail, LV_LABEL_LONG_DOT);
 
   advancedRenameButton = lv_btn_create(p);
-  lv_obj_set_size(advancedRenameButton, 126, 44);
-  lv_obj_set_pos(advancedRenameButton, 478, 270);
+  lv_obj_set_size(advancedRenameButton, 126, 42);
+  lv_obj_set_pos(advancedRenameButton, 478, 255);
   lv_obj_set_style_radius(advancedRenameButton, 11, 0);
   lv_obj_set_style_bg_color(advancedRenameButton, lv_color_hex(0x244F39), 0);
   lv_obj_add_event_cb(advancedRenameButton, infrastructureRenameEvent, LV_EVENT_CLICKED, nullptr);
@@ -2182,8 +2200,8 @@ void buildAdvanced(lv_obj_t *screen) {
   lv_obj_center(renameLabel);
 
   advancedRemoveButton = lv_btn_create(p);
-  lv_obj_set_size(advancedRemoveButton, 126, 44);
-  lv_obj_set_pos(advancedRemoveButton, 616, 270);
+  lv_obj_set_size(advancedRemoveButton, 126, 42);
+  lv_obj_set_pos(advancedRemoveButton, 616, 255);
   lv_obj_set_style_radius(advancedRemoveButton, 11, 0);
   lv_obj_set_style_bg_color(advancedRemoveButton, lv_color_hex(0x7A4037), 0);
   lv_obj_add_event_cb(advancedRemoveButton, infrastructureRemoveEvent, LV_EVENT_CLICKED, nullptr);
