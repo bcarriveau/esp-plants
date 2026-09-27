@@ -5,6 +5,50 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Waveshare LVGL stability and scalable UI (alpha.44-alpha.50)
+
+- Alpha.44 reduced LVGL pressure without changing the 800x480 layout: common card
+  software shadows were removed, unchanged label writes became no-ops, hidden
+  pages stopped receiving broad one-second widget rewrites, unchanged row order
+  stopped causing object-tree moves, and LVGL allocator telemetry was added.
+- Alpha.45 virtualized the Advanced Zigbee repeater list. The product still keeps
+  32 logical infrastructure records, but the UI now reuses five physical LVGL rows
+  with explicit virtual scroll height and bound-slot click identity.
+- Alpha.46 virtualized the HOME plant list with seven reusable physical rows while
+  preserving all 32 logical sensor slots, current sorting, featured/selected state,
+  moisture bars, and current-boot freshness behavior.
+- Alpha.47 applied the same fixed-pool architecture to ALL SENSORS with seven
+  reusable rows while preserving PLANT, SOIL, BATTERY, LAST REPORT, status
+  highlighting, and correct Plant-detail selection for off-screen sensors.
+- Alpha.48 replaced the broad single dirty flag with page/modal-specific refresh
+  state and cached sorting. Sorting now reruns only when a real ordering input
+  changes; one-second work is limited to visible time-dependent information.
+- Alpha.49 added startup LVGL/display diagnostics, including pre-UI allocator state
+  and runtime display-buffer/full-refresh information, without changing allocator,
+  framebuffer, RGB timing, or tearing policy.
+- Alpha.50 added long-run LVGL/ESP memory, UI-refresh timing, and LVGL-lock telemetry
+  so allocator fragmentation and runtime pressure can be measured during soak
+  testing before any further memory/display-policy change is considered.
+- These changes deliberately separate product data capacity from widget capacity:
+  32 sensors and 32 infrastructure nodes remain supported even though the scrolling
+  lists use fixed reusable row pools. Phrase advancement, current-boot WAITING state,
+  Zigbee behavior, persistence, OTA behavior, and the bottom navigation were not
+  redesigned as part of this work.
+- Alpha.50 still requires prolonged physical soak/scale validation before the LVGL
+  stability investigation is considered closed.
+
+### Waveshare + H2 OTA hardware verification
+
+- Physically verified the normal Waveshare A/B update path end-to-end on the current
+  Waveshare 7 development hardware.
+- Physically verified H2-through-Waveshare OTA end-to-end: the H2 distribution image
+  is transferred over PlantLink and installed before the Waveshare application update.
+- Waveshare and H2 remain independently versioned products; a release may update one
+  controller, the other, or both according to manifest/version state.
+- Normal update testing preserved Zigbee network state and Waveshare user data rather
+  than requiring a factory reset. Interrupted/failure-recovery and broader release
+  lifecycle stress testing remain release-gate work.
+
 ### Coordinated PlantLink v2 routing (Waveshare alpha.39 / H2 alpha.27)
 
 - Extend SensorReport to 30 bytes with UNKNOWN/DIRECT/ROUTED and next-hop repeater
@@ -37,7 +81,7 @@ architecture changes. Do not rely on commit messages alone for project history.
 #### Added
 
 - Added a persistent Settings control to rename the default `ESP PLANTS` display title.
-- Added a dedicated `ALL SENSORS` page that scales to the full 16-sensor registry and shows moisture, battery, and report state together.
+- Added a dedicated `ALL SENSORS` page that scales to the full 32-sensor registry and shows moisture, battery, and report state together.
 - Added reporting/waiting counts so sleepy sensors that have not reported since reboot are obvious.
 
 #### Changed

@@ -85,6 +85,16 @@ For any UI-affecting change, verify 800x480 geometry mathematically before hardw
 - [ ] text wrapping fits allocated height.
 - [ ] unrelated screens remain unchanged.
 
+Virtual-list regression coverage:
+
+- [ ] HOME uses 7 reusable physical rows while retaining 32 logical sensor slots.
+- [ ] ALL SENSORS uses 7 reusable physical rows while retaining 32 logical sensor slots.
+- [ ] ADVANCED ZIGBEE uses 5 reusable physical rows while retaining 32 logical infrastructure slots.
+- [ ] test logical populations 0, 1, 3, 10, 25, and 32 where practical.
+- [ ] first, middle, last, partially visible, and end-of-list rows select the correct logical slot.
+- [ ] rapid/momentum scrolling does not leave stale row text or incorrect selection.
+- [ ] add/remove/rename while scrolled clamps and rebinds safely.
+
 Repository-hygiene-only changes should not alter UI source.
 
 ## G. Wi-Fi
@@ -113,9 +123,7 @@ Repository-hygiene-only changes should not alter UI source.
 
 ## I. H2-through-Waveshare OTA
 
-Current source implements this path, but it is not yet claimed physically verified.
-
-Physical verification should include:
+The end-to-end H2-through-Waveshare path has been physically verified on the original Waveshare 7 + M5Stack H2 development hardware. The checks below remain the regression plan for every release candidate and for future updater changes.
 
 - [ ] current Waveshare downloads/verifies the intended H2 asset.
 - [ ] H2 update begins only with compatible metadata.
@@ -128,8 +136,8 @@ Physical verification should include:
 - [ ] failure in H2 stage prevents the Waveshare stage.
 - [ ] Zigbee network survives.
 - [ ] user data survives.
-
-Do not mark this section verified until it is exercised on actual hardware.
+- [ ] Waveshare-only, H2-only, and coordinated version-state cases behave as intended.
+- [ ] interrupted/failed transfer and recovery behavior is exercised before a wider release.
 
 ## J. Long-run / recovery
 
@@ -139,6 +147,7 @@ Do not mark this section verified until it is exercised on actual hardware.
 - [ ] router/AP outage does not break local Zigbee monitoring.
 - [ ] repeated UI navigation does not cause crash/stall regressions.
 - [ ] repeated update checks do not leak memory or destabilize normal operation.
+- [ ] alpha.50 LVGL allocator/fragmentation, refresh-duration, and lock-wait telemetry remains stable during prolonged UI/sensor-traffic soak testing.
 
 ## Legacy tests
 

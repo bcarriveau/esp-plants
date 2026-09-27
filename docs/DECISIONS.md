@@ -72,7 +72,7 @@ This file records architectural decisions so future changes do not accidentally 
 
 **Reason:** Normal customer updates should eventually avoid separate H2 USB access.
 
-**Consequence:** The implementation can be tested as one release flow, but it must not be described as physically verified until hardware testing proves it.
+**Consequence:** The coordinated H2-first / Waveshare-second update flow is physically verified on the original Waveshare 7 development hardware. Waveshare and H2 remain independently versioned, so the manifest/version state may require updating one controller, the other, or both.
 
 ## D010 - Waveshare 7B shares the application, not the proof status
 
@@ -81,6 +81,22 @@ This file records architectural decisions so future changes do not accidentally 
 **Reason:** Avoid product/UI forks while isolating hardware differences.
 
 **Consequence:** The original Waveshare 7 remains the proven baseline; 7B runtime support is not labeled proven until physically tested.
+
+## D011 - Logical capacity is independent of LVGL row count
+
+**Decision:** Keep 32 logical plant-sensor slots and 32 logical infrastructure slots as product data capacity, while scrolling pages use fixed reusable LVGL row pools rather than one permanent widget tree per slot.
+
+**Reason:** Hidden LVGL objects still consume allocator memory and style/text state. Preallocating maximum widget capacity created hundreds of unnecessary objects and reduced stability headroom.
+
+**Consequence:** HOME and ALL SENSORS currently use seven physical rows each, and ADVANCED ZIGBEE uses five, while all 32 logical records continue to receive data, participate in sorting/freshness/routing, and remain selectable when scrolled into view. UI virtualization must never become the source of truth for sensor or repeater state.
+
+## D012 - LVGL allocator and display policy changes require measurements
+
+**Decision:** Do not increase `LV_MEM_SIZE`, move the entire LVGL heap to PSRAM, or change the proven RGB tearing/framebuffer/full-refresh policy merely to mask UI pressure. Reduce unnecessary objects/mutations first and use runtime telemetry to justify any later memory/display-policy change.
+
+**Reason:** A previous physical coredump stopped in LVGL's temporary shadow-buffer allocation path while normal ESP heap and PSRAM remained healthy. The alpha.44-alpha.50 work removes known pressure sources and instruments LVGL's own allocator and runtime timing directly.
+
+**Consequence:** The current 128 KB LVGL allocator and display policy remain intentional until long-run telemetry or a new coredump demonstrates a specific need to change them.
 
 ## Historical decisions
 

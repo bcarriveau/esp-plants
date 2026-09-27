@@ -13,19 +13,16 @@ This document describes direction for the active Waveshare/H2/ZG-303Z product li
 
 ### Complete release/update verification
 
-The source contains the Waveshare A/B updater and the H2-through-Waveshare Phase 2 path.
+The normal Waveshare A/B updater and the H2-through-Waveshare path are now physically verified end-to-end on the original Waveshare 7 development hardware, including H2-first / Waveshare-second ordering.
 
 Next validation work:
 
-- build a complete release package from clean source,
-- confirm manifest/product/hardware/build/hash validation,
-- verify inactive-slot Waveshare installation and restart behavior,
-- physically verify H2 firmware transfer over PlantLink,
-- confirm H2-first / Waveshare-second ordering,
-- confirm Zigbee network and all user configuration survive the update,
-- verify recovery behavior for interrupted/failed updates.
-
-Do not label H2-through-Waveshare OTA physically verified until these tests are actually performed.
+- repeat clean-source release builds and package generation,
+- keep manifest/product/hardware/build/hash validation covered,
+- repeat inactive-slot Waveshare installation/restart testing across later releases,
+- stress interrupted/failed H2 and Waveshare update recovery,
+- keep verifying Zigbee network and user configuration survive normal updates,
+- exercise releases where only Waveshare changes, only H2 changes, and both change.
 
 ### Wi-Fi / setup reliability
 
@@ -41,8 +38,13 @@ Continue hardening the current Waveshare flow:
 
 ### Sensor-scale behavior
 
-- continue validating ALL SENSORS with 10+ devices,
-- verify waiting/not-yet-reported state after reboot,
+The UI architecture now separates 32-slot logical capacity from physical LVGL row count: HOME and ALL SENSORS each reuse seven rows, and ADVANCED ZIGBEE reuses five.
+
+Next validation work:
+
+- physically exercise 10, 25, and 32 logical sensor populations,
+- scroll/select/rename/remove entries near the beginning, middle, and end of each list,
+- verify waiting/not-yet-reported state after reboot at larger populations,
 - keep `WHO NEEDS WATER?` limited to fresh current-boot moisture reports,
 - validate router/repeater registry behavior as the Zigbee mesh grows.
 
@@ -53,6 +55,7 @@ Continue hardening the current Waveshare flow:
 - sensor rejoin behavior,
 - power-cycle recovery,
 - Wi-Fi router/AP outage recovery,
+- alpha.50 LVGL allocator/fragmentation and UI-lock/refresh telemetry during long soak tests,
 - memory/heap stability during UI navigation and update checks,
 - repeated update-check and failed-update recovery.
 

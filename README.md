@@ -56,6 +56,18 @@ The current product line uses stock ZG-303Z Zigbee plant sensors. The verified W
 
 After a Waveshare reboot, stored sensor identity may be visible immediately, but a sensor is not current until it reports during that boot. Watering summaries exclude stale pre-reboot readings.
 
+## LVGL scalability and stability
+
+The Waveshare keeps **32 logical plant-sensor slots and 32 logical infrastructure/repeater slots**, but scrolling UI capacity is no longer tied to those maxima. The current UI uses fixed reusable LVGL row pools:
+
+- HOME: 7 physical rows for up to 32 logical sensors
+- ALL SENSORS: 7 physical rows for up to 32 logical sensors
+- ADVANCED ZIGBEE: 5 physical rows for up to 32 logical infrastructure nodes
+
+The row pools are created once and rebound while scrolling; off-screen sensors and repeaters remain full data-model participants. Current-boot freshness, watering summaries, sorting, rename/remove behavior, and Plant detail selection do not depend on whether a row is currently visible.
+
+The alpha.44-alpha.50 stability work also removed common software shadows, avoids unchanged label writes, limits hidden-page mutation, uses page/modal-specific dirty state, and adds LVGL allocator/display/runtime telemetry. The LVGL heap remains 128 KB and the proven RGB framebuffer/full-refresh policy has not been changed without measurement. Long-duration alpha.50 soak testing remains an active validation item.
+
 ## Wi-Fi and updates
 
 Wi-Fi belongs to the Waveshare. The current source includes local Wi-Fi setup/change/disconnect/forget behavior and the ESP PLANTS updater.
@@ -75,7 +87,7 @@ The normal Waveshare update architecture uses:
 
 The source also contains the Phase 2 H2-through-Waveshare OTA path. Release tooling builds the H2 distribution image first, includes its metadata in the Waveshare release manifest, and the installer transfers H2 firmware over PlantLink before installing the Waveshare image.
 
-**H2-through-Waveshare OTA is implemented in source but is not claimed here as physically verified on hardware.**
+**The normal Waveshare A/B OTA path and H2-through-Waveshare OTA path have both been physically verified end-to-end on the original Waveshare 7 development hardware.** Waveshare and H2 remain independently versioned, so an update may legitimately apply to one controller without reflashing the other.
 
 ## Repository layout
 
@@ -173,12 +185,13 @@ Historical baseline documents may still describe that legacy implementation. The
 - soil moisture, temperature, air humidity, and battery reporting
 - H2-to-Waveshare PlantLink UART
 - live sensor-data delivery to the Waveshare UI
+- Waveshare A/B OTA installation end-to-end
+- H2-through-Waveshare OTA transfer/install before the Waveshare update
 
 ### Not claimed as physically verified
 
 - Waveshare 7B ESP PLANTS runtime
 - final 7B board-specific behavior
-- H2-through-Waveshare OTA
 - complete production release lifecycle across every target
 
 ## Source of truth

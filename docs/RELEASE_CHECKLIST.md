@@ -69,9 +69,9 @@ Use this before publishing a stable/current Waveshare/H2 release.
 
 ## H2-through-Waveshare OTA
 
-Do not check these off from source inspection alone.
+The end-to-end H2-through-Waveshare path has been physically verified on the original Waveshare 7 + M5Stack H2 development hardware. These checks still apply to every release candidate; do not check them off from source inspection alone.
 
-- [ ] physically tested on the actual Waveshare + M5Stack H2 pair.
+- [ ] physically tested on the actual Waveshare + M5Stack H2 pair for this release candidate.
 - [ ] H2 image transfer succeeds.
 - [ ] H2 validates and activates the inactive slot.
 - [ ] expected H2 build is reported after reboot.
@@ -80,7 +80,17 @@ Do not check these off from source inspection alone.
 - [ ] Zigbee network survives.
 - [ ] user configuration survives.
 
-Until those checks are physically completed, release notes must not call H2-through-Waveshare OTA hardware-verified.
+Historical hardware verification does not replace release-candidate testing, especially for interrupted/failed-update recovery or changes to either updater.
+
+## LVGL / UI stability
+
+- [ ] HOME virtual list scrolls/selects correctly with its 7-row pool.
+- [ ] ALL SENSORS virtual list scrolls/selects correctly with its 7-row pool.
+- [ ] ADVANCED ZIGBEE virtual list scrolls/selects correctly with its 5-row pool.
+- [ ] 32-sensor / 32-infrastructure logical capacity remains intact.
+- [ ] current-boot WAITING/freshness behavior remains correct while scrolling.
+- [ ] repeated navigation and modal open/close do not stall LVGL.
+- [ ] alpha.50-style allocator/fragmentation and refresh/lock telemetry remains healthy during soak testing when enabled.
 
 ## Waveshare 7B
 

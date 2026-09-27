@@ -52,7 +52,7 @@ The update path includes:
 
 Release tooling builds a distribution-marked H2 image and includes H2 identity/hash metadata in the Waveshare manifest.
 
-The source contains H2-through-Waveshare OTA transfer over PlantLink. **Do not describe that path as physically verified until it has been exercised and confirmed on the actual Waveshare + M5Stack H2 hardware.**
+The H2-through-Waveshare OTA transfer over PlantLink and the normal Waveshare A/B update path have both been physically verified end-to-end on the original Waveshare 7 + M5Stack H2 development hardware. That verification does not remove the requirement to repeat identity/hash, inactive-slot, failure-blocking, persistence, and recovery checks for each release candidate.
 
 ## Release assets
 

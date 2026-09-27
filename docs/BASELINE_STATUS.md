@@ -34,7 +34,9 @@ Repository history and current documentation establish physical verification on 
 - air humidity,
 - battery,
 - PlantLink UART communication,
-- live sensor-data delivery to the Waveshare UI.
+- live sensor-data delivery to the Waveshare UI,
+- Waveshare A/B OTA installation,
+- H2-through-Waveshare OTA transfer/install before the Waveshare update.
 
 This file does not extend those claims beyond what has actually been tested.
 
@@ -48,9 +50,11 @@ The active source contains:
 - Waveshare Wi-Fi/setup behavior,
 - A/B Waveshare OTA package installation,
 - verified-HTTPS update retrieval,
-- H2-through-Waveshare OTA implementation and release metadata.
+- H2-through-Waveshare OTA implementation and release metadata,
+- fixed-pool LVGL list virtualization with 32 logical sensor and 32 logical infrastructure capacity,
+- page/modal-specific dirty-state refresh and long-run LVGL/display/runtime telemetry.
 
-H2-through-Waveshare OTA is **implemented in source but not claimed as physically verified**.
+H2-through-Waveshare OTA and the normal Waveshare A/B update path have both been physically verified end-to-end on the original Waveshare 7 development hardware.
 
 ## Freshness rule
 
@@ -76,5 +80,6 @@ Before a wider/stable release, require at minimum:
 - sensor registry/freshness behavior verified,
 - persistence verified across normal update,
 - long-duration H2/Zigbee stability testing,
-- explicit physical verification of H2-through-Waveshare OTA before claiming it,
+- repeated interrupted/failed OTA recovery testing,
+- long-duration alpha.50 LVGL/heap/UI soak testing,
 - separate physical verification of Waveshare 7B before claiming 7B support as proven.
