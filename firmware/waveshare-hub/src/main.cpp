@@ -2,6 +2,8 @@
 #include <Preferences.h>
 #include <Waveshare_ST7262_LVGL.h>
 #include <lvgl.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <src/extra/libs/qrcode/qrcodegen.h>
 
 #include "plantlink.h"
@@ -382,6 +384,103 @@ void logLvglMemory(const char *reason) {
 }
 #else
 void logLvglMemory(const char *) {}
+#endif
+
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+void logDisplayRuntimeConfig();
+
+constexpr uint32_t kRuntimeTelemetryIntervalMs = 60U * 1000U;
+
+struct UiRuntimeStats {
+  uint32_t refreshCount = 0;
+  uint32_t forcedCount = 0;
+  uint32_t timedCount = 0;
+  uint64_t totalRefreshUs = 0;
+  uint32_t maxRefreshUs = 0;
+  uint32_t maxLockWaitUs = 0;
+};
+
+UiRuntimeStats uiRuntimeStats{};
+uint32_t lastRuntimeTelemetryMs = 0;
+
+void logEspMemory(const char *reason) {
+  const size_t internalFree =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const size_t internalLargest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const size_t psramFree =
+      heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  const size_t psramLargest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  Serial.printf(
+      "[runtime-mem] %s internal_free=%lu internal_largest=%lu "
+      "psram_free=%lu psram_largest=%lu\n",
+      reason ? reason : "unknown",
+      static_cast<unsigned long>(internalFree),
+      static_cast<unsigned long>(internalLargest),
+      static_cast<unsigned long>(psramFree),
+      static_cast<unsigned long>(psramLargest));
+}
+
+void recordUiRefreshRuntime(uint64_t startedUs, uint32_t lockWaitUs, bool forced,
+                            bool timedWork) {
+  const uint64_t elapsed64 = esp_timer_get_time() - startedUs;
+  const uint32_t elapsedUs = elapsed64 > UINT32_MAX ? UINT32_MAX
+                                                   : static_cast<uint32_t>(elapsed64);
+  ++uiRuntimeStats.refreshCount;
+  if (forced) ++uiRuntimeStats.forcedCount;
+  if (timedWork) ++uiRuntimeStats.timedCount;
+  uiRuntimeStats.totalRefreshUs += elapsedUs;
+  if (elapsedUs > uiRuntimeStats.maxRefreshUs) uiRuntimeStats.maxRefreshUs = elapsedUs;
+  if (lockWaitUs > uiRuntimeStats.maxLockWaitUs) uiRuntimeStats.maxLockWaitUs = lockWaitUs;
+}
+
+void logUiRuntimeStats() {
+  const uint32_t count = uiRuntimeStats.refreshCount;
+  const uint32_t avgUs = count
+      ? static_cast<uint32_t>(uiRuntimeStats.totalRefreshUs / count)
+      : 0;
+  Serial.printf(
+      "[ui-runtime] refreshes=%lu forced=%lu timed=%lu avg_us=%lu max_us=%lu "
+      "max_lock_wait_us=%lu\n",
+      static_cast<unsigned long>(count),
+      static_cast<unsigned long>(uiRuntimeStats.forcedCount),
+      static_cast<unsigned long>(uiRuntimeStats.timedCount),
+      static_cast<unsigned long>(avgUs),
+      static_cast<unsigned long>(uiRuntimeStats.maxRefreshUs),
+      static_cast<unsigned long>(uiRuntimeStats.maxLockWaitUs));
+}
+
+void serviceRuntimeTelemetry() {
+  const uint32_t now = millis();
+  if (lastRuntimeTelemetryMs == 0) {
+    lastRuntimeTelemetryMs = now;
+    return;
+  }
+  if (now - lastRuntimeTelemetryMs < kRuntimeTelemetryIntervalMs) return;
+  lastRuntimeTelemetryMs = now;
+
+  logEspMemory("runtime-60s");
+  logUiRuntimeStats();
+
+  const uint64_t lockStartedUs = esp_timer_get_time();
+  if (lvgl_port_lock(25)) {
+    const uint64_t lockWait64 = esp_timer_get_time() - lockStartedUs;
+    const uint32_t lockWaitUs = lockWait64 > UINT32_MAX ? UINT32_MAX
+                                                        : static_cast<uint32_t>(lockWait64);
+    if (lockWaitUs > uiRuntimeStats.maxLockWaitUs) uiRuntimeStats.maxLockWaitUs = lockWaitUs;
+    logDisplayRuntimeConfig();
+    logLvglMemory("runtime-60s");
+    lvgl_port_unlock();
+  } else {
+    Serial.println("[ui-runtime] telemetry LVGL lock timeout after 25ms");
+  }
+}
+#else
+void logEspMemory(const char *) {}
+void recordUiRefreshRuntime(uint64_t, uint32_t, bool, bool) {}
+void logUiRuntimeStats() {}
+void serviceRuntimeTelemetry() {}
 #endif
 
 #if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
@@ -3219,10 +3318,21 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
   if (!force && !dirty.header && !pageDirty && !modalDirty &&
       !timedPageWork && !timedModalWork) return;
 
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  const uint64_t refreshStartedUs = esp_timer_get_time();
+  const uint64_t lockStartedUs = refreshStartedUs;
+  uint32_t lockWaitUs = 0;
+#endif
+
   bool lockedHere = false;
   if (!alreadyInLvglContext) {
     if (!lvgl_port_lock(-1)) return;
     lockedHere = true;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+    const uint64_t lockWait64 = esp_timer_get_time() - lockStartedUs;
+    lockWaitUs = lockWait64 > UINT32_MAX ? UINT32_MAX
+                                         : static_cast<uint32_t>(lockWait64);
+#endif
   }
 
   if (intervalElapsed) lastUiRefreshMs = now;
@@ -3588,6 +3698,10 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
   }
 
   if (lockedHere) lvgl_port_unlock();
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  recordUiRefreshRuntime(refreshStartedUs, lockWaitUs, force,
+                         timedPageWork || timedModalWork);
+#endif
 }
 
 void handleNetworkStatus(const plantlink::Frame &frame) {
@@ -3923,7 +4037,9 @@ void setup() {
                 static_cast<unsigned long>(kPlantLinkBaud));
 
   Serial.println("[display] initializing Waveshare 800x480...");
+  logEspMemory("display-pre-init");
   lcd_init();
+  logEspMemory("display-post-init");
   if (lvgl_port_lock(-1)) {
     logDisplayRuntimeConfig();
     logLvglMemory("lvgl-init-pre-ui");
@@ -3940,5 +4056,6 @@ void loop() {
   servicePlantLink();
   espplants_update::service();
   refreshUi();
+  serviceRuntimeTelemetry();
   delay(2);
 }

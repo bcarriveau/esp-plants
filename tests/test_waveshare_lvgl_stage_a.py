@@ -16,8 +16,8 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_waveshare_identity_and_allocator_policy_are_intentional():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.49"
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.49"' in read(BUILD)
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.50"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.50"' in read(BUILD)
     lv_conf = read(LV_CONF)
     assert "#define LV_MEM_CUSTOM 0" in lv_conf
     assert "#define LV_MEM_SIZE (128U * 1024U)" in lv_conf

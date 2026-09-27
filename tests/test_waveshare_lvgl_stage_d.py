@@ -15,9 +15,9 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_stage_d_identity_and_platformio_are_preserved():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.49"
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.50"
     source = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.49"' in source
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.50"' in source
     pio = read(PIO)
     assert "upload_port = COM11" in pio
     assert "lvgl/lvgl@8.3.11" in pio

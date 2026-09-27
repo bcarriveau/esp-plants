@@ -11,8 +11,8 @@ def read(path: Path) -> str:
 
 
 def test_alpha49_identity():
-    assert VERSION.read_text(encoding="utf-8").strip() == "0.2.0-alpha.49"
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.49"' in read(BUILD)
+    assert VERSION.read_text(encoding="utf-8").strip() == "0.2.0-alpha.50"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.50"' in read(BUILD)
 
 
 def test_stage_f_adds_measurement_not_policy_changes():
