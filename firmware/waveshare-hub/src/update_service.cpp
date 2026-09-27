@@ -44,6 +44,7 @@ constexpr uint32_t kFailedCheckRetryMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWifiReconnectMs = 30UL * 1000UL;
 constexpr uint32_t kPortalConnectTimeoutMs = 20UL * 1000UL;
 constexpr uint32_t kPortalSuccessHoldMs = 10UL * 1000UL;
+constexpr uint32_t kPortalSessionTimeoutMs = 5UL * 60UL * 1000UL;
 // Match the proven Aircraft Radar network/update timing. Automatic release
 // checks are deliberately kept out of the noisy boot/network-settle window.
 constexpr size_t kMaxReleaseNotesBytes = 4096;
@@ -172,6 +173,7 @@ volatile bool setupPortalRunning = false;
 bool portalConnectionPending = false;
 uint32_t portalAttemptStartedMs = 0;
 uint32_t portalStopAtMs = 0;
+uint32_t portalStartedMs = 0;
 volatile bool checkTaskRunning = false;
 volatile bool installTaskRunning = false;
 TaskHandle_t otaNetworkTaskHandle = nullptr;
@@ -529,6 +531,7 @@ void stopSetupPortal() {
   portalConnectionPending = false;
   portalAttemptStartedMs = 0;
   portalStopAtMs = 0;
+  portalStartedMs = 0;
   portalAttemptState = PortalAttemptState::Idle;
   portalResultMessage = "";
   lastAttemptSsid = "";
@@ -1632,6 +1635,12 @@ void service() {
     }
   }
 
+  if (setupPortalRunning && portalStartedMs && !portalStopAtMs &&
+      millis() - portalStartedMs >= kPortalSessionTimeoutMs) {
+    stopSetupPortal();
+    setStatus("Wi-Fi setup timed out - tap SET UP / CHANGE WI-FI to try again");
+  }
+
   if (setupPortalRunning && portalStopAtMs &&
       static_cast<int32_t>(millis() - portalStopAtMs) >= 0) {
     stopSetupPortal();
@@ -1689,6 +1698,7 @@ void startWifiSetup() {
   dnsServer.start(53, "*", WiFi.softAPIP());
   portalServer.begin();
   setupPortalRunning = true;
+  portalStartedMs = millis();
   portalConnectionPending = false;
   portalAttemptState = PortalAttemptState::Idle;
   portalAttemptStartedMs = 0;
@@ -1699,6 +1709,12 @@ void startWifiSetup() {
   Serial.printf("[wifi] setup AP \"%s\" password \"%s\" at %s\n",
                 setupSsidText, setupPasswordText,
                 WiFi.softAPIP().toString().c_str());
+}
+
+void cancelWifiSetup() {
+  if (!initialized || !setupPortalRunning) return;
+  stopSetupPortal();
+  setStatus("Wi-Fi setup cancelled");
 }
 
 void disconnectWifi() {

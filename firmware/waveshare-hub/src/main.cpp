@@ -292,6 +292,8 @@ lv_obj_t *settingsDeviceName = nullptr;
 lv_obj_t *updateModal = nullptr;
 lv_obj_t *updateWifiState = nullptr;
 lv_obj_t *updateWifiDetail = nullptr;
+lv_obj_t *updateSetupButton = nullptr;
+lv_obj_t *updateSetupLabel = nullptr;
 lv_obj_t *updatePortalInfo = nullptr;
 lv_obj_t *updateQrCard = nullptr;
 lv_obj_t *updateQrCode = nullptr;
@@ -1435,7 +1437,10 @@ void closeUpdateEvent(lv_event_t *event) {
 
 void wifiSetupEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  espplants_update::startWifiSetup();
+  if (espplants_update::setupPortalActive())
+    espplants_update::cancelWifiSetup();
+  else
+    espplants_update::startWifiSetup();
   dirty.update = true;
 }
 
@@ -2204,22 +2209,24 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
   lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
 
-  lv_obj_t *hint = lv_label_create(featured);
-  lv_label_set_text(hint, "Tap card for full plant details");
-  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(hint, lv_color_hex(0xAABBAF), 0);
-  lv_obj_set_pos(hint, 24, 248);
-
   homeWarning = lv_label_create(featured);
   lv_label_set_text(homeWarning, "WATER ME!");
-  lv_obj_set_style_text_font(homeWarning, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(homeWarning, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_style_text_font(homeWarning, &lv_font_montserrat_32, 0);
+  lv_obj_set_style_text_color(homeWarning, lv_color_hex(0xFFF4EE), 0);
   lv_obj_set_style_bg_color(homeWarning, lv_color_hex(0x8E493E), 0);
-  lv_obj_set_style_pad_hor(homeWarning, 14, 0);
-  lv_obj_set_style_pad_ver(homeWarning, 8, 0);
-  lv_obj_set_style_radius(homeWarning, 10, 0);
-  lv_obj_set_pos(homeWarning, 24, 278);
+  lv_obj_set_style_pad_hor(homeWarning, 20, 0);
+  lv_obj_set_style_pad_ver(homeWarning, 12, 0);
+  lv_obj_set_style_radius(homeWarning, 12, 0);
+  lv_obj_set_pos(homeWarning, 24, 214);
   lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t *hint = lv_label_create(featured);
+  lv_label_set_text(hint, "TAP CARD FOR SENSOR DETAILS");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x93A69A), 0);
+  lv_obj_set_pos(hint, 24, 288);
+  lv_obj_set_width(hint, 300);
+  lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
 
   lv_obj_t *listCard = card(homePage, 528, 10, 258, 334);
   lv_obj_t *listTitle = lv_label_create(listCard);
@@ -2940,17 +2947,17 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_width(updateWifiDetail, 326);
   lv_label_set_long_mode(updateWifiDetail, LV_LABEL_LONG_WRAP);
 
-  lv_obj_t *wifiButton = lv_btn_create(network);
-  lv_obj_set_size(wifiButton, 326, 42);
-  lv_obj_set_pos(wifiButton, 20, 150);
-  lv_obj_set_style_radius(wifiButton, 12, 0);
-  lv_obj_set_style_bg_color(wifiButton, lv_color_hex(0x3F7A4E), 0);
-  lv_obj_add_event_cb(wifiButton, wifiSetupEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *wifiLabel = lv_label_create(wifiButton);
-  lv_label_set_text(wifiLabel, "SET UP / CHANGE WI-FI");
-  lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(wifiLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(wifiLabel);
+  updateSetupButton = lv_btn_create(network);
+  lv_obj_set_size(updateSetupButton, 326, 42);
+  lv_obj_set_pos(updateSetupButton, 20, 150);
+  lv_obj_set_style_radius(updateSetupButton, 12, 0);
+  lv_obj_set_style_bg_color(updateSetupButton, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_add_event_cb(updateSetupButton, wifiSetupEvent, LV_EVENT_CLICKED, nullptr);
+  updateSetupLabel = lv_label_create(updateSetupButton);
+  lv_label_set_text(updateSetupLabel, "SET UP / CHANGE WI-FI");
+  lv_obj_set_style_text_font(updateSetupLabel, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(updateSetupLabel, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_center(updateSetupLabel);
 
   updateDisconnectButton = lv_btn_create(network);
   lv_obj_set_size(updateDisconnectButton, 158, 40);
@@ -2977,7 +2984,7 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_center(forgetLabel);
 
   updateQrHint = lv_label_create(network);
-  lv_label_set_text(updateQrHint, "SCAN TO CONNECT");
+  lv_label_set_text(updateQrHint, "SCAN QR");
   lv_obj_set_style_text_font(updateQrHint, &lv_font_montserrat_12, 0);
   lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
   lv_obj_set_pos(updateQrHint, 20, 248);
@@ -3702,6 +3709,12 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
 
     const bool wifiBusy =
         espplants_update::checking() || espplants_update::installing();
+    const bool setupActive = espplants_update::setupPortalActive();
+    label(updateSetupLabel, setupActive ? "CANCEL SETUP" : "SET UP / CHANGE WI-FI");
+    if (wifiBusy)
+      lv_obj_add_state(updateSetupButton, LV_STATE_DISABLED);
+    else
+      lv_obj_clear_state(updateSetupButton, LV_STATE_DISABLED);
     if (espplants_update::wifiReconnectSuppressed())
       label(updateDisconnectLabel, "RECONNECT WI-FI");
     else
@@ -3725,7 +3738,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         if (renderSetupQr(qr)) {
           strncpy(updateQrPayload, qr, sizeof(updateQrPayload) - 1);
           updateQrPayload[sizeof(updateQrPayload) - 1] = '\0';
-          label(updateQrHint, "SCAN TO CONNECT");
+          label(updateQrHint, "SCAN QR");
           lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
         } else {
           updateQrPayload[0] = '\0';

@@ -19,7 +19,7 @@ architecture changes. Do not rely on commit messages alone for project history.
   reporting, Zigbee network persistence, sensor handling, and OTA behavior are
   otherwise unchanged.
 
-### Waveshare LVGL stability and scalable UI (alpha.44-alpha.50)
+### Waveshare LVGL stability and scalable UI (alpha.44-alpha.51)
 
 - Alpha.44 reduced LVGL pressure without changing the 800x480 layout: common card
   software shadows were removed, unchanged label writes became no-ops, hidden
@@ -50,6 +50,7 @@ architecture changes. Do not rely on commit messages alone for project history.
   redesigned as part of this work.
 - Alpha.50 still requires prolonged physical soak/scale validation before the LVGL
   stability investigation is considered closed.
+  Alpha.51 Add Wi-Fi setup cancel, timeout, and QR layout fix. Polish update notifications, release notes, text cursors, and phrase styling.
 
 ### Waveshare + H2 OTA hardware verification
 

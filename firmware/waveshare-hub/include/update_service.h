@@ -8,6 +8,7 @@ void begin();
 void service();
 
 void startWifiSetup();
+void cancelWifiSetup();
 void disconnectWifi();
 void reconnectWifi();
 void forgetWifi();
