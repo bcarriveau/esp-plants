@@ -15,9 +15,9 @@ def function_block(source: str, start: str, end: str) -> str:
     return source.split(start, 1)[1].split(end, 1)[0]
 
 
-def test_alpha44_identity_and_allocator_policy_are_intentional():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.44"
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.44"' in read(BUILD)
+def test_waveshare_identity_and_allocator_policy_are_intentional():
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.45"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.45"' in read(BUILD)
     lv_conf = read(LV_CONF)
     assert "#define LV_MEM_CUSTOM 0" in lv_conf
     assert "#define LV_MEM_SIZE (128U * 1024U)" in lv_conf
@@ -89,9 +89,7 @@ def test_refresh_is_page_local_and_modals_are_gated():
     assert "refreshUi(true, true);" in show
 
 
-def test_stage_a_keeps_physical_rows_and_does_not_virtualize_yet():
+def test_stage_a_keeps_home_and_all_physical_rows_until_later_stages():
     source = read(MAIN)
     assert "PlantListRow rows[kMaxSensors];" in source
     assert "AllSensorRow allRows[kMaxSensors];" in source
-    assert "InfrastructureRow infrastructureRows[kMaxInfrastructure];" in source
-    assert "virtual content" not in source.lower()

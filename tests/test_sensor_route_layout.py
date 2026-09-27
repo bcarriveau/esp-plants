@@ -56,7 +56,7 @@ def test_advanced_zigbee_layout_has_explicit_columns_and_bottom_clearance():
         'lv_obj_set_pos(repeaterHead, 20, 76);',
         'lv_obj_set_pos(statusHead, 448, 76);',
         'lv_obj_set_pos(signalHead, 588, 76);',
-        'lv_obj_set_size(list, 752, 150);',
+        'lv_obj_set_size(advancedList, 752, 150);',
         'lv_obj_set_pos(advancedDetail, 18, 263);',
         'lv_obj_set_width(advancedDetail, 440);',
         'lv_obj_set_size(advancedRenameButton, 126, 42);',

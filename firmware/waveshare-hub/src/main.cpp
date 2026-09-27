@@ -5,6 +5,7 @@
 #include <src/extra/libs/qrcode/qrcodegen.h>
 
 #include "plantlink.h"
+#include "advanced_virtual_list.h"
 #include "phrase_engine.h"
 #include "update_service.h"
 #include "sensor_route_view.h"
@@ -119,6 +120,11 @@ struct InfrastructureRow {
   lv_obj_t *name = nullptr;
   lv_obj_t *status = nullptr;
   lv_obj_t *signal = nullptr;
+  int boundSlot = -1;
+  size_t boundLogicalIndex = kMaxInfrastructure;
+  char nameText[kInfrastructureNameBytes]{};
+  char statusText[8]{};
+  char signalText[16]{};
 };
 
 plantlink::Decoder decoder;
@@ -127,7 +133,7 @@ PlantSensor sensors[kMaxSensors];
 PlantListRow rows[kMaxSensors];
 AllSensorRow allRows[kMaxSensors];
 InfrastructureNode infrastructure[kMaxInfrastructure];
-InfrastructureRow infrastructureRows[kMaxInfrastructure];
+InfrastructureRow infrastructureRows[espplants_advanced_virtual_list::kPoolSize];
 
 uint16_t nextSequence = 1;
 uint32_t lastHelloMs = 0;
@@ -252,6 +258,12 @@ lv_obj_t *advancedDetail = nullptr;
 lv_obj_t *advancedRenameButton = nullptr;
 lv_obj_t *advancedRemoveButton = nullptr;
 lv_obj_t *advancedAddButton = nullptr;
+lv_obj_t *advancedList = nullptr;
+lv_obj_t *advancedVirtualContent = nullptr;
+size_t advancedLogicalSlots[kMaxInfrastructure]{};
+size_t advancedLogicalCount = 0;
+size_t advancedFirstLogicalIndex = kMaxInfrastructure;
+bool advancedVirtualBinding = false;
 
 lv_obj_t *renameModal = nullptr;
 lv_obj_t *renameTitle = nullptr;
@@ -282,6 +294,14 @@ void label(lv_obj_t *obj, const char *text) {
   const char *current = lv_label_get_text(obj);
   if (current && strcmp(current, text) == 0) return;
   lv_label_set_text(obj, text);
+}
+
+void staticRowLabel(lv_obj_t *obj, char *storage, size_t storageSize, const char *text) {
+  if (!obj || !storage || storageSize == 0 || !text) return;
+  if (strcmp(storage, text) == 0 && lv_label_get_text(obj) == storage) return;
+  strncpy(storage, text, storageSize - 1);
+  storage[storageSize - 1] = '\0';
+  lv_label_set_text_static(obj, storage);
 }
 
 #if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
@@ -448,6 +468,16 @@ void migrateUserPreferences() {
 size_t infrastructureCount() {
   size_t count = 0;
   for (const auto &node : infrastructure) if (node.used) ++count;
+  return count;
+}
+
+size_t buildInfrastructureSlots(size_t out[kMaxInfrastructure]) {
+  size_t count = 0;
+  for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
+    if (!infrastructure[slot].used) continue;
+    if (out) out[count] = slot;
+    ++count;
+  }
   return count;
 }
 
@@ -1071,12 +1101,95 @@ void infrastructureAddEvent(lv_event_t *event) {
   startInfrastructurePairing();
 }
 
+void refreshAdvancedVirtualList(bool forceValues = false) {
+  if (!advancedList || !advancedVirtualContent || advancedVirtualBinding) return;
+  advancedVirtualBinding = true;
+
+  size_t logicalSlots[kMaxInfrastructure]{};
+  const size_t logicalCount = buildInfrastructureSlots(logicalSlots);
+  const bool logicalChanged =
+      logicalCount != advancedLogicalCount ||
+      (logicalCount > 0 &&
+       memcmp(advancedLogicalSlots, logicalSlots, logicalCount * sizeof(size_t)) != 0);
+
+  if (logicalChanged) {
+    if (logicalCount > 0) {
+      memcpy(advancedLogicalSlots, logicalSlots, logicalCount * sizeof(size_t));
+    }
+    advancedLogicalCount = logicalCount;
+    lv_obj_set_height(advancedVirtualContent,
+                      espplants_advanced_virtual_list::contentHeight(logicalCount));
+    lv_obj_update_layout(advancedList);
+
+    const int32_t scrollY = lv_obj_get_scroll_y(advancedList);
+    const int32_t clamped =
+        espplants_advanced_virtual_list::clampScrollY(logicalCount, scrollY);
+    if (scrollY != clamped) lv_obj_scroll_to_y(advancedList, clamped, LV_ANIM_OFF);
+    advancedFirstLogicalIndex = kMaxInfrastructure;
+  }
+
+  const int32_t scrollY = espplants_advanced_virtual_list::clampScrollY(
+      advancedLogicalCount, lv_obj_get_scroll_y(advancedList));
+  const size_t firstLogical = espplants_advanced_virtual_list::firstPoolLogicalIndex(
+      advancedLogicalCount, scrollY);
+  const bool windowChanged = firstLogical != advancedFirstLogicalIndex;
+
+  for (size_t poolIndex = 0;
+       poolIndex < espplants_advanced_virtual_list::kPoolSize; ++poolIndex) {
+    InfrastructureRow &row = infrastructureRows[poolIndex];
+    const size_t logicalIndex = firstLogical + poolIndex;
+    if (logicalIndex >= advancedLogicalCount) {
+      row.boundSlot = -1;
+      row.boundLogicalIndex = kMaxInfrastructure;
+      lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+
+    const size_t slot = advancedLogicalSlots[logicalIndex];
+    const bool rebound = row.boundSlot != static_cast<int>(slot) ||
+                         row.boundLogicalIndex != logicalIndex;
+    if (rebound || windowChanged) {
+      row.boundSlot = static_cast<int>(slot);
+      row.boundLogicalIndex = logicalIndex;
+      lv_obj_set_pos(row.box, 0, static_cast<lv_coord_t>(logicalIndex *
+          static_cast<size_t>(espplants_advanced_virtual_list::kStride)));
+    }
+
+    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    if (rebound || windowChanged || forceValues) {
+      staticRowLabel(row.name, row.nameText, sizeof(row.nameText), infrastructure[slot].name);
+      staticRowLabel(row.status, row.statusText, sizeof(row.statusText),
+                     infrastructure[slot].online ? "ONLINE" : "OFFLINE");
+      char signal[16]{};
+      if (infrastructure[slot].online)
+        snprintf(signal, sizeof(signal), "LQI %u", infrastructure[slot].lqi);
+      else
+        snprintf(signal, sizeof(signal), "LQI --");
+      staticRowLabel(row.signal, row.signalText, sizeof(row.signalText), signal);
+      lv_obj_set_style_bg_color(
+          row.box,
+          lv_color_hex(selectedInfrastructure == static_cast<int>(slot) ? 0x1E3529
+                                                                        : 0x1D2922),
+          0);
+    }
+  }
+
+  advancedFirstLogicalIndex = firstLogical;
+  advancedVirtualBinding = false;
+}
+
+void advancedListScrollEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_SCROLL) return;
+  refreshAdvancedVirtualList(false);
+}
+
 void infrastructureRowEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
-  if (slot < 0 || slot >= static_cast<intptr_t>(kMaxInfrastructure) ||
-      !infrastructure[slot].used) return;
-  selectedInfrastructure = static_cast<int>(slot);
+  auto *row = static_cast<InfrastructureRow *>(lv_event_get_user_data(event));
+  if (!row || row->boundSlot < 0 ||
+      row->boundSlot >= static_cast<int>(kMaxInfrastructure) ||
+      !infrastructure[row->boundSlot].used) return;
+  selectedInfrastructure = row->boundSlot;
   uiDirty = true;
 }
 
@@ -2192,47 +2305,58 @@ void buildAdvanced(lv_obj_t *screen) {
   lv_obj_set_pos(signalHead, 588, 76);
   lv_obj_set_width(signalHead, 145);
 
-  lv_obj_t *list = lv_obj_create(p);
-  lv_obj_set_pos(list, 10, 96);
-  lv_obj_set_size(list, 752, 150);
-  lv_obj_set_style_border_width(list, 0, 0);
-  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(list, 0, 0);
-  lv_obj_set_style_pad_row(list, 6, 0);
-  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  advancedList = lv_obj_create(p);
+  lv_obj_set_pos(advancedList, 10, 96);
+  lv_obj_set_size(advancedList, 752, 150);
+  lv_obj_set_style_border_width(advancedList, 0, 0);
+  lv_obj_set_style_bg_opa(advancedList, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(advancedList, 0, 0);
+  lv_obj_set_scroll_dir(advancedList, LV_DIR_VER);
+  lv_obj_add_event_cb(advancedList, advancedListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
-  for (size_t i = 0; i < kMaxInfrastructure; ++i) {
-    infrastructureRows[i].box = lv_obj_create(list);
-    lv_obj_set_size(infrastructureRows[i].box, 742, 50);
-    lv_obj_set_style_radius(infrastructureRows[i].box, 10, 0);
-    lv_obj_set_style_border_width(infrastructureRows[i].box, 0, 0);
-    lv_obj_set_style_bg_color(infrastructureRows[i].box, lv_color_hex(0x1D2922), 0);
-    lv_obj_set_style_pad_all(infrastructureRows[i].box, 8, 0);
-    lv_obj_clear_flag(infrastructureRows[i].box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(infrastructureRows[i].box, infrastructureRowEvent,
-                        LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+  advancedVirtualContent = lv_obj_create(advancedList);
+  lv_obj_set_pos(advancedVirtualContent, 0, 0);
+  lv_obj_set_size(advancedVirtualContent, 742,
+                  espplants_advanced_virtual_list::kViewportHeight);
+  lv_obj_set_style_border_width(advancedVirtualContent, 0, 0);
+  lv_obj_set_style_bg_opa(advancedVirtualContent, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(advancedVirtualContent, 0, 0);
+  lv_obj_clear_flag(advancedVirtualContent, LV_OBJ_FLAG_SCROLLABLE);
 
-    infrastructureRows[i].name = lv_label_create(infrastructureRows[i].box);
-    lv_obj_set_style_text_font(infrastructureRows[i].name, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(infrastructureRows[i].name, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(infrastructureRows[i].name, 2, 6);
-    lv_obj_set_width(infrastructureRows[i].name, 390);
-    lv_label_set_long_mode(infrastructureRows[i].name, LV_LABEL_LONG_DOT);
+  for (size_t i = 0; i < espplants_advanced_virtual_list::kPoolSize; ++i) {
+    InfrastructureRow &row = infrastructureRows[i];
+    row.box = lv_obj_create(advancedVirtualContent);
+    lv_obj_set_pos(row.box, 0, 0);
+    lv_obj_set_size(row.box, 742, 50);
+    lv_obj_set_style_radius(row.box, 10, 0);
+    lv_obj_set_style_border_width(row.box, 0, 0);
+    lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_pad_all(row.box, 8, 0);
+    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(row.box, infrastructureRowEvent, LV_EVENT_CLICKED, &row);
 
-    infrastructureRows[i].status = lv_label_create(infrastructureRows[i].box);
-    lv_obj_set_style_text_font(infrastructureRows[i].status, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(infrastructureRows[i].status, lv_color_hex(0xD1DED5), 0);
-    lv_obj_set_pos(infrastructureRows[i].status, 430, 7);
-    lv_obj_set_width(infrastructureRows[i].status, 110);
+    row.name = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_pos(row.name, 2, 6);
+    lv_obj_set_width(row.name, 390);
+    lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
+    lv_label_set_text_static(row.name, row.nameText);
 
-    infrastructureRows[i].signal = lv_label_create(infrastructureRows[i].box);
-    lv_obj_set_style_text_font(infrastructureRows[i].signal, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(infrastructureRows[i].signal, lv_color_hex(0xD1DED5), 0);
-    lv_obj_set_pos(infrastructureRows[i].signal, 570, 7);
-    lv_obj_set_width(infrastructureRows[i].signal, 145);
+    row.status = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(row.status, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_pos(row.status, 430, 7);
+    lv_obj_set_width(row.status, 110);
+    lv_label_set_text_static(row.status, row.statusText);
+
+    row.signal = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.signal, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(row.signal, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_pos(row.signal, 570, 7);
+    lv_obj_set_width(row.signal, 145);
+    lv_label_set_text_static(row.signal, row.signalText);
   }
 
   advancedDetail = lv_label_create(p);
@@ -3051,27 +3175,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
                static_cast<unsigned>(repeaterOnline));
       label(advancedSummary, text);
 
-      for (size_t i = 0; i < kMaxInfrastructure; ++i) {
-        if (!infrastructure[i].used) {
-          lv_obj_add_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
-          continue;
-        }
-
-        lv_obj_clear_flag(infrastructureRows[i].box, LV_OBJ_FLAG_HIDDEN);
-        label(infrastructureRows[i].name, infrastructure[i].name);
-        label(infrastructureRows[i].status,
-              infrastructure[i].online ? "ONLINE" : "OFFLINE");
-        if (infrastructure[i].online)
-          snprintf(text, sizeof(text), "LQI %u", infrastructure[i].lqi);
-        else
-          snprintf(text, sizeof(text), "LQI --");
-        label(infrastructureRows[i].signal, text);
-        lv_obj_set_style_bg_color(
-            infrastructureRows[i].box,
-            lv_color_hex(selectedInfrastructure == static_cast<int>(i) ? 0x1E3529
-                                                                        : 0x1D2922),
-            0);
-      }
+      refreshAdvancedVirtualList(true);
 
       const bool validInfrastructure =
           selectedInfrastructure >= 0 &&
