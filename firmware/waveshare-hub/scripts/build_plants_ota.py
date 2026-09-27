@@ -147,8 +147,8 @@ def metadata(package: bytes, identity: BuildIdentity) -> PackageMetadata:
     )
 
 
-def read_plantlink_version() -> int:
-    header = Path(__file__).resolve().parents[3] / "shared/plantlink/plantlink.h"
+def read_plantlink_version(repo: Path) -> int:
+    header = repo / "shared" / "plantlink" / "plantlink.h"
     match = re.search(r"kProtocolVersion\s*=\s*(\d+)", header.read_text(encoding="utf-8"))
     if not match:
         raise ValueError("PlantLink protocol version missing")
@@ -161,6 +161,7 @@ def write_h2_asset(
     version: str,
     hardware: str,
     product: str,
+    protocol: int,
 ) -> dict:
     if not firmware_path.is_file():
         raise ValueError(f"H2 release firmware missing: {firmware_path}")
@@ -187,7 +188,7 @@ def write_h2_asset(
         "hardware": hardware,
         "version": version,
         "build_id": build_id,
-        "protocol": read_plantlink_version(),
+        "protocol": protocol,
         "asset": name,
         "firmware_size": len(data),
         "firmware_sha256": digest,
@@ -208,7 +209,12 @@ def h2_asset(repo: Path, release_dir: Path) -> dict:
         / "firmware.bin"
     )
     return write_h2_asset(
-        firmware, release_dir, identity.version, identity.hardware, identity.product
+        firmware,
+        release_dir,
+        identity.version,
+        identity.hardware,
+        identity.product,
+        read_plantlink_version(repo),
     )
 
 

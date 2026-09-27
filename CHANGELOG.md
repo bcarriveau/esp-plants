@@ -5,6 +5,20 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### H2 permit-join close stability (H2 alpha.31)
+
+- Fixed a hardware-reproduced ESP32-H2 crash when an active Zigbee permit-join
+  window was explicitly closed from the Waveshare pairing dialog or H2 development
+  console. The failure asserted in `vPortExitCritical` immediately after the Zigbee
+  network-close operation.
+- Permit-join open/close requests are now scheduled onto the ESP Zigbee scheduler
+  before invoking the Arduino Zigbee network-open/network-close APIs, keeping those
+  Zigbee operations in Zigbee task context instead of calling them directly from the
+  Arduino/PlantLink application task.
+- Existing 120-second pairing behavior, repeater settle deferral, PlantLink status
+  reporting, Zigbee network persistence, sensor handling, and OTA behavior are
+  otherwise unchanged.
+
 ### Waveshare LVGL stability and scalable UI (alpha.44-alpha.50)
 
 - Alpha.44 reduced LVGL pressure without changing the 800x480 layout: common card

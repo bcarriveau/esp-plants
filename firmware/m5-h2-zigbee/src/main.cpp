@@ -75,6 +75,22 @@ uint32_t lastRouterJoinActivityMs = 0;
 uint32_t deferredPermitCloseMs = 0;
 bool zigbeeReady = false;
 
+// Arduino Zigbee openNetwork()/closeNetwork() call the BDB APIs directly.
+// PlantLink and the development console run from the Arduino loop task, while
+// ESP Zigbee APIs must execute under the Zigbee stack's synchronization rules.
+// Schedule permit-join changes onto the Zigbee scheduler instead of invoking
+// the BDB open/close APIs directly from the application task.
+void applyPermitJoinInZigbeeTask(uint8_t seconds) {
+  if (seconds > 0)
+    Zigbee.openNetwork(seconds);
+  else
+    Zigbee.closeNetwork();
+}
+
+void schedulePermitJoin(uint8_t seconds) {
+  esp_zb_scheduler_alarm(applyPermitJoinInZigbeeTask, seconds, 0);
+}
+
 struct ApsEvent {
   uint16_t shortAddress = 0xffff;
   uint8_t ieee[8]{};
@@ -742,13 +758,13 @@ void handlePlantFrame(const plantlink::Frame &frame) {
           Serial.printf("[zigbee] permit join close deferred %lu ms for router settle\n",
                         static_cast<unsigned long>(kRouterJoinSettleMs));
         } else {
-          Zigbee.closeNetwork();
+          schedulePermitJoin(0);
           permitJoinUntilMs = 0;
           deferredPermitCloseMs = 0;
           Serial.println("[zigbee] permit join closed");
         }
       } else {
-        Zigbee.openNetwork(seconds);
+        schedulePermitJoin(seconds);
         permitJoinUntilMs = millis() + static_cast<uint32_t>(seconds) * 1000u;
         deferredPermitCloseMs = 0;
         lastRouterJoinActivityMs = 0;
@@ -790,7 +806,7 @@ void servicePlantLink() {
 
   if (deferredPermitCloseMs != 0 &&
       static_cast<int32_t>(now - deferredPermitCloseMs) >= 0) {
-    Zigbee.closeNetwork();
+    schedulePermitJoin(0);
     permitJoinUntilMs = 0;
     deferredPermitCloseMs = 0;
     lastRouterJoinActivityMs = 0;
@@ -876,7 +892,7 @@ void handleUsbConsoleCommand(char command) {
   switch (command) {
     case 'p':
 #if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
-      Zigbee.openNetwork(120);
+      schedulePermitJoin(120);
       permitJoinUntilMs = millis() + 120000u;
       deferredPermitCloseMs = 0;
       lastRouterJoinActivityMs = 0;
@@ -889,7 +905,7 @@ void handleUsbConsoleCommand(char command) {
 
     case 'c':
 #if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
-      Zigbee.closeNetwork();
+      schedulePermitJoin(0);
       permitJoinUntilMs = 0;
       deferredPermitCloseMs = 0;
       lastRouterJoinActivityMs = 0;
