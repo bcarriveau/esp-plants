@@ -6,6 +6,7 @@
 
 #include "plantlink.h"
 #include "advanced_virtual_list.h"
+#include "all_virtual_list.h"
 #include "home_virtual_list.h"
 #include "phrase_engine.h"
 #include "update_service.h"
@@ -105,6 +106,10 @@ struct AllSensorRow {
   lv_obj_t *moisture = nullptr;
   lv_obj_t *battery = nullptr;
   lv_obj_t *updated = nullptr;
+  int boundSlot = -1;
+  size_t boundLogicalIndex = kMaxSensors;
+  char moistureText[8]{};
+  char batteryText[8]{};
 };
 
 struct InfrastructureNode {
@@ -136,7 +141,7 @@ plantlink::Decoder decoder;
 Preferences preferences;
 PlantSensor sensors[kMaxSensors];
 PlantListRow rows[espplants_home_virtual_list::kPoolSize];
-AllSensorRow allRows[kMaxSensors];
+AllSensorRow allRows[espplants_all_virtual_list::kPoolSize];
 InfrastructureNode infrastructure[kMaxInfrastructure];
 InfrastructureRow infrastructureRows[espplants_advanced_virtual_list::kPoolSize];
 
@@ -163,14 +168,6 @@ int manualHomeSensor = -1;
 uint32_t manualHomeUntilMs = 0;
 char deviceName[kDeviceNameBytes] = "ESP PLANTS";
 Page currentPage = Page::Home;
-
-struct AppliedSensorOrder {
-  size_t slots[kMaxSensors]{};
-  size_t count = 0;
-  bool valid = false;
-};
-
-AppliedSensorOrder allAppliedOrder;
 
 PairDialogState pairDialogState = PairDialogState::Hidden;
 bool pairInfrastructure = false;
@@ -213,6 +210,12 @@ size_t homeFirstLogicalIndex = kMaxSensors;
 bool homeVirtualBinding = false;
 
 lv_obj_t *allSummary = nullptr;
+lv_obj_t *allList = nullptr;
+lv_obj_t *allVirtualContent = nullptr;
+size_t allLogicalSlots[kMaxSensors]{};
+size_t allLogicalCount = 0;
+size_t allFirstLogicalIndex = kMaxSensors;
+bool allVirtualBinding = false;
 
 lv_obj_t *detailSlot = nullptr;
 lv_obj_t *detailName = nullptr;
@@ -1025,11 +1028,105 @@ void rowEvent(lv_event_t *event) {
   uiDirty = true;
 }
 
+void refreshAllVirtualList(bool forceValues = false) {
+  if (!allList || !allVirtualContent || allVirtualBinding) return;
+  allVirtualBinding = true;
+
+  size_t logicalSlots[kMaxSensors]{};
+  const size_t logicalCount = buildSortedSlots(logicalSlots);
+  const bool logicalChanged =
+      logicalCount != allLogicalCount ||
+      (logicalCount > 0 &&
+       memcmp(allLogicalSlots, logicalSlots, logicalCount * sizeof(size_t)) != 0);
+
+  if (logicalChanged) {
+    if (logicalCount > 0) {
+      memcpy(allLogicalSlots, logicalSlots, logicalCount * sizeof(size_t));
+    }
+    allLogicalCount = logicalCount;
+    lv_obj_set_height(allVirtualContent,
+                      espplants_all_virtual_list::contentHeight(logicalCount));
+    lv_obj_update_layout(allList);
+
+    const int32_t scrollY = lv_obj_get_scroll_y(allList);
+    const int32_t clamped =
+        espplants_all_virtual_list::clampScrollY(logicalCount, scrollY);
+    if (scrollY != clamped) lv_obj_scroll_to_y(allList, clamped, LV_ANIM_OFF);
+    allFirstLogicalIndex = kMaxSensors;
+  }
+
+  const int32_t scrollY = espplants_all_virtual_list::clampScrollY(
+      allLogicalCount, lv_obj_get_scroll_y(allList));
+  const size_t firstLogical = espplants_all_virtual_list::firstPoolLogicalIndex(
+      allLogicalCount, scrollY);
+  const bool windowChanged = firstLogical != allFirstLogicalIndex;
+
+  char text[64]{};
+  for (size_t poolIndex = 0;
+       poolIndex < espplants_all_virtual_list::kPoolSize; ++poolIndex) {
+    AllSensorRow &row = allRows[poolIndex];
+    const size_t logicalIndex = firstLogical + poolIndex;
+    if (logicalIndex >= allLogicalCount) {
+      row.boundSlot = -1;
+      row.boundLogicalIndex = kMaxSensors;
+      lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+      continue;
+    }
+
+    const size_t slot = allLogicalSlots[logicalIndex];
+    const bool rebound = row.boundSlot != static_cast<int>(slot) ||
+                         row.boundLogicalIndex != logicalIndex;
+    if (rebound || windowChanged) {
+      row.boundSlot = static_cast<int>(slot);
+      row.boundLogicalIndex = logicalIndex;
+      lv_obj_set_pos(row.box, 0, static_cast<lv_coord_t>(logicalIndex *
+          static_cast<size_t>(espplants_all_virtual_list::kStride)));
+    }
+
+    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    if (rebound || windowChanged || forceValues) {
+      label(row.name, sensors[slot].name);
+
+      if (hasFreshMoisture(sensors[slot]))
+        snprintf(text, sizeof(text), "%u%%", sensors[slot].soilMoisturePct);
+      else
+        snprintf(text, sizeof(text), "--%%");
+      staticRowLabel(row.moisture, row.moistureText, sizeof(row.moistureText), text);
+
+      if (sensors[slot].seenThisBoot &&
+          (sensors[slot].fieldFlags & plantlink::SensorHasBattery))
+        snprintf(text, sizeof(text), "%u%%", sensors[slot].batteryPct);
+      else
+        snprintf(text, sizeof(text), "--%%");
+      staticRowLabel(row.battery, row.batteryText, sizeof(row.batteryText), text);
+
+      formatLastReport(sensors[slot], text, sizeof(text));
+      label(row.updated, text);
+
+      const bool thirsty =
+          sensors[slot].seenThisBoot &&
+          ((sensors[slot].fieldFlags & plantlink::SensorHasWaterWarning) &&
+           sensors[slot].waterWarning);
+      lv_obj_set_style_bg_color(row.box,
+                                lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
+    }
+  }
+
+  allFirstLogicalIndex = firstLogical;
+  allVirtualBinding = false;
+}
+
+void allListScrollEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_SCROLL) return;
+  refreshAllVirtualList(false);
+}
+
 void allRowEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  const intptr_t slot = reinterpret_cast<intptr_t>(lv_event_get_user_data(event));
-  if (slot < 0 || slot >= static_cast<intptr_t>(kMaxSensors) || !sensors[slot].used) return;
-  selectedSensor = static_cast<int>(slot);
+  auto *row = static_cast<AllSensorRow *>(lv_event_get_user_data(event));
+  if (!row || row->boundSlot < 0 || row->boundSlot >= static_cast<int>(kMaxSensors) ||
+      !sensors[row->boundSlot].used) return;
+  selectedSensor = row->boundSlot;
   showPage(Page::Plant);
 }
 
@@ -2005,56 +2102,65 @@ void buildAll(lv_obj_t *screen) {
   lv_obj_set_width(headUpdated, 150);
   lv_obj_set_style_text_align(headUpdated, LV_TEXT_ALIGN_CENTER, 0);
 
-  lv_obj_t *list = lv_obj_create(p);
-  lv_obj_set_pos(list, 10, 72);
-  lv_obj_set_size(list, 752, 248);
-  lv_obj_set_style_border_width(list, 0, 0);
-  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(list, 0, 0);
-  lv_obj_set_style_pad_row(list, 6, 0);
-  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  allList = lv_obj_create(p);
+  lv_obj_set_pos(allList, 10, 72);
+  lv_obj_set_size(allList, 752, espplants_all_virtual_list::kViewportHeight);
+  lv_obj_set_style_border_width(allList, 0, 0);
+  lv_obj_set_style_bg_opa(allList, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(allList, 0, 0);
+  lv_obj_set_scroll_dir(allList, LV_DIR_VER);
+  lv_obj_add_event_cb(allList, allListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
-  for (size_t i = 0; i < kMaxSensors; ++i) {
-    allRows[i].box = lv_obj_create(list);
-    lv_obj_set_size(allRows[i].box, 742, 56);
-    lv_obj_set_style_radius(allRows[i].box, 10, 0);
-    lv_obj_set_style_border_width(allRows[i].box, 0, 0);
-    lv_obj_set_style_bg_color(allRows[i].box, lv_color_hex(0x1D2922), 0);
-    lv_obj_set_style_pad_all(allRows[i].box, 8, 0);
-    lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_event_cb(allRows[i].box, allRowEvent, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+  allVirtualContent = lv_obj_create(allList);
+  lv_obj_set_pos(allVirtualContent, 0, 0);
+  lv_obj_set_size(allVirtualContent, 742,
+                  espplants_all_virtual_list::contentHeight(0));
+  lv_obj_set_style_border_width(allVirtualContent, 0, 0);
+  lv_obj_set_style_bg_opa(allVirtualContent, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(allVirtualContent, 0, 0);
+  lv_obj_clear_flag(allVirtualContent, LV_OBJ_FLAG_SCROLLABLE);
 
-    allRows[i].name = lv_label_create(allRows[i].box);
-    lv_obj_set_style_text_font(allRows[i].name, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(allRows[i].name, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(allRows[i].name, 4, 9);
-    lv_obj_set_width(allRows[i].name, 285);
-    lv_label_set_long_mode(allRows[i].name, LV_LABEL_LONG_DOT);
+  for (size_t i = 0; i < espplants_all_virtual_list::kPoolSize; ++i) {
+    AllSensorRow &row = allRows[i];
+    row.box = lv_obj_create(allVirtualContent);
+    lv_obj_set_pos(row.box, 0, 0);
+    lv_obj_set_size(row.box, 742, espplants_all_virtual_list::kRowHeight);
+    lv_obj_set_style_radius(row.box, 10, 0);
+    lv_obj_set_style_border_width(row.box, 0, 0);
+    lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_pad_all(row.box, 8, 0);
+    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(row.box, allRowEvent, LV_EVENT_CLICKED, &row);
 
-    allRows[i].moisture = lv_label_create(allRows[i].box);
-    lv_obj_set_style_text_font(allRows[i].moisture, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(allRows[i].moisture, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(allRows[i].moisture, 305, 8);
-    lv_obj_set_width(allRows[i].moisture, 110);
-    lv_obj_set_style_text_align(allRows[i].moisture, LV_TEXT_ALIGN_CENTER, 0);
+    row.name = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_pos(row.name, 4, 9);
+    lv_obj_set_width(row.name, 285);
+    lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
-    allRows[i].battery = lv_label_create(allRows[i].box);
-    lv_obj_set_style_text_font(allRows[i].battery, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(allRows[i].battery, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(allRows[i].battery, 435, 9);
-    lv_obj_set_width(allRows[i].battery, 115);
-    lv_obj_set_style_text_align(allRows[i].battery, LV_TEXT_ALIGN_CENTER, 0);
+    row.moisture = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_pos(row.moisture, 305, 8);
+    lv_obj_set_width(row.moisture, 110);
+    lv_obj_set_style_text_align(row.moisture, LV_TEXT_ALIGN_CENTER, 0);
 
-    allRows[i].updated = lv_label_create(allRows[i].box);
-    lv_obj_set_style_text_font(allRows[i].updated, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(allRows[i].updated, lv_color_hex(0xD1DED5), 0);
-    lv_obj_set_pos(allRows[i].updated, 565, 10);
-    lv_obj_set_width(allRows[i].updated, 155);
-    lv_obj_set_style_text_align(allRows[i].updated, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(allRows[i].updated, LV_LABEL_LONG_DOT);
+    row.battery = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.battery, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(row.battery, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_pos(row.battery, 435, 9);
+    lv_obj_set_width(row.battery, 115);
+    lv_obj_set_style_text_align(row.battery, LV_TEXT_ALIGN_CENTER, 0);
+
+    row.updated = lv_label_create(row.box);
+    lv_obj_set_style_text_font(row.updated, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(row.updated, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_pos(row.updated, 565, 10);
+    lv_obj_set_width(row.updated, 155);
+    lv_obj_set_style_text_align(row.updated, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(row.updated, LV_LABEL_LONG_DOT);
   }
 }
 
@@ -2989,22 +3095,6 @@ void formatSoil(const PlantSensor &s, char *out, size_t size) {
   else snprintf(out, size, "--%%");
 }
 
-bool appliedOrderMatches(const AppliedSensorOrder &applied,
-                         const size_t desired[kMaxSensors], size_t count) {
-  if (!applied.valid || applied.count != count) return false;
-  for (size_t i = 0; i < count; ++i) {
-    if (applied.slots[i] != desired[i]) return false;
-  }
-  return true;
-}
-
-void rememberAppliedOrder(AppliedSensorOrder &applied,
-                          const size_t desired[kMaxSensors], size_t count) {
-  applied.count = count;
-  for (size_t i = 0; i < count; ++i) applied.slots[i] = desired[i];
-  applied.valid = true;
-}
-
 void refreshUi(bool force, bool alreadyInLvglContext) {
   const uint32_t now = millis();
   if (!force && !uiDirty && now - lastUiRefreshMs < kUiRefreshIntervalMs) return;
@@ -3077,47 +3167,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
                static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
       label(allSummary, text);
 
-      size_t sorted[kMaxSensors]{};
-      const size_t sortedCount = buildSortedSlots(sorted);
-      if (!appliedOrderMatches(allAppliedOrder, sorted, sortedCount)) {
-        for (size_t order = 0; order < sortedCount; ++order) {
-          const size_t slot = sorted[order];
-          lv_obj_move_to_index(allRows[slot].box, static_cast<int32_t>(order));
-        }
-        rememberAppliedOrder(allAppliedOrder, sorted, sortedCount);
-      }
-
-      for (size_t i = 0; i < kMaxSensors; ++i) {
-        if (!sensors[i].used) {
-          lv_obj_add_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
-          continue;
-        }
-
-        lv_obj_clear_flag(allRows[i].box, LV_OBJ_FLAG_HIDDEN);
-        label(allRows[i].name, sensors[i].name);
-        if (hasFreshMoisture(sensors[i]))
-          snprintf(text, sizeof(text), "%u%%", sensors[i].soilMoisturePct);
-        else
-          snprintf(text, sizeof(text), "--%%");
-        label(allRows[i].moisture, text);
-
-        if (sensors[i].seenThisBoot &&
-            (sensors[i].fieldFlags & plantlink::SensorHasBattery))
-          snprintf(text, sizeof(text), "%u%%", sensors[i].batteryPct);
-        else
-          snprintf(text, sizeof(text), "--%%");
-        label(allRows[i].battery, text);
-
-        formatLastReport(sensors[i], text, sizeof(text));
-        label(allRows[i].updated, text);
-
-        const bool thirsty =
-            sensors[i].seenThisBoot &&
-            ((sensors[i].fieldFlags & plantlink::SensorHasWaterWarning) &&
-             sensors[i].waterWarning);
-        lv_obj_set_style_bg_color(allRows[i].box,
-                                  lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
-      }
+      refreshAllVirtualList(true);
       break;
     }
 

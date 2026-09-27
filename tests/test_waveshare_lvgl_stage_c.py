@@ -15,9 +15,9 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_stage_c_identity_and_platformio_are_preserved():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.46"
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.47"
     source = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.46"' in source
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.47"' in source
     pio = read(PIO)
     assert "upload_port = COM11" in pio
     assert "lvgl/lvgl@8.3.11" in pio
@@ -98,8 +98,9 @@ def test_home_logical_source_capacity_sort_and_freshness_are_unchanged():
     assert 'snprintf(out, size, "WAITING")' in source
 
 
-def test_stage_c_does_not_virtualize_all_sensors_or_change_advanced_pool():
+def test_stage_c_keeps_home_and_advanced_virtual_pools_intact():
     source = read(MAIN)
-    assert "AllSensorRow allRows[kMaxSensors];" in source
+    assert "PlantListRow rows[espplants_home_virtual_list::kPoolSize];" in source
     assert "InfrastructureRow infrastructureRows[espplants_advanced_virtual_list::kPoolSize];" in source
+    assert "constexpr size_t kPoolSize = 7;" in read(VIRTUAL)
     assert "constexpr size_t kPoolSize = 5;" in read(ROOT / "firmware/waveshare-hub/include/advanced_virtual_list.h")

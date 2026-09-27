@@ -15,9 +15,9 @@ def function_block(source: str, start: str, end: str) -> str:
 
 
 def test_stage_b_identity_and_platformio_are_preserved():
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.46"
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.47"
     source = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.46"' in source
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.47"' in source
     pio = read(PIO)
     assert "upload_port = COM11" in pio
     assert "lvgl/lvgl@8.3.11" in pio
@@ -101,6 +101,7 @@ def test_advanced_data_source_capacity_and_management_are_unchanged():
     assert "openInfrastructureRename(selectedInfrastructure);" in source
 
 
-def test_all_sensors_virtualization_is_not_part_of_stage_b_or_c():
+def test_advanced_pool_remains_unchanged_after_later_sensor_list_virtualization():
     source = read(MAIN)
-    assert "AllSensorRow allRows[kMaxSensors];" in source
+    assert "InfrastructureRow infrastructureRows[espplants_advanced_virtual_list::kPoolSize];" in source
+    assert "constexpr size_t kPoolSize = 5;" in read(VIRTUAL)
