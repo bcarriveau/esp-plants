@@ -2207,17 +2207,18 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_size(homeBar, 448, 22);
   lv_bar_set_range(homeBar, 0, 100);
   lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(homeBar, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
 
   homeWarning = lv_label_create(featured);
   lv_label_set_text(homeWarning, "WATER ME!");
-  lv_obj_set_style_text_font(homeWarning, &lv_font_montserrat_32, 0);
+  lv_obj_set_style_text_font(homeWarning, &lv_font_montserrat_40, 0);
   lv_obj_set_style_text_color(homeWarning, lv_color_hex(0xFFF4EE), 0);
   lv_obj_set_style_bg_color(homeWarning, lv_color_hex(0x8E493E), 0);
-  lv_obj_set_style_pad_hor(homeWarning, 20, 0);
-  lv_obj_set_style_pad_ver(homeWarning, 12, 0);
+  lv_obj_set_style_pad_hor(homeWarning, 0, 0);
+  lv_obj_set_style_pad_ver(homeWarning, 0, 0);
   lv_obj_set_style_radius(homeWarning, 12, 0);
-  lv_obj_set_pos(homeWarning, 24, 214);
+  lv_obj_set_pos(homeWarning, 24, 235);
   lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_t *hint = lv_label_create(featured);
@@ -2286,6 +2287,7 @@ void buildHome(lv_obj_t *screen) {
     lv_obj_set_size(row.bar, 208, 9);
     lv_bar_set_range(row.bar, 0, 100);
     lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(row.bar, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
   }
 }
@@ -2487,6 +2489,7 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_set_size(detailBar, 718, 22);
   lv_bar_set_range(detailBar, 0, 100);
   lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(detailBar, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
 
   detailUpdated = lv_label_create(p);
