@@ -2,6 +2,8 @@
   "files": [
     "fonts.h",
     "screens.c",
-    "screens.h"
+    "screens.h",
+    "ui.c",
+    "ui.h"
   ]
 }

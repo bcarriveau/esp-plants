@@ -2115,48 +2115,17 @@ void refreshPairDialog() {
 }
 
 void buildHeader(lv_obj_t *screen) {
-  lv_obj_t *header = lv_obj_create(screen);
-  lv_obj_set_pos(header, 0, 0);
-  lv_obj_set_size(header, 800, 66);
-  lv_obj_set_style_radius(header, 0, 0);
-  lv_obj_set_style_border_width(header, 0, 0);
-  lv_obj_set_style_bg_color(header, lv_color_hex(0x0C2518), 0);
-  lv_obj_set_style_pad_all(header, 0, 0);
-  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  headerTitle = lv_label_create(header);
-  lv_label_set_text(headerTitle, deviceName);
-  lv_obj_set_style_text_font(headerTitle, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(headerTitle, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(headerTitle, 22, 9);
-  lv_obj_set_width(headerTitle, 500);
-  lv_label_set_long_mode(headerTitle, LV_LABEL_LONG_DOT);
+  // EEZ Studio owns header geometry and styling. Runtime text and callbacks
+  // remain native ESP PLANTS behavior.
+  headerTitle = objects.header_title;
+  headerUpdateButton = objects.header_update_button;
+  headerCount = objects.header_count;
 
-  lv_obj_t *tag = lv_label_create(header);
-  lv_label_set_text(tag, "keep 'em alive");
-  lv_obj_set_style_text_font(tag, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(tag, lv_color_hex(0x9DB5A5), 0);
-  lv_obj_set_pos(tag, 24, 43);
-
-  headerUpdateButton = lv_btn_create(header);
-  lv_obj_set_size(headerUpdateButton, 104, 34);
-  lv_obj_set_pos(headerUpdateButton, 548, 16);
-  lv_obj_set_style_radius(headerUpdateButton, 10, 0);
-  lv_obj_set_style_bg_color(headerUpdateButton, lv_color_hex(0xB86E2F), 0);
-  lv_obj_set_style_shadow_width(headerUpdateButton, 0, 0);
+  label(headerTitle, deviceName);
   lv_obj_add_event_cb(headerUpdateButton, openUpdateEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *updateLabel = lv_label_create(headerUpdateButton);
-  lv_label_set_text(updateLabel, "UPDATE");
-  lv_obj_set_style_text_font(updateLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(updateLabel, lv_color_hex(0xFFF4E6), 0);
-  lv_obj_center(updateLabel);
   lv_obj_add_flag(headerUpdateButton, LV_OBJ_FLAG_HIDDEN);
-
-  headerCount = lv_label_create(header);
-  lv_label_set_text(headerCount, "0 PLANTS");
-  lv_obj_set_style_text_font(headerCount, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(headerCount, lv_color_hex(0xD1DED5), 0);
-  lv_obj_align(headerCount, LV_ALIGN_RIGHT_MID, -22, 0);
 }
 
 void buildHome(lv_obj_t *screen) {
@@ -2430,157 +2399,75 @@ void buildAdvanced(lv_obj_t *screen) {
 }
 
 void buildNav(lv_obj_t *screen) {
-  lv_obj_t *bar = lv_obj_create(screen);
-  lv_obj_set_pos(bar, 0, 422);
-  lv_obj_set_size(bar, 800, 58);
-  lv_obj_set_style_radius(bar, 0, 0);
-  lv_obj_set_style_border_width(bar, 0, 0);
-  lv_obj_set_style_bg_color(bar, lv_color_hex(0x111A16), 0);
-  lv_obj_set_style_pad_all(bar, 0, 0);
-  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  auto add = [&](int x, const char *text, Page page, lv_obj_t **button) {
-    *button = lv_btn_create(bar);
-    lv_obj_set_size(*button, 184, 44);
-    lv_obj_set_pos(*button, x, 7);
-    lv_obj_set_style_radius(*button, 12, 0);
-    lv_obj_set_style_shadow_width(*button, 0, 0);
-    lv_obj_set_style_border_width(*button, 1, 0);
-    lv_obj_set_style_border_color(*button, lv_color_hex(0x304138), 0);
-    lv_obj_add_event_cb(*button, navEvent, LV_EVENT_CLICKED,
-                        reinterpret_cast<void *>(static_cast<intptr_t>(page)));
-    lv_obj_t *l = lv_label_create(*button);
-    lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_center(l);
-  };
-  add(14, "HOME", Page::Home, &navHome);
-  add(210, "ALL SENSORS", Page::All, &navAll);
-  add(406, "PLANT", Page::Plant, &navPlant);
-  add(602, "SETTINGS", Page::Settings, &navSettings);
+  // EEZ Studio owns the locked bottom-navigation geometry and styling.
+  navHome = objects.nav_home;
+  navAll = objects.nav_all;
+  navPlant = objects.nav_plant;
+  navSettings = objects.nav_settings;
+
+  lv_obj_add_event_cb(navHome, navEvent, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(static_cast<intptr_t>(Page::Home)));
+  lv_obj_add_event_cb(navAll, navEvent, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(static_cast<intptr_t>(Page::All)));
+  lv_obj_add_event_cb(navPlant, navEvent, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(static_cast<intptr_t>(Page::Plant)));
+  lv_obj_add_event_cb(navSettings, navEvent, LV_EVENT_CLICKED,
+                      reinterpret_cast<void *>(static_cast<intptr_t>(Page::Settings)));
 }
 void buildUpdateDialog(lv_obj_t *screen) {
-  updateModal = lv_obj_create(screen);
-  lv_obj_set_pos(updateModal, 0, 0);
-  lv_obj_set_size(updateModal, 800, 480);
-  lv_obj_set_style_radius(updateModal, 0, 0);
-  lv_obj_set_style_border_width(updateModal, 0, 0);
-  lv_obj_set_style_bg_color(updateModal, lv_color_hex(0x101814), 0);
-  lv_obj_set_style_pad_all(updateModal, 0, 0);
-  lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *top = lv_obj_create(updateModal);
-  lv_obj_set_pos(top, 0, 0);
-  lv_obj_set_size(top, 800, 70);
-  lv_obj_set_style_radius(top, 0, 0);
-  lv_obj_set_style_border_width(top, 0, 0);
-  lv_obj_set_style_bg_color(top, lv_color_hex(0x0C2518), 0);
-  lv_obj_set_style_pad_all(top, 0, 0);
-  lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+  // EEZ Studio owns all static Network & Updates, Release Notes, and
+  // confirmation geometry. The QR bitmap itself stays runtime-generated so it
+  // can encode the active setup credentials without duplicating a screen tree.
+  updateModal = objects.update_modal;
+  updateWifiState = objects.update_wifi_state;
+  updateWifiDetail = objects.update_wifi_detail;
+  updateSetupButton = objects.update_setup_button;
+  updateSetupLabel = objects.update_setup_label;
+  updateDisconnectButton = objects.update_disconnect_button;
+  updateDisconnectLabel = objects.update_disconnect_label;
+  updateForgetButton = objects.update_forget_button;
+  updateQrHint = objects.update_qr_hint;
+  updateQrCard = objects.update_qr_card;
+  updatePortalInfo = objects.update_portal_info;
+  updateCurrentVersion = objects.update_current_version;
+  updateLatestVersion = objects.update_latest_version;
+  updateH2Version = objects.update_h2_version;
+  updateStatus = objects.update_status;
+  updateCheckButton = objects.update_check_button;
+  updateCheckLabel = objects.update_check_label;
+  updateInstallButton = objects.update_install_button;
+  updateInstallLabel = objects.update_install_label;
+  releaseNotesModal = objects.release_notes_modal;
+  releaseNotesLabel = objects.release_notes_label;
+  wifiForgetConfirm = objects.wifi_forget_confirm;
 
-  lv_obj_t *title = lv_label_create(top);
-  lv_label_set_text(title, "NETWORK & UPDATES");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 22, 18);
+  lv_obj_add_event_cb(objects.update_close_button, closeUpdateEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(updateSetupButton, wifiSetupEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(updateDisconnectButton, wifiDisconnectEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(updateForgetButton, wifiForgetAskEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(updateCheckButton, updateCheckEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(updateInstallButton, updateInstallEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.release_notes_back_button, releaseNotesBackEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.release_notes_check_button, releaseNotesCheckEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.wifi_forget_cancel_button, wifiForgetCancelEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.wifi_forget_confirm_button, wifiForgetConfirmEvent,
+                      LV_EVENT_CLICKED, nullptr);
 
-  lv_obj_t *close = lv_btn_create(top);
-  lv_obj_set_size(close, 94, 42);
-  lv_obj_set_pos(close, 684, 14);
-  lv_obj_set_style_radius(close, 11, 0);
-  lv_obj_set_style_bg_color(close, lv_color_hex(0x233029), 0);
-  lv_obj_add_event_cb(close, closeUpdateEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *closeLabel = lv_label_create(close);
-  lv_label_set_text(closeLabel, "CLOSE");
-  lv_obj_set_style_text_font(closeLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(closeLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(closeLabel);
-
-  // These two cards intentionally use zero padding so every child bound below
-  // is measured directly against the 370x388 card rectangle.
-  lv_obj_t *network = card(updateModal, 18, 82, 370, 388);
-  lv_obj_set_style_pad_all(network, 0, 0);
-  title = lv_label_create(network);
-  lv_label_set_text(title, "WI-FI");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 20, 14);
-
-  lv_obj_t *cap = lv_label_create(network);
-  lv_label_set_text(cap, "STATUS");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 20, 54);
-
-  updateWifiState = lv_label_create(network);
-  lv_label_set_text(updateWifiState, "NOT CONFIGURED");
-  lv_obj_set_style_text_font(updateWifiState, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(updateWifiState, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(updateWifiState, 20, 72);
-
-  updateWifiDetail = lv_label_create(network);
-  lv_label_set_text(updateWifiDetail, "SSID --\nIP --");
-  lv_obj_set_style_text_font(updateWifiDetail, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(updateWifiDetail, lv_color_hex(0xC1D0C6), 0);
-  lv_obj_set_pos(updateWifiDetail, 20, 106);
-  lv_obj_set_width(updateWifiDetail, 326);
-  lv_label_set_long_mode(updateWifiDetail, LV_LABEL_LONG_WRAP);
-
-  updateSetupButton = lv_btn_create(network);
-  lv_obj_set_size(updateSetupButton, 326, 42);
-  lv_obj_set_pos(updateSetupButton, 20, 150);
-  lv_obj_set_style_radius(updateSetupButton, 12, 0);
-  lv_obj_set_style_bg_color(updateSetupButton, lv_color_hex(0x3F7A4E), 0);
-  lv_obj_add_event_cb(updateSetupButton, wifiSetupEvent, LV_EVENT_CLICKED, nullptr);
-  updateSetupLabel = lv_label_create(updateSetupButton);
-  lv_label_set_text(updateSetupLabel, "SET UP / CHANGE WI-FI");
-  lv_obj_set_style_text_font(updateSetupLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(updateSetupLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(updateSetupLabel);
-
-  updateDisconnectButton = lv_btn_create(network);
-  lv_obj_set_size(updateDisconnectButton, 158, 40);
-  lv_obj_set_pos(updateDisconnectButton, 20, 202);
-  lv_obj_set_style_radius(updateDisconnectButton, 11, 0);
-  lv_obj_set_style_bg_color(updateDisconnectButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(updateDisconnectButton, wifiDisconnectEvent, LV_EVENT_CLICKED, nullptr);
-  updateDisconnectLabel = lv_label_create(updateDisconnectButton);
-  lv_label_set_text(updateDisconnectLabel, "DISCONNECT WI-FI");
-  lv_obj_set_style_text_font(updateDisconnectLabel, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(updateDisconnectLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(updateDisconnectLabel);
-
-  updateForgetButton = lv_btn_create(network);
-  lv_obj_set_size(updateForgetButton, 158, 40);
-  lv_obj_set_pos(updateForgetButton, 188, 202);
-  lv_obj_set_style_radius(updateForgetButton, 11, 0);
-  lv_obj_set_style_bg_color(updateForgetButton, lv_color_hex(0x7A4037), 0);
-  lv_obj_add_event_cb(updateForgetButton, wifiForgetAskEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *forgetLabel = lv_label_create(updateForgetButton);
-  lv_label_set_text(forgetLabel, "FORGET WI-FI");
-  lv_obj_set_style_text_font(forgetLabel, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(forgetLabel, lv_color_hex(0xF7EDE9), 0);
-  lv_obj_center(forgetLabel);
-
-  updateQrHint = lv_label_create(network);
-  lv_label_set_text(updateQrHint, "SCAN QR");
-  lv_obj_set_style_text_font(updateQrHint, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
-  lv_obj_set_pos(updateQrHint, 20, 248);
-  lv_obj_set_width(updateQrHint, kSetupQrOuterSize);
-  lv_obj_set_style_text_align(updateQrHint, LV_TEXT_ALIGN_CENTER, 0);
-
-  updateQrCard = lv_obj_create(network);
-  lv_obj_set_size(updateQrCard, kSetupQrOuterSize, kSetupQrOuterSize);
-  lv_obj_set_pos(updateQrCard, 20, 268);
-  lv_obj_set_style_bg_color(updateQrCard, lv_color_white(), 0);
-  lv_obj_set_style_bg_opa(updateQrCard, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(updateQrCard, 0, 0);
-  lv_obj_set_style_radius(updateQrCard, 0, 0);
-  lv_obj_set_style_pad_all(updateQrCard, 0, 0);
-  lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scroll_dir(objects.release_notes_scroll, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(objects.release_notes_scroll, LV_SCROLLBAR_MODE_AUTO);
 
   updateQrCode = lv_canvas_create(updateQrCard);
   lv_canvas_set_buffer(updateQrCode, updateQrCanvasBuffer,
@@ -2591,356 +2478,50 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_set_size(updateQrCode, kSetupQrSize, kSetupQrSize);
   lv_obj_center(updateQrCode);
 
-  updatePortalInfo = lv_label_create(network);
-  lv_label_set_text(updatePortalInfo,
-                    "Tap SET UP / CHANGE WI-FI. Scan the QR when it appears.");
-  lv_obj_set_style_text_font(updatePortalInfo, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(updatePortalInfo, lv_color_hex(0x9DB5A5), 0);
-  lv_obj_set_pos(updatePortalInfo, 20, 260);
-  lv_obj_set_width(updatePortalInfo, 326);
-  lv_obj_set_height(updatePortalInfo, 116);
-  lv_label_set_long_mode(updatePortalInfo, LV_LABEL_LONG_WRAP);
-
   lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-
-  lv_obj_t *software = card(updateModal, 412, 82, 370, 388);
-  lv_obj_set_style_pad_all(software, 0, 0);
-  title = lv_label_create(software);
-  lv_label_set_text(title, "SOFTWARE");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 20, 14);
-
-  cap = lv_label_create(software);
-  lv_label_set_text(cap, "CURRENT");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 20, 58);
-
-  updateCurrentVersion = lv_label_create(software);
-  lv_obj_set_style_text_font(updateCurrentVersion, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(updateCurrentVersion, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(updateCurrentVersion, 20, 78);
-
-  cap = lv_label_create(software);
-  lv_label_set_text(cap, "LATEST");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 190, 58);
-
-  updateLatestVersion = lv_label_create(software);
-  lv_obj_set_style_text_font(updateLatestVersion, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(updateLatestVersion, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(updateLatestVersion, 190, 78);
-  lv_obj_set_width(updateLatestVersion, 150);
-  lv_label_set_long_mode(updateLatestVersion, LV_LABEL_LONG_DOT);
-
-  // Alpha.21 H2 firmware identity display.  y=104, font 14 => bottom ~121;
-  // updateStatus begins at y=128, so the rows do not overlap.
-  updateH2Version = lv_label_create(software);
-  lv_label_set_text(updateH2Version, "H2 GATEWAY: unavailable");
-  lv_obj_set_style_text_font(updateH2Version, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(updateH2Version, lv_color_hex(0x9DB5A5), 0);
-  lv_obj_set_pos(updateH2Version, 20, 104);
-  lv_obj_set_width(updateH2Version, 326);
-  lv_label_set_long_mode(updateH2Version, LV_LABEL_LONG_DOT);
-
-  updateStatus = lv_label_create(software);
-  lv_label_set_text(updateStatus, "Connect Wi-Fi to check for updates.");
-  lv_obj_set_style_text_font(updateStatus, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(updateStatus, lv_color_hex(0xA5C3AD), 0);
-  lv_obj_set_pos(updateStatus, 20, 128);
-  lv_obj_set_width(updateStatus, 326);
-  lv_obj_set_height(updateStatus, 60);
-  lv_label_set_long_mode(updateStatus, LV_LABEL_LONG_WRAP);
-
-  updateCheckButton = lv_btn_create(software);
-  lv_obj_set_size(updateCheckButton, 326, 46);
-  lv_obj_set_pos(updateCheckButton, 20, 194);
-  lv_obj_set_style_radius(updateCheckButton, 12, 0);
-  lv_obj_set_style_bg_color(updateCheckButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(updateCheckButton, updateCheckEvent, LV_EVENT_CLICKED, nullptr);
-  updateCheckLabel = lv_label_create(updateCheckButton);
-  lv_label_set_text(updateCheckLabel, "CHECK NOW");
-  lv_obj_set_style_text_font(updateCheckLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(updateCheckLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(updateCheckLabel);
-
-  updateInstallButton = lv_btn_create(software);
-  lv_obj_set_size(updateInstallButton, 326, 54);
-  lv_obj_set_pos(updateInstallButton, 20, 252);
-  lv_obj_set_style_radius(updateInstallButton, 12, 0);
-  lv_obj_set_style_bg_color(updateInstallButton, lv_color_hex(0x3F7A4E), 0);
-  lv_obj_add_event_cb(updateInstallButton, updateInstallEvent, LV_EVENT_CLICKED, nullptr);
-  updateInstallLabel = lv_label_create(updateInstallButton);
-  lv_label_set_text(updateInstallLabel, "INSTALL UPDATE");
-  lv_obj_set_style_text_font(updateInstallLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(updateInstallLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(updateInstallLabel);
-
-  lv_obj_t *note = lv_label_create(software);
-  lv_label_set_text(note, "Verified .plantsota writes only the inactive app slot; plant data is preserved.");
-  lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(note, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(note, 20, 320);
-  lv_obj_set_width(note, 326);
-  lv_obj_set_height(note, 50);
-  lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
-
-  releaseNotesModal = lv_obj_create(updateModal);
-  lv_obj_set_pos(releaseNotesModal, 0, 0);
-  lv_obj_set_size(releaseNotesModal, 800, 480);
-  lv_obj_set_style_radius(releaseNotesModal, 0, 0);
-  lv_obj_set_style_border_width(releaseNotesModal, 0, 0);
-  lv_obj_set_style_bg_color(releaseNotesModal, lv_color_hex(0x101814), 0);
-  lv_obj_set_style_pad_all(releaseNotesModal, 0, 0);
-  lv_obj_clear_flag(releaseNotesModal, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *notesTop = lv_obj_create(releaseNotesModal);
-  lv_obj_set_pos(notesTop, 0, 0);
-  lv_obj_set_size(notesTop, 800, 70);
-  lv_obj_set_style_radius(notesTop, 0, 0);
-  lv_obj_set_style_border_width(notesTop, 0, 0);
-  lv_obj_set_style_bg_color(notesTop, lv_color_hex(0x0C2518), 0);
-  lv_obj_set_style_pad_all(notesTop, 0, 0);
-  lv_obj_clear_flag(notesTop, LV_OBJ_FLAG_SCROLLABLE);
-
-  lv_obj_t *notesTitle = lv_label_create(notesTop);
-  lv_label_set_text(notesTitle, "RELEASE NOTES");
-  lv_obj_set_style_text_font(notesTitle, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(notesTitle, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(notesTitle, 22, 18);
-
-  lv_obj_t *notesBack = lv_btn_create(notesTop);
-  lv_obj_set_size(notesBack, 94, 42);
-  lv_obj_set_pos(notesBack, 684, 14);
-  lv_obj_set_style_radius(notesBack, 11, 0);
-  lv_obj_set_style_bg_color(notesBack, lv_color_hex(0x233029), 0);
-  lv_obj_add_event_cb(notesBack, releaseNotesBackEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *notesBackLabel = lv_label_create(notesBack);
-  lv_label_set_text(notesBackLabel, "BACK");
-  lv_obj_set_style_text_font(notesBackLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(notesBackLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(notesBackLabel);
-
-  lv_obj_t *notesScroll = card(releaseNotesModal, 18, 82, 764, 300);
-  lv_obj_set_style_pad_all(notesScroll, 18, 0);
-  lv_obj_set_scroll_dir(notesScroll, LV_DIR_VER);
-  lv_obj_set_scrollbar_mode(notesScroll, LV_SCROLLBAR_MODE_AUTO);
-  releaseNotesLabel = lv_label_create(notesScroll);
-  lv_label_set_text(releaseNotesLabel, "");
-  lv_obj_set_width(releaseNotesLabel, 724);
-  lv_obj_set_style_text_font(releaseNotesLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(releaseNotesLabel, lv_color_hex(0xD1DED5), 0);
-  lv_label_set_long_mode(releaseNotesLabel, LV_LABEL_LONG_WRAP);
-
-  lv_obj_t *notesCheck = lv_btn_create(releaseNotesModal);
-  lv_obj_set_size(notesCheck, 180, 48);
-  lv_obj_set_pos(notesCheck, 602, 400);
-  lv_obj_set_style_radius(notesCheck, 11, 0);
-  lv_obj_set_style_bg_color(notesCheck, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(notesCheck, releaseNotesCheckEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *notesCheckLabel = lv_label_create(notesCheck);
-  lv_label_set_text(notesCheckLabel, "CHECK AGAIN");
-  lv_obj_set_style_text_font(notesCheckLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(notesCheckLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(notesCheckLabel);
   lv_obj_add_flag(releaseNotesModal, LV_OBJ_FLAG_HIDDEN);
-
-  wifiForgetConfirm = lv_obj_create(updateModal);
-  lv_obj_set_pos(wifiForgetConfirm, 180, 120);
-  lv_obj_set_size(wifiForgetConfirm, 440, 240);
-  lv_obj_set_style_radius(wifiForgetConfirm, 18, 0);
-  lv_obj_set_style_border_width(wifiForgetConfirm, 2, 0);
-  lv_obj_set_style_border_color(wifiForgetConfirm, lv_color_hex(0x7A4037), 0);
-  lv_obj_set_style_bg_color(wifiForgetConfirm, lv_color_hex(0x18231D), 0);
-  lv_obj_set_style_pad_all(wifiForgetConfirm, 0, 0);
-  lv_obj_clear_flag(wifiForgetConfirm, LV_OBJ_FLAG_SCROLLABLE);
-
-  title = lv_label_create(wifiForgetConfirm);
-  lv_label_set_text(title, "FORGET WI-FI?");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xF7EDE9), 0);
-  lv_obj_set_pos(title, 24, 22);
-
-  lv_obj_t *warning = lv_label_create(wifiForgetConfirm);
-  lv_label_set_text(warning,
-                    "This erases the saved SSID and password and disconnects Wi-Fi. ESP PLANTS will keep working offline.");
-  lv_obj_set_style_text_font(warning, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(warning, lv_color_hex(0xC1D0C6), 0);
-  lv_obj_set_pos(warning, 24, 64);
-  lv_obj_set_width(warning, 392);
-  lv_obj_set_height(warning, 76);
-  lv_label_set_long_mode(warning, LV_LABEL_LONG_WRAP);
-
-  lv_obj_t *cancel = lv_btn_create(wifiForgetConfirm);
-  lv_obj_set_size(cancel, 180, 48);
-  lv_obj_set_pos(cancel, 24, 164);
-  lv_obj_set_style_radius(cancel, 11, 0);
-  lv_obj_set_style_bg_color(cancel, lv_color_hex(0x233029), 0);
-  lv_obj_add_event_cb(cancel, wifiForgetCancelEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *cancelLabel = lv_label_create(cancel);
-  lv_label_set_text(cancelLabel, "CANCEL");
-  lv_obj_set_style_text_font(cancelLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(cancelLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(cancelLabel);
-
-  lv_obj_t *forget = lv_btn_create(wifiForgetConfirm);
-  lv_obj_set_size(forget, 180, 48);
-  lv_obj_set_pos(forget, 236, 164);
-  lv_obj_set_style_radius(forget, 11, 0);
-  lv_obj_set_style_bg_color(forget, lv_color_hex(0x7A4037), 0);
-  lv_obj_add_event_cb(forget, wifiForgetConfirmEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *forgetConfirmLabel = lv_label_create(forget);
-  lv_label_set_text(forgetConfirmLabel, "FORGET WI-FI");
-  lv_obj_set_style_text_font(forgetConfirmLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(forgetConfirmLabel, lv_color_hex(0xF7EDE9), 0);
-  lv_obj_center(forgetConfirmLabel);
-
   lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
 }
 
 void buildRename(lv_obj_t *screen) {
-  renameModal = lv_obj_create(screen);
-  lv_obj_set_pos(renameModal, 0, 0);
-  lv_obj_set_size(renameModal, 800, 480);
-  lv_obj_set_style_radius(renameModal, 0, 0);
-  lv_obj_set_style_border_width(renameModal, 0, 0);
-  lv_obj_set_style_bg_color(renameModal, lv_color_hex(0x101814), 0);
-  lv_obj_set_style_pad_all(renameModal, 0, 0);
-  lv_obj_clear_flag(renameModal, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *topBar = lv_obj_create(renameModal);
-  lv_obj_set_pos(topBar, 0, 0);
-  lv_obj_set_size(topBar, 800, 68);
-  lv_obj_set_style_radius(topBar, 0, 0);
-  lv_obj_set_style_border_width(topBar, 0, 0);
-  lv_obj_set_style_bg_color(topBar, lv_color_hex(0x0C2518), 0);
-  lv_obj_set_style_pad_all(topBar, 0, 0);
-  lv_obj_clear_flag(topBar, LV_OBJ_FLAG_SCROLLABLE);
+  // EEZ Studio owns the full-screen rename/personality layout. Firmware owns
+  // text entry behavior, keyboard maps, persistence, and personality state.
+  renameModal = objects.rename_modal;
+  renameTitle = objects.rename_title;
+  renameHint = objects.rename_hint;
+  renameInput = objects.rename_input;
+  renameKeyboard = objects.rename_keyboard;
 
-  renameTitle = lv_label_create(topBar);
-  lv_obj_set_style_text_font(renameTitle, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(renameTitle, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(renameTitle, 18, 8);
-
-  renameHint = lv_label_create(topBar);
-  lv_label_set_text(renameHint, "Name stays tied to this sensor.");
-  lv_obj_set_style_text_font(renameHint, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(renameHint, lv_color_hex(0x9DB5A5), 0);
-  lv_obj_set_pos(renameHint, 20, 36);
-
-  renameInput = lv_textarea_create(renameModal);
-  lv_obj_set_pos(renameInput, 18, 82);
-  lv_obj_set_size(renameInput, 764, 62);
   lv_textarea_set_one_line(renameInput, true);
   lv_textarea_set_max_length(renameInput, kPlantNameBytes - 1);
-  lv_obj_set_style_text_font(renameInput, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_radius(renameInput, 12, 0);
-  lv_obj_set_style_border_width(renameInput, 2, 0);
-  lv_obj_set_style_border_color(renameInput, lv_color_hex(0x3F7A4E), 0);
-  lv_obj_set_style_bg_color(renameInput, lv_color_hex(0x131C17), 0);
-  lv_obj_set_style_text_color(renameInput, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_style_border_width(renameInput, 3, LV_PART_CURSOR);
-  lv_obj_set_style_border_color(renameInput, lv_color_hex(0xF2C66D), LV_PART_CURSOR);
-  lv_obj_set_style_bg_color(renameInput, lv_color_hex(0xF2C66D), LV_PART_CURSOR);
-  lv_obj_set_style_bg_opa(renameInput, LV_OPA_COVER, LV_PART_CURSOR);
-
-  renameKeyboard = lv_btnmatrix_create(renameModal);
-  lv_obj_set_pos(renameKeyboard, 18, 158);
-  lv_obj_set_size(renameKeyboard, 764, 304);
   lv_btnmatrix_set_map(renameKeyboard, kRenameUpperMap);
-  lv_obj_set_style_radius(renameKeyboard, 14, 0);
-  lv_obj_set_style_border_width(renameKeyboard, 0, 0);
-  lv_obj_set_style_bg_color(renameKeyboard, lv_color_hex(0x18231D), 0);
-  lv_obj_set_style_pad_all(renameKeyboard, 8, 0);
-  lv_obj_set_style_pad_row(renameKeyboard, 7, 0);
-  lv_obj_set_style_pad_column(renameKeyboard, 7, 0);
-
-  lv_obj_set_style_radius(renameKeyboard, 9, LV_PART_ITEMS);
-  lv_obj_set_style_bg_color(renameKeyboard, lv_color_hex(0x233029), LV_PART_ITEMS);
-  lv_obj_set_style_text_color(renameKeyboard, lv_color_hex(0xE5ECE7), LV_PART_ITEMS);
-  lv_obj_set_style_text_font(renameKeyboard, &lv_font_montserrat_18, LV_PART_ITEMS);
-
-  lv_obj_add_event_cb(renameKeyboard, renameKeyboardEvent, LV_EVENT_VALUE_CHANGED, nullptr);
-
+  lv_obj_add_event_cb(renameKeyboard, renameKeyboardEvent,
+                      LV_EVENT_VALUE_CHANGED, nullptr);
   lv_obj_add_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
 }
 
 
 
 void buildPairDialog(lv_obj_t *screen) {
-  pairModal = lv_obj_create(screen);
-  lv_obj_set_pos(pairModal, 0, 0);
-  lv_obj_set_size(pairModal, 800, 480);
-  lv_obj_set_style_radius(pairModal, 0, 0);
-  lv_obj_set_style_border_width(pairModal, 0, 0);
-  lv_obj_set_style_bg_color(pairModal, lv_color_hex(0x101814), 0);
-  lv_obj_set_style_pad_all(pairModal, 0, 0);
-  lv_obj_clear_flag(pairModal, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *top = lv_obj_create(pairModal);
-  lv_obj_set_pos(top, 0, 0);
-  lv_obj_set_size(top, 800, 74);
-  lv_obj_set_style_radius(top, 0, 0);
-  lv_obj_set_style_border_width(top, 0, 0);
-  lv_obj_set_style_bg_color(top, lv_color_hex(0x0C2518), 0);
-  lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+  // EEZ Studio owns the pair/remove dialog geometry and styling. Firmware
+  // keeps the pairing state machine and all Zigbee behavior.
+  pairModal = objects.pair_modal;
+  pairTitle = objects.pair_title;
+  pairInstruction = objects.pair_instruction;
+  pairStatus = objects.pair_status;
+  pairPrimary = objects.pair_primary;
+  pairPrimaryLabel = objects.pair_primary_label;
+  pairSecondary = objects.pair_secondary;
+  pairSecondaryLabel = objects.pair_secondary_label;
 
-  pairTitle = lv_label_create(top);
-  lv_obj_set_style_text_font(pairTitle, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(pairTitle, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(pairTitle, 22, 18);
-
-  lv_obj_t *cardObj = lv_obj_create(pairModal);
-  lv_obj_set_pos(cardObj, 24, 94);
-  lv_obj_set_size(cardObj, 752, 350);
-  lv_obj_set_style_radius(cardObj, 20, 0);
-  lv_obj_set_style_border_width(cardObj, 1, 0);
-  lv_obj_set_style_border_color(cardObj, lv_color_hex(0x304138), 0);
-  lv_obj_set_style_bg_color(cardObj, lv_color_hex(0x18231D), 0);
-  lv_obj_clear_flag(cardObj, LV_OBJ_FLAG_SCROLLABLE);
-
-  pairInstruction = lv_label_create(cardObj);
-  lv_obj_set_style_text_font(pairInstruction, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(pairInstruction, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(pairInstruction, 28, 28);
-  lv_obj_set_width(pairInstruction, 680);
-  lv_label_set_long_mode(pairInstruction, LV_LABEL_LONG_WRAP);
-
-  pairStatus = lv_label_create(cardObj);
-  lv_obj_set_style_text_font(pairStatus, &lv_font_montserrat_28, 0);
-  lv_obj_set_style_text_color(pairStatus, lv_color_hex(0xA5C3AD), 0);
-  lv_obj_set_pos(pairStatus, 28, 126);
-  lv_obj_set_width(pairStatus, 680);
-  lv_label_set_long_mode(pairStatus, LV_LABEL_LONG_WRAP);
-
-  pairPrimary = lv_btn_create(cardObj);
-  lv_obj_set_size(pairPrimary, 220, 58);
-  lv_obj_set_pos(pairPrimary, 140, 250);
-  lv_obj_set_style_radius(pairPrimary, 12, 0);
-  lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x3F7A4E), 0);
   lv_obj_add_event_cb(pairPrimary, pairPrimaryEvent, LV_EVENT_CLICKED, nullptr);
-  pairPrimaryLabel = lv_label_create(pairPrimary);
-  lv_obj_set_style_text_font(pairPrimaryLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(pairPrimaryLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(pairPrimaryLabel);
-
-  pairSecondary = lv_btn_create(cardObj);
-  lv_obj_set_size(pairSecondary, 220, 58);
-  lv_obj_set_pos(pairSecondary, 392, 250);
-  lv_obj_set_style_radius(pairSecondary, 12, 0);
-  lv_obj_set_style_bg_color(pairSecondary, lv_color_hex(0x233029), 0);
-  lv_obj_set_style_border_width(pairSecondary, 1, 0);
-  lv_obj_set_style_border_color(pairSecondary, lv_color_hex(0x405348), 0);
   lv_obj_add_event_cb(pairSecondary, pairSecondaryEvent, LV_EVENT_CLICKED, nullptr);
-  pairSecondaryLabel = lv_label_create(pairSecondary);
-  lv_obj_set_style_text_font(pairSecondaryLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(pairSecondaryLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(pairSecondaryLabel);
-
   lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
 }
 

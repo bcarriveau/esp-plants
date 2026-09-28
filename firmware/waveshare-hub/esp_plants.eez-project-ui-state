@@ -70,7 +70,6 @@
           },
           {
             "type": "border",
-            "selected": 1,
             "location": "bottom",
             "children": [
               {
@@ -1083,11 +1082,14 @@
         "0": {
           "0": {
             "0": {
-              "2": {
-                "$selected": true
-              }
+              "2": {}
             },
             "1": {}
+          },
+          "4": {
+            "0": {
+              "$selected": true
+            }
           }
         }
       },
@@ -1120,7 +1122,10 @@
   "selectedStylePropertyName": "",
   "lvglPart": "MAIN",
   "lvglState": "DEFAULT",
-  "lvglExpandedPropertiesGroup": [],
+  "lvglExpandedPropertiesGroup": [
+    "BACKGROUND",
+    "PADDING"
+  ],
   "showInactiveFlowsInDebugger": true,
   "globalFlowZoom": true,
   "flowZoom": 1,
