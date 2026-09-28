@@ -2231,67 +2231,15 @@ void buildHome(lv_obj_t *screen) {
 }
 
 void buildAll(lv_obj_t *screen) {
-  allPage = lv_obj_create(screen);
-  lv_obj_set_pos(allPage, 0, 66);
-  lv_obj_set_size(allPage, 800, 356);
-  lv_obj_set_style_border_width(allPage, 0, 0);
-  lv_obj_set_style_bg_opa(allPage, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(allPage, 0, 0);
-  lv_obj_clear_flag(allPage, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *p = card(allPage, 14, 10, 772, 334);
+  // EEZ Studio owns the static All Sensors page. ESP PLANTS keeps the
+  // recycled row pool and all runtime data binding in native C++.
+  allPage = objects.all_page;
+  allSummary = objects.all_summary;
+  allList = objects.all_list;
 
-  lv_obj_t *title = lv_label_create(p);
-  lv_label_set_text(title, "ALL SENSORS");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 20, 14);
-
-  allSummary = lv_label_create(p);
-  lv_label_set_text(allSummary, "0 REPORTING | 0 WAITING");
-  lv_obj_set_style_text_font(allSummary, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(allSummary, lv_color_hex(0xC1D0C6), 0);
-  lv_obj_align(allSummary, LV_ALIGN_TOP_RIGHT, -20, 18);
-
-  // Fixed column headers instead of a space-padded sentence. This keeps every
-  // heading aligned with its values regardless of font metrics.
-  lv_obj_t *headPlant = lv_label_create(p);
-  lv_label_set_text(headPlant, "PLANT");
-  lv_obj_set_style_text_font(headPlant, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(headPlant, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(headPlant, 20, 52);
-  lv_obj_set_width(headPlant, 285);
-
-  lv_obj_t *headSoil = lv_label_create(p);
-  lv_label_set_text(headSoil, "SOIL");
-  lv_obj_set_style_text_font(headSoil, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(headSoil, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(headSoil, 320, 52);
-  lv_obj_set_width(headSoil, 105);
-  lv_obj_set_style_text_align(headSoil, LV_TEXT_ALIGN_CENTER, 0);
-
-  lv_obj_t *headBattery = lv_label_create(p);
-  lv_label_set_text(headBattery, "BATTERY");
-  lv_obj_set_style_text_font(headBattery, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(headBattery, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(headBattery, 445, 52);
-  lv_obj_set_width(headBattery, 115);
-  lv_obj_set_style_text_align(headBattery, LV_TEXT_ALIGN_CENTER, 0);
-
-  lv_obj_t *headUpdated = lv_label_create(p);
-  lv_label_set_text(headUpdated, "LAST REPORT");
-  lv_obj_set_style_text_font(headUpdated, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(headUpdated, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(headUpdated, 580, 52);
-  lv_obj_set_width(headUpdated, 150);
-  lv_obj_set_style_text_align(headUpdated, LV_TEXT_ALIGN_CENTER, 0);
-
-  allList = lv_obj_create(p);
-  lv_obj_set_pos(allList, 10, 72);
-  lv_obj_set_size(allList, 752, espplants_all_virtual_list::kViewportHeight);
-  lv_obj_set_style_border_width(allList, 0, 0);
-  lv_obj_set_style_bg_opa(allList, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(allList, 0, 0);
+  lv_obj_add_flag(allList, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(allList, LV_DIR_VER);
   lv_obj_add_event_cb(allList, allListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
@@ -2349,365 +2297,88 @@ void buildAll(lv_obj_t *screen) {
 }
 
 void buildPlant(lv_obj_t *screen) {
-  plantPage = lv_obj_create(screen);
-  lv_obj_set_pos(plantPage, 0, 66);
-  lv_obj_set_size(plantPage, 800, 356);
-  lv_obj_set_style_border_width(plantPage, 0, 0);
-  lv_obj_set_style_bg_opa(plantPage, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(plantPage, 0, 0);
-  lv_obj_clear_flag(plantPage, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *p = card(plantPage, 14, 10, 772, 334);
-  detailSlot = lv_label_create(p);
-  lv_obj_set_style_text_font(detailSlot, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(detailSlot, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(detailSlot, 22, 14);
+  // EEZ Studio owns Plant Detail geometry and styling. Runtime values and
+  // button behavior remain native ESP PLANTS code.
+  plantPage = objects.plant_page;
+  detailSlot = objects.detail_slot;
+  detailName = objects.detail_name;
+  detailMood = objects.detail_mood;
+  detailIeee = objects.detail_ieee;
+  detailSoil = objects.detail_soil;
+  detailTemp = objects.detail_temp;
+  detailHumidity = objects.detail_humidity;
+  detailBattery = objects.detail_battery;
+  detailSignal = objects.detail_signal;
+  detailBar = objects.detail_bar;
+  detailUpdated = objects.detail_updated;
+  detailWarning = objects.detail_warning;
+  renameButton = objects.rename_button;
+  replaceButton = objects.replace_button;
+  removeButton = objects.remove_button;
 
-  detailName = lv_label_create(p);
-  lv_obj_set_style_text_font(detailName, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(detailName, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(detailName, 22, 38);
-  lv_obj_set_width(detailName, 345);
-  lv_label_set_long_mode(detailName, LV_LABEL_LONG_DOT);
-
-  detailMood = lv_label_create(p);
-  lv_obj_set_style_text_font(detailMood, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(detailMood, lv_color_hex(0xCBE6D2), 0);
-  lv_obj_set_pos(detailMood, 24, 80);
-
-  detailIeee = lv_label_create(p);
-  lv_obj_set_style_text_font(detailIeee, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(detailIeee, lv_color_hex(0xAABBAF), 0);
-  lv_obj_set_pos(detailIeee, 24, 108);
-
-  renameButton = lv_btn_create(p);
-  lv_obj_set_size(renameButton, 110, 48);
-  lv_obj_set_pos(renameButton, 390, 24);
-  lv_obj_set_style_radius(renameButton, 12, 0);
-  lv_obj_set_style_bg_color(renameButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(renameButton, renameEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *renameLabel = lv_label_create(renameButton);
-  lv_label_set_text(renameLabel, "RENAME");
-  lv_obj_set_style_text_font(renameLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(renameLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(renameLabel);
-
-  replaceButton = lv_btn_create(p);
-  lv_obj_set_size(replaceButton, 110, 48);
-  lv_obj_set_pos(replaceButton, 510, 24);
-  lv_obj_set_style_radius(replaceButton, 12, 0);
-  lv_obj_set_style_bg_color(replaceButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(replaceButton, replaceEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *replaceLabel = lv_label_create(replaceButton);
-  lv_label_set_text(replaceLabel, "REPLACE");
-  lv_obj_set_style_text_font(replaceLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(replaceLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(replaceLabel);
-
-  removeButton = lv_btn_create(p);
-  lv_obj_set_size(removeButton, 110, 48);
-  lv_obj_set_pos(removeButton, 630, 24);
-  lv_obj_set_style_radius(removeButton, 12, 0);
-  lv_obj_set_style_bg_color(removeButton, lv_color_hex(0x7A4037), 0);
-  lv_obj_add_event_cb(removeButton, removeEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *removeLabel = lv_label_create(removeButton);
-  lv_label_set_text(removeLabel, "REMOVE");
-  lv_obj_set_style_text_font(removeLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(removeLabel, lv_color_hex(0xF7EDE9), 0);
-  lv_obj_center(removeLabel);
-
-  metric(p, "SOIL", 24, 150, &detailSoil, &lv_font_montserrat_32);
-  metric(p, "TEMP", 182, 150, &detailTemp);
-  metric(p, "AIR RH", 342, 150, &detailHumidity);
-  metric(p, "BATTERY", 502, 150, &detailBattery);
-  metric(p, "SIGNAL", 640, 150, &detailSignal, &lv_font_montserrat_24);
-
-  detailBar = lv_bar_create(p);
-  lv_obj_set_pos(detailBar, 24, 226);
-  lv_obj_set_size(detailBar, 718, 22);
   lv_bar_set_range(detailBar, 0, 100);
-  lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(detailBar, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(detailBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
-
-  detailUpdated = lv_label_create(p);
-  lv_obj_set_style_text_font(detailUpdated, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(detailUpdated, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(detailUpdated, 24, 276);
-  lv_obj_set_width(detailUpdated, 540);
-  lv_label_set_long_mode(detailUpdated, LV_LABEL_LONG_CLIP);
-
-  detailWarning = lv_label_create(p);
-  lv_label_set_text(detailWarning, "WATER ME!");
-  lv_obj_set_style_text_font(detailWarning, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(detailWarning, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_style_bg_color(detailWarning, lv_color_hex(0x8E493E), 0);
-  lv_obj_set_style_pad_hor(detailWarning, 14, 0);
-  lv_obj_set_style_pad_ver(detailWarning, 8, 0);
-  lv_obj_set_style_radius(detailWarning, 10, 0);
-  lv_obj_set_pos(detailWarning, 600, 272);
+  lv_obj_add_event_cb(renameButton, renameEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(replaceButton, replaceEvent, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(removeButton, removeEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
 }
 
 void buildSettings(lv_obj_t *screen) {
-  settingsPage = lv_obj_create(screen);
-  lv_obj_set_pos(settingsPage, 0, 66);
-  lv_obj_set_size(settingsPage, 800, 356);
-  lv_obj_set_style_border_width(settingsPage, 0, 0);
-  lv_obj_set_style_bg_opa(settingsPage, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(settingsPage, 0, 0);
-  lv_obj_clear_flag(settingsPage, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  // SYSTEM: identity and status. The status values are grouped instead of
-  // being stacked down the full height of the card.
-  lv_obj_t *system = card(settingsPage, 14, 10, 380, 334);
-  lv_obj_t *title = lv_label_create(system);
-  lv_label_set_text(title, "SYSTEM");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 22, 18);
+  // EEZ Studio owns Settings geometry and styling. The existing callbacks and
+  // runtime status strings remain authoritative in native C++.
+  settingsPage = objects.settings_page;
+  settingsDeviceName = objects.settings_device_name;
+  settingsH2 = objects.settings_h2;
+  settingsPlants = objects.settings_plants;
+  settingsZigbee = objects.settings_zigbee;
+  settingsUnit = objects.settings_unit;
+  settingsTheme = objects.settings_theme;
+  settingsPair = objects.settings_pair;
 
-  lv_obj_t *cap = lv_label_create(system);
-  lv_label_set_text(cap, "DEVICE NAME");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 22, 62);
-
-  lv_obj_t *deviceButton = lv_btn_create(system);
-  lv_obj_set_size(deviceButton, 330, 48);
-  lv_obj_set_pos(deviceButton, 22, 82);
-  lv_obj_set_style_radius(deviceButton, 12, 0);
-  lv_obj_set_style_bg_color(deviceButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(deviceButton, deviceNameEvent, LV_EVENT_CLICKED, nullptr);
-  settingsDeviceName = lv_label_create(deviceButton);
-  lv_obj_set_style_text_font(settingsDeviceName, &lv_font_montserrat_16, 0);
-  lv_obj_set_width(settingsDeviceName, 292);
-  lv_label_set_long_mode(settingsDeviceName, LV_LABEL_LONG_DOT);
-  lv_obj_center(settingsDeviceName);
-
-  cap = lv_label_create(system);
-  lv_label_set_text(cap, "H2 LINK");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 22, 151);
-
-  settingsH2 = lv_label_create(system);
-  lv_obj_set_pos(settingsH2, 22, 171);
-  lv_obj_set_style_text_font(settingsH2, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(settingsH2, lv_color_hex(0xE5ECE7), 0);
-
-  cap = lv_label_create(system);
-  lv_label_set_text(cap, "REGISTERED");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 200, 151);
-
-  settingsPlants = lv_label_create(system);
-  lv_obj_set_pos(settingsPlants, 200, 171);
-  lv_obj_set_style_text_font(settingsPlants, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(settingsPlants, lv_color_hex(0xE5ECE7), 0);
-
-  cap = lv_label_create(system);
-  lv_label_set_text(cap, "ZIGBEE NETWORK");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 22, 224);
-
-  settingsZigbee = lv_label_create(system);
-  lv_obj_set_pos(settingsZigbee, 22, 246);
-  lv_obj_set_width(settingsZigbee, 330);
-  lv_obj_set_style_text_font(settingsZigbee, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(settingsZigbee, lv_color_hex(0xE5ECE7), 0);
-  lv_label_set_long_mode(settingsZigbee, LV_LABEL_LONG_DOT);
-
-  lv_obj_t *legend = lv_label_create(system);
-  lv_label_set_text(legend, "P = PLANTS     R = REPEATERS");
-  lv_obj_set_style_text_font(legend, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(legend, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(legend, 22, 282);
-
-  lv_obj_t *networkButton = lv_btn_create(system);
-  lv_obj_set_size(networkButton, 162, 36);
-  lv_obj_set_pos(networkButton, 190, 14);
-  lv_obj_set_style_radius(networkButton, 10, 0);
-  lv_obj_set_style_bg_color(networkButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(networkButton, openUpdateEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *networkLabel = lv_label_create(networkButton);
-  lv_label_set_text(networkLabel, "NETWORK & UPDATES  >");
-  lv_obj_set_style_text_font(networkLabel, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(networkLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(networkLabel);
-
-  // PLANT SETUP: three deliberate rows with breathing room.
-  lv_obj_t *setup = card(settingsPage, 408, 10, 378, 334);
-  title = lv_label_create(setup);
-  lv_label_set_text(title, "PLANT SETUP");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 22, 18);
-
-  cap = lv_label_create(setup);
-  lv_label_set_text(cap, "PERSONALITY");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(cap, 22, 50);
-
-  lv_obj_t *tempCap = lv_label_create(setup);
-  lv_label_set_text(tempCap, "TEMP UNIT");
-  lv_obj_set_style_text_font(tempCap, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(tempCap, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(tempCap, 242, 50);
-
-  lv_obj_t *unitButton = lv_btn_create(setup);
-  lv_obj_set_size(unitButton, 92, 40);
-  lv_obj_set_pos(unitButton, 242, 66);
-  lv_obj_set_style_radius(unitButton, 12, 0);
-  lv_obj_set_style_bg_color(unitButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(unitButton, unitEvent, LV_EVENT_CLICKED, nullptr);
-  settingsUnit = lv_label_create(unitButton);
-  lv_obj_set_style_text_font(settingsUnit, &lv_font_montserrat_14, 0);
-  lv_obj_center(settingsUnit);
-
-  lv_obj_t *themeButton = lv_btn_create(setup);
-  lv_obj_set_size(themeButton, 200, 40);
-  lv_obj_set_pos(themeButton, 22, 66);
-  lv_obj_set_style_radius(themeButton, 12, 0);
-  lv_obj_set_style_bg_color(themeButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(themeButton, themeEvent, LV_EVENT_CLICKED, nullptr);
-  settingsTheme = lv_label_create(themeButton);
-  lv_obj_set_style_text_font(settingsTheme, &lv_font_montserrat_14, 0);
-  lv_obj_set_width(settingsTheme, 180);
-  lv_obj_set_style_text_align(settingsTheme, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_long_mode(settingsTheme, LV_LABEL_LONG_DOT);
-  lv_obj_center(settingsTheme);
-
-  cap = lv_label_create(setup);
-  lv_label_set_text(cap, "PLANT SENSORS");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(cap, 22, 124);
-
-  lv_obj_t *sensorHint = lv_label_create(setup);
-  lv_label_set_text(sensorHint, "Pair a HOBEIAN ZG-303Z plant sensor");
-  lv_obj_set_style_text_font(sensorHint, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(sensorHint, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(sensorHint, 22, 148);
-
-  lv_obj_t *pairButton = lv_btn_create(setup);
-  lv_obj_set_size(pairButton, 334, 50);
-  lv_obj_set_pos(pairButton, 22, 170);
-  lv_obj_set_style_radius(pairButton, 12, 0);
-  lv_obj_set_style_bg_color(pairButton, lv_color_hex(0x3F7A4E), 0);
-  lv_obj_add_event_cb(pairButton, pairEvent, LV_EVENT_CLICKED, nullptr);
-  settingsPair = lv_label_create(pairButton);
-  lv_label_set_text(settingsPair, "ADD SENSOR");
-  lv_obj_set_style_text_font(settingsPair, &lv_font_montserrat_16, 0);
-  lv_obj_center(settingsPair);
-
-  cap = lv_label_create(setup);
-  lv_label_set_text(cap, "ZIGBEE NETWORK");
-  lv_obj_set_style_text_font(cap, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(cap, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(cap, 22, 225);
-
-  lv_obj_t *networkHint = lv_label_create(setup);
-  lv_label_set_text(networkHint, "Repeaters, routers and mesh tools");
-  lv_obj_set_style_text_font(networkHint, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(networkHint, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(networkHint, 22, 247);
-
-  lv_obj_t *advancedButton = lv_btn_create(setup);
-  lv_obj_set_size(advancedButton, 334, 42);
-  lv_obj_set_pos(advancedButton, 22, 266);
-  lv_obj_set_style_radius(advancedButton, 12, 0);
-  lv_obj_set_style_bg_color(advancedButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(advancedButton, advancedEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *advancedLabel = lv_label_create(advancedButton);
-  lv_label_set_text(advancedLabel, "ADVANCED ZIGBEE  >");
-  lv_obj_set_style_text_font(advancedLabel, &lv_font_montserrat_16, 0);
-  lv_obj_set_style_text_color(advancedLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(advancedLabel);
+  lv_obj_add_event_cb(objects.settings_device_button, deviceNameEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.settings_network_button, openUpdateEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.settings_unit_button, unitEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.settings_theme_button, themeEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.settings_pair_button, pairEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.settings_advanced_button, advancedEvent,
+                      LV_EVENT_CLICKED, nullptr);
 }
 
 void buildAdvanced(lv_obj_t *screen) {
-  advancedPage = lv_obj_create(screen);
-  lv_obj_set_pos(advancedPage, 0, 66);
-  lv_obj_set_size(advancedPage, 800, 356);
-  lv_obj_set_style_border_width(advancedPage, 0, 0);
-  lv_obj_set_style_bg_opa(advancedPage, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(advancedPage, 0, 0);
-  lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *p = card(advancedPage, 14, 10, 772, 334);
-  // Advanced Zigbee uses explicit zero card padding so its measured child
-  // geometry is deterministic inside the locked 772x334 content card.
-  lv_obj_set_style_pad_all(p, 0, 0);
+  // EEZ Studio owns the static Advanced Zigbee page. Runtime repeater rows
+  // remain a recycled native C++ pool so the screen scales without duplicate
+  // full-screen LVGL trees.
+  advancedPage = objects.advanced_page;
+  advancedSummary = objects.advanced_summary;
+  advancedAddButton = objects.advanced_add_button;
+  advancedList = objects.advanced_list;
+  advancedDetail = objects.advanced_detail;
+  advancedRenameButton = objects.advanced_rename_button;
+  advancedRemoveButton = objects.advanced_remove_button;
 
-  lv_obj_t *title = lv_label_create(p);
-  lv_label_set_text(title, "ZIGBEE NETWORK");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(title, 18, 14);
-
-  advancedSummary = lv_label_create(p);
-  lv_label_set_text(advancedSummary, "0 REPEATERS | 0 ONLINE");
-  lv_obj_set_style_text_font(advancedSummary, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(advancedSummary, lv_color_hex(0xC1D0C6), 0);
-  lv_obj_set_pos(advancedSummary, 18, 48);
-
-  lv_obj_t *back = lv_btn_create(p);
-  lv_obj_set_size(back, 92, 42);
-  lv_obj_set_pos(back, 530, 12);
-  lv_obj_set_style_radius(back, 11, 0);
-  lv_obj_set_style_bg_color(back, lv_color_hex(0x233029), 0);
-  lv_obj_add_event_cb(back, advancedBackEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *backLabel = lv_label_create(back);
-  lv_label_set_text(backLabel, "BACK");
-  lv_obj_set_style_text_font(backLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(backLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(backLabel);
-
-  advancedAddButton = lv_btn_create(p);
-  lv_obj_set_size(advancedAddButton, 118, 42);
-  lv_obj_set_pos(advancedAddButton, 632, 12);
-  lv_obj_set_style_radius(advancedAddButton, 11, 0);
-  lv_obj_set_style_bg_color(advancedAddButton, lv_color_hex(0x3F7A4E), 0);
-  lv_obj_add_event_cb(advancedAddButton, infrastructureAddEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *addLabel = lv_label_create(advancedAddButton);
-  lv_label_set_text(addLabel, "ADD REPEATER");
-  lv_obj_set_style_text_font(addLabel, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(addLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(addLabel);
-
-  lv_obj_t *repeaterHead = lv_label_create(p);
-  lv_label_set_text(repeaterHead, "REPEATER / ROUTER");
-  lv_obj_set_style_text_font(repeaterHead, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(repeaterHead, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(repeaterHead, 20, 76);
-  lv_obj_set_width(repeaterHead, 390);
-
-  lv_obj_t *statusHead = lv_label_create(p);
-  lv_label_set_text(statusHead, "STATUS");
-  lv_obj_set_style_text_font(statusHead, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(statusHead, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(statusHead, 448, 76);
-  lv_obj_set_width(statusHead, 110);
-
-  lv_obj_t *signalHead = lv_label_create(p);
-  lv_label_set_text(signalHead, "SIGNAL");
-  lv_obj_set_style_text_font(signalHead, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(signalHead, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(signalHead, 588, 76);
-  lv_obj_set_width(signalHead, 145);
-
-  advancedList = lv_obj_create(p);
-  lv_obj_set_pos(advancedList, 10, 96);
-  lv_obj_set_size(advancedList, 752, 150);
-  lv_obj_set_style_border_width(advancedList, 0, 0);
-  lv_obj_set_style_bg_opa(advancedList, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(advancedList, 0, 0);
+  lv_obj_add_event_cb(objects.advanced_back_button, advancedBackEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(advancedAddButton, infrastructureAddEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_flag(advancedList, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(advancedList, LV_DIR_VER);
-  lv_obj_add_event_cb(advancedList, advancedListScrollEvent, LV_EVENT_SCROLL, nullptr);
+  lv_obj_add_event_cb(advancedList, advancedListScrollEvent,
+                      LV_EVENT_SCROLL, nullptr);
+  lv_obj_add_event_cb(advancedRenameButton, infrastructureRenameEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(advancedRemoveButton, infrastructureRemoveEvent,
+                      LV_EVENT_CLICKED, nullptr);
 
   advancedVirtualContent = lv_obj_create(advancedList);
   lv_obj_set_pos(advancedVirtualContent, 0, 0);
@@ -2753,38 +2424,6 @@ void buildAdvanced(lv_obj_t *screen) {
     lv_obj_set_width(row.signal, 145);
     lv_label_set_text_static(row.signal, row.signalText);
   }
-
-  advancedDetail = lv_label_create(p);
-  lv_label_set_text(advancedDetail, "Select a repeater to manage it.");
-  lv_obj_set_style_text_font(advancedDetail, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(advancedDetail, lv_color_hex(0xB7C8BC), 0);
-  lv_obj_set_pos(advancedDetail, 18, 263);
-  lv_obj_set_width(advancedDetail, 440);
-  lv_label_set_long_mode(advancedDetail, LV_LABEL_LONG_DOT);
-
-  advancedRenameButton = lv_btn_create(p);
-  lv_obj_set_size(advancedRenameButton, 126, 42);
-  lv_obj_set_pos(advancedRenameButton, 478, 255);
-  lv_obj_set_style_radius(advancedRenameButton, 11, 0);
-  lv_obj_set_style_bg_color(advancedRenameButton, lv_color_hex(0x244F39), 0);
-  lv_obj_add_event_cb(advancedRenameButton, infrastructureRenameEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *renameLabel = lv_label_create(advancedRenameButton);
-  lv_label_set_text(renameLabel, "RENAME");
-  lv_obj_set_style_text_font(renameLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(renameLabel, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_center(renameLabel);
-
-  advancedRemoveButton = lv_btn_create(p);
-  lv_obj_set_size(advancedRemoveButton, 126, 42);
-  lv_obj_set_pos(advancedRemoveButton, 616, 255);
-  lv_obj_set_style_radius(advancedRemoveButton, 11, 0);
-  lv_obj_set_style_bg_color(advancedRemoveButton, lv_color_hex(0x7A4037), 0);
-  lv_obj_add_event_cb(advancedRemoveButton, infrastructureRemoveEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_t *removeLabel = lv_label_create(advancedRemoveButton);
-  lv_label_set_text(removeLabel, "REMOVE");
-  lv_obj_set_style_text_font(removeLabel, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(removeLabel, lv_color_hex(0xF7EDE9), 0);
-  lv_obj_center(removeLabel);
 
   lv_obj_add_state(advancedRenameButton, LV_STATE_DISABLED);
   lv_obj_add_state(advancedRemoveButton, LV_STATE_DISABLED);

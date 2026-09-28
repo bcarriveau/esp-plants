@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "firmware/waveshare-hub/src/main.cpp"
 VIRTUAL = ROOT / "firmware/waveshare-hub/include/all_virtual_list.h"
 PIO = ROOT / "firmware/waveshare-hub/platformio.ini"
+UI = ROOT / "firmware/waveshare-hub/src/ui/screens.c"
 
 
 def read(path: Path) -> str:
@@ -38,12 +39,20 @@ def test_all_list_uses_fixed_seven_row_pool_and_virtual_content():
 def test_all_virtual_geometry_preserves_locked_layout():
     source = read(MAIN)
     build = function_block(source, "void buildAll(lv_obj_t *screen)", "void buildPlant")
+    ui = read(UI)
     for required in (
-        "lv_obj_set_pos(allPage, 0, 66);",
-        "lv_obj_set_size(allPage, 800, 356);",
-        "lv_obj_t *p = card(allPage, 14, 10, 772, 334);",
-        "lv_obj_set_pos(allList, 10, 72);",
-        "lv_obj_set_size(allList, 752, espplants_all_virtual_list::kViewportHeight);",
+        "objects.all_page = obj;",
+        "lv_obj_set_pos(obj, 0, 66);",
+        "lv_obj_set_size(obj, 800, 356);",
+        "objects.all_card = obj;",
+        "lv_obj_set_pos(obj, 14, 10);",
+        "lv_obj_set_size(obj, 772, 334);",
+        "objects.all_list = obj;",
+        "lv_obj_set_pos(obj, 10, 72);",
+        "lv_obj_set_size(obj, 752, 248);",
+    ):
+        assert required in ui
+    for required in (
         "lv_obj_set_size(row.box, 742, espplants_all_virtual_list::kRowHeight);",
         "lv_obj_set_pos(row.name, 4, 9);",
         "lv_obj_set_pos(row.moisture, 305, 8);",

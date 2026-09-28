@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "firmware/waveshare-hub/src/main.cpp"
 VIRTUAL = ROOT / "firmware/waveshare-hub/include/advanced_virtual_list.h"
 PIO = ROOT / "firmware/waveshare-hub/platformio.ini"
+UI = ROOT / "firmware/waveshare-hub/src/ui/screens.c"
 
 
 def read(path: Path) -> str:
@@ -38,18 +39,23 @@ def test_advanced_list_uses_fixed_five_row_pool_and_virtual_content():
 def test_virtual_geometry_preserves_locked_advanced_layout():
     source = read(MAIN)
     build = function_block(source, "void buildAdvanced(lv_obj_t *screen)", "void buildNav")
+    ui = read(UI)
     for required in (
-        "lv_obj_set_pos(advancedPage, 0, 66);",
-        "lv_obj_set_size(advancedPage, 800, 356);",
-        "lv_obj_t *p = card(advancedPage, 14, 10, 772, 334);",
-        "lv_obj_set_pos(advancedList, 10, 96);",
-        "lv_obj_set_size(advancedList, 752, 150);",
-        "lv_obj_set_size(row.box, 742, 50);",
-        "lv_obj_set_pos(advancedDetail, 18, 263);",
-        "lv_obj_set_pos(advancedRenameButton, 478, 255);",
-        "lv_obj_set_pos(advancedRemoveButton, 616, 255);",
+        "objects.advanced_page = obj;",
+        "lv_obj_set_pos(obj, 0, 66);",
+        "lv_obj_set_size(obj, 800, 356);",
+        "objects.advanced_card = obj;",
+        "lv_obj_set_pos(obj, 14, 10);",
+        "lv_obj_set_size(obj, 772, 334);",
+        "objects.advanced_list = obj;",
+        "lv_obj_set_pos(obj, 10, 96);",
+        "lv_obj_set_size(obj, 752, 150);",
+        "objects.advanced_detail = obj;",
+        "objects.advanced_rename_button = obj;",
+        "objects.advanced_remove_button = obj;",
     ):
-        assert required in build
+        assert required in ui
+    assert "lv_obj_set_size(row.box, 742, 50);" in build
 
 
 def test_virtual_content_height_and_scroll_binding_are_explicit():

@@ -1,0 +1,29 @@
+#include "ui.h"
+
+static int16_t currentScreen = -1;
+
+static lv_obj_t *getLvglObjectFromIndex(int32_t index) {
+    if (index < 0) {
+        return 0;
+    }
+    return ((lv_obj_t **)&objects)[index];
+}
+
+void loadScreen(enum ScreensEnum screenId) {
+    currentScreen = (int16_t)screenId - 1;
+    lv_obj_t *screen = getLvglObjectFromIndex(currentScreen);
+    if (screen) {
+        lv_scr_load(screen);
+    }
+}
+
+void ui_init(void) {
+    create_screens();
+    loadScreen(SCREEN_ID_HOME);
+}
+
+void ui_tick(void) {
+    if (currentScreen >= 0) {
+        tick_screen(currentScreen);
+    }
+}

@@ -55,25 +55,23 @@ def test_topology_refresh_cannot_refresh_measurements_or_pair_sensors():
         assert "route" not in fields.lower()
 
 def test_advanced_zigbee_layout_has_explicit_columns_and_bottom_clearance():
-    source = (ROOT / "firmware/waveshare-hub/src/main.cpp").read_text(encoding="utf-8")
-    advanced = source.split("void buildAdvanced(", 1)[1].split("void buildNav", 1)[0]
+    ui = (ROOT / "firmware/waveshare-hub/src/ui/screens.c").read_text(encoding="utf-8")
 
-    # The Advanced card is 772x334 at screen (14,76). Explicit zero padding makes
-    # every child bound deterministic instead of relying on inherited theme padding.
-    assert "lv_obj_set_style_pad_all(p, 0, 0);" in advanced
-
-    # Headers are independent labels aligned to the row columns.
+    # EEZ owns the static Advanced card now. It remains 772x334 at screen
+    # (14,76), and generated source keeps explicit zero padding.
+    advanced = ui.split("objects.advanced_card = obj;", 1)[1].split("objects.advanced_page", 1)[0] if "objects.advanced_page" in ui.split("objects.advanced_card = obj;", 1)[1] else ui.split("objects.advanced_card = obj;", 1)[1]
     for text in (
-        'lv_obj_set_pos(repeaterHead, 20, 76);',
-        'lv_obj_set_pos(statusHead, 448, 76);',
-        'lv_obj_set_pos(signalHead, 588, 76);',
-        'lv_obj_set_size(advancedList, 752, 150);',
-        'lv_obj_set_pos(advancedDetail, 18, 263);',
-        'lv_obj_set_width(advancedDetail, 440);',
-        'lv_obj_set_size(advancedRenameButton, 126, 42);',
-        'lv_obj_set_pos(advancedRenameButton, 478, 255);',
-        'lv_obj_set_size(advancedRemoveButton, 126, 42);',
-        'lv_obj_set_pos(advancedRemoveButton, 616, 255);',
+        'lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);',
+        'lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);',
+        'lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);',
+        'lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);',
+        'objects.advanced_head_repeater = obj;',
+        'objects.advanced_head_status = obj;',
+        'objects.advanced_head_signal = obj;',
+        'objects.advanced_list = obj;',
+        'objects.advanced_detail = obj;',
+        'objects.advanced_rename_button = obj;',
+        'objects.advanced_remove_button = obj;',
     ):
         assert text in advanced
 

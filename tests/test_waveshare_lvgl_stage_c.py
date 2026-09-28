@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "firmware/waveshare-hub/src/main.cpp"
 VIRTUAL = ROOT / "firmware/waveshare-hub/include/home_virtual_list.h"
 PIO = ROOT / "firmware/waveshare-hub/platformio.ini"
+UI = ROOT / "firmware/waveshare-hub/src/ui/screens.c"
 
 
 def read(path: Path) -> str:
@@ -38,13 +39,23 @@ def test_home_list_uses_fixed_seven_row_pool_and_virtual_content():
 def test_home_virtual_geometry_preserves_locked_layout():
     source = read(MAIN)
     build = function_block(source, "void buildHome(lv_obj_t *screen)", "void buildAll")
+    ui = read(UI)
     for required in (
-        "lv_obj_set_pos(homePage, 0, 66);",
-        "lv_obj_set_size(homePage, 800, 356);",
-        "lv_obj_t *featured = card(homePage, 14, 10, 500, 334);",
-        "lv_obj_t *listCard = card(homePage, 528, 10, 258, 334);",
-        "lv_obj_set_pos(homeList, 0, 42);",
-        "lv_obj_set_size(homeList, 234, espplants_home_virtual_list::kViewportHeight);",
+        "objects.home_page = obj;",
+        "lv_obj_set_pos(obj, 0, 66);",
+        "lv_obj_set_size(obj, 800, 356);",
+        "objects.home_featured_card = obj;",
+        "lv_obj_set_pos(obj, 14, 10);",
+        "lv_obj_set_size(obj, 500, 334);",
+        "objects.your_plants_card = obj;",
+        "lv_obj_set_pos(obj, 528, 10);",
+        "lv_obj_set_size(obj, 258, 334);",
+        "objects.home_list = obj;",
+        "lv_obj_set_pos(obj, 0, 42);",
+        "lv_obj_set_size(obj, 234, 266);",
+    ):
+        assert required in ui
+    for required in (
         "lv_obj_set_size(row.box, 228, espplants_home_virtual_list::kRowHeight);",
         "lv_obj_set_pos(row.bar, 2, 30);",
         "lv_obj_set_size(row.bar, 208, 9);",
