@@ -13,6 +13,7 @@
 #include "phrase_engine.h"
 #include "update_service.h"
 #include "sensor_route_view.h"
+#include "ui/screens.h"
 
 namespace {
 
@@ -2159,89 +2160,26 @@ void buildHeader(lv_obj_t *screen) {
 }
 
 void buildHome(lv_obj_t *screen) {
-  homePage = lv_obj_create(screen);
-  lv_obj_set_pos(homePage, 0, 66);
-  lv_obj_set_size(homePage, 800, 356);
-  lv_obj_set_style_border_width(homePage, 0, 0);
-  lv_obj_set_style_bg_opa(homePage, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(homePage, 0, 0);
-  lv_obj_clear_flag(homePage, LV_OBJ_FLAG_SCROLLABLE);
+  (void)screen;
 
-  lv_obj_t *featured = card(homePage, 14, 10, 500, 334);
-  lv_obj_add_event_cb(featured, featuredEvent, LV_EVENT_CLICKED, nullptr);
+  // EEZ Studio owns the static Home visual tree. ESP PLANTS keeps all runtime
+  // behavior/data binding and the recycled sensor-row pool.
+  homePage = objects.home_page;
+  homeSummary = objects.home_summary;
+  homeName = objects.home_name;
+  homeMood = objects.home_mood;
+  homeSoil = objects.home_soil;
+  homeTemp = objects.home_temp;
+  homeHumidity = objects.home_humidity;
+  homeBar = objects.home_bar;
+  homeWarning = objects.home_warning;
+  homeList = objects.home_list;
 
-  lv_obj_t *section = lv_label_create(featured);
-  lv_label_set_text(section, "WHO NEEDS WATER?");
-  lv_obj_set_style_text_font(section, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(section, lv_color_hex(0x8DA695), 0);
-  lv_obj_set_pos(section, 22, 14);
-
-  homeSummary = lv_label_create(featured);
-  lv_label_set_text(homeSummary, "0 REPORTING | 0 WAITING");
-  lv_obj_set_style_text_font(homeSummary, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(homeSummary, lv_color_hex(0xAABBAF), 0);
-  lv_obj_align(homeSummary, LV_ALIGN_TOP_RIGHT, -18, 14);
-
-  homeName = lv_label_create(featured);
-  lv_label_set_text(homeName, "WAITING FOR SENSOR");
-  lv_obj_set_style_text_font(homeName, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(homeName, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(homeName, 22, 38);
-  lv_obj_set_width(homeName, 440);
-  lv_label_set_long_mode(homeName, LV_LABEL_LONG_DOT);
-
-  homeMood = lv_label_create(featured);
-  lv_label_set_text(homeMood, "Pair a sensor and I'll keep an eye on it");
-  lv_obj_set_style_text_font(homeMood, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(homeMood, lv_color_hex(0xCBE6D2), 0);
-  lv_obj_set_pos(homeMood, 24, 82);
-  lv_obj_set_width(homeMood, 445);
-  lv_label_set_long_mode(homeMood, LV_LABEL_LONG_WRAP);
-
-  metric(featured, "SOIL", 24, 126, &homeSoil, &lv_font_montserrat_32);
-  metric(featured, "TEMP", 180, 126, &homeTemp);
-  metric(featured, "AIR RH", 334, 126, &homeHumidity);
-
-  homeBar = lv_bar_create(featured);
-  lv_obj_set_pos(homeBar, 24, 201);
-  lv_obj_set_size(homeBar, 448, 22);
-  lv_bar_set_range(homeBar, 0, 100);
-  lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x2A352E), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(homeBar, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(homeBar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
-
-  homeWarning = lv_label_create(featured);
-  lv_label_set_text(homeWarning, "WATER ME!");
-  lv_obj_set_style_text_font(homeWarning, &lv_font_montserrat_40, 0);
-  lv_obj_set_style_text_color(homeWarning, lv_color_hex(0xFFF4EE), 0);
-  lv_obj_set_style_bg_color(homeWarning, lv_color_hex(0x8E493E), 0);
-  lv_obj_set_style_pad_hor(homeWarning, 0, 0);
-  lv_obj_set_style_pad_ver(homeWarning, 0, 0);
-  lv_obj_set_style_radius(homeWarning, 12, 0);
-  lv_obj_set_pos(homeWarning, 24, 235);
+  lv_obj_add_flag(objects.home_featured_card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(objects.home_featured_card, featuredEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_t *hint = lv_label_create(featured);
-  lv_label_set_text(hint, "TAP CARD FOR SENSOR DETAILS");
-  lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_text_color(hint, lv_color_hex(0x93A69A), 0);
-  lv_obj_set_pos(hint, 24, 288);
-  lv_obj_set_width(hint, 300);
-  lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
-
-  lv_obj_t *listCard = card(homePage, 528, 10, 258, 334);
-  lv_obj_t *listTitle = lv_label_create(listCard);
-  lv_label_set_text(listTitle, "YOUR PLANTS");
-  lv_obj_set_style_text_font(listTitle, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(listTitle, lv_color_hex(0xE5ECE7), 0);
-  lv_obj_set_pos(listTitle, 10, 8);
-
-  homeList = lv_obj_create(listCard);
-  lv_obj_set_pos(homeList, 0, 42);
-  lv_obj_set_size(homeList, 234, espplants_home_virtual_list::kViewportHeight);
-  lv_obj_set_style_border_width(homeList, 0, 0);
-  lv_obj_set_style_bg_opa(homeList, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(homeList, 0, 0);
+  lv_obj_add_flag(homeList, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(homeList, LV_DIR_VER);
   lv_obj_add_event_cb(homeList, homeListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
@@ -3368,7 +3306,9 @@ void buildPairDialog(lv_obj_t *screen) {
 }
 
 void buildUi() {
-  lv_obj_t *screen = lv_scr_act();
+  lv_obj_t *oldScreen = lv_scr_act();
+  create_screen_home();
+  lv_obj_t *screen = objects.home;
   lv_obj_set_style_bg_color(screen, lv_color_hex(0x101814), LV_PART_MAIN);
   lv_obj_set_style_text_color(screen, lv_color_hex(0xE5ECE7), LV_PART_MAIN);
   lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -3383,6 +3323,8 @@ void buildUi() {
   buildPairDialog(screen);
   buildUpdateDialog(screen);
   showPage(Page::Home);
+  lv_scr_load(screen);
+  if (oldScreen && oldScreen != screen) lv_obj_del(oldScreen);
   logLvglMemory("build-ui");
 }
 

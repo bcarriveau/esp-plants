@@ -1,0 +1,7 @@
+{
+  "files": [
+    "fonts.h",
+    "screens.c",
+    "screens.h"
+  ]
+}
