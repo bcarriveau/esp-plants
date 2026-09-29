@@ -540,7 +540,7 @@
             {
               "type": "tabset",
               "id": "#41ac7f72-f81d-448c-966a-e84a4288e8f0",
-              "weight": 70,
+              "weight": 73.62924281984334,
               "enableDrop": false,
               "enableDrag": false,
               "enableClose": false,
@@ -559,7 +559,7 @@
             {
               "type": "row",
               "id": "#08f8e704-3da1-4648-a5e8-dc1e93d362f3",
-              "weight": 30,
+              "weight": 26.37075718015666,
               "children": [
                 {
                   "type": "tabset",
