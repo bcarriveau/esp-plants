@@ -25,6 +25,7 @@ constexpr uint32_t kHelloIntervalMs = 1500;
 constexpr uint32_t kLinkTimeoutMs = 7000;
 constexpr uint32_t kUiRefreshIntervalMs = 1000;
 constexpr uint32_t kHomeManualSelectionMs = 30 * 1000;
+constexpr uint32_t kPhraseDisplaySettleMs = 650;
 constexpr size_t kMaxSensors = 32;
 constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kPlantNameBytes = 24;
@@ -82,6 +83,9 @@ struct PlantSensor {
   uint16_t fieldFlags = 0;  // merged values known in RAM
   uint16_t reportedFieldFlagsThisBoot = 0;
   espplants_phrases::Rotation phraseRotation{};
+  const char *displayedPhrase = nullptr;  // Static phrase-library pointer; RAM only.
+  uint32_t phraseDisplayDueMs = 0;
+  bool phraseDisplayPending = false;
   int16_t temperatureCentiC = 0;
   uint16_t humidityCentiPct = 0;
   uint8_t soilMoisturePct = 0;
@@ -978,15 +982,48 @@ PlantSensor *findOrCreateSensor(const uint8_t ieee[8], uint16_t shortAddress,
   return nullptr;
 }
 
+const char *currentPhrase(PlantSensor &s) {
+  const auto state = espplants_moisture::careState(
+      s.soilMoisturePct, s.moisturePreference);
+  const size_t slot = static_cast<size_t>(&s - sensors);
+  const uint32_t seed = static_cast<uint32_t>(slot * 2654435761u) ^
+                        static_cast<uint32_t>(s.soilMoisturePct * 257u);
+  return espplants_phrases::select(
+      s.phraseRotation, phraseTheme, state, seed, false);
+}
+
 const char *mood(PlantSensor &s) {
   if (!s.seenThisBoot) return "Waiting for this plant to check in";
   if (!(s.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture))
     return "Waiting for a moisture reading";
-  const auto state=espplants_moisture::careState(
-      s.soilMoisturePct, s.moisturePreference);
-  const size_t slot=static_cast<size_t>(&s-sensors);
-  const uint32_t seed=static_cast<uint32_t>(slot*2654435761u)^static_cast<uint32_t>(s.soilMoisturePct*257u);
-  return espplants_phrases::select(s.phraseRotation,phraseTheme,state,seed,false);
+
+  // During a burst of real moisture reports, keep showing the last committed
+  // phrase instead of visibly stepping through every internal rotation.
+  if (s.phraseDisplayPending) {
+    return s.displayedPhrase ? s.displayedPhrase : "Checking moisture...";
+  }
+
+  if (!s.displayedPhrase) s.displayedPhrase = currentPhrase(s);
+  return s.displayedPhrase;
+}
+
+void servicePhraseDisplaySettle() {
+  const uint32_t now = millis();
+  bool committedAny = false;
+  for (auto &sensor : sensors) {
+    if (!sensor.used || !sensor.phraseDisplayPending) continue;
+    if (static_cast<int32_t>(now - sensor.phraseDisplayDueMs) < 0) continue;
+
+    sensor.displayedPhrase = currentPhrase(sensor);
+    sensor.phraseDisplayPending = false;
+    sensor.phraseDisplayDueMs = 0;
+    committedAny = true;
+  }
+
+  if (committedAny) {
+    dirty.home = true;
+    dirty.plant = true;
+  }
 }
 
 void sendFrame(plantlink::MessageType type, const uint8_t *payload = nullptr,
@@ -1762,7 +1799,12 @@ void renameKeyboardEvent(lv_event_t *event) {
       if (pendingTheme!=phraseTheme) {
         phraseTheme=pendingTheme;
         preferences.putUChar("phrase_theme",static_cast<uint8_t>(phraseTheme));
-        for (auto &sensor:sensors) sensor.phraseRotation=espplants_phrases::Rotation{};
+        for (auto &sensor : sensors) {
+          sensor.phraseRotation = espplants_phrases::Rotation{};
+          sensor.displayedPhrase = nullptr;
+          sensor.phraseDisplayPending = false;
+          sensor.phraseDisplayDueMs = 0;
+        }
         Serial.printf("[settings] phrase theme=%s\n",
                       espplants_phrases::themeName(phraseTheme));
       }
@@ -2317,6 +2359,9 @@ void moisturePreferenceEvent(lv_event_t *event) {
     // advance the rotation cursor as though a moisture report arrived.
     (void)espplants_phrases::select(
         sensor.phraseRotation, phraseTheme, state, seed, false);
+    sensor.displayedPhrase = currentPhrase(sensor);
+    sensor.phraseDisplayPending = false;
+    sensor.phraseDisplayDueMs = 0;
   }
 
   Serial.printf("[settings] plant slot=%u moisture preference=%d (%s)\n",
@@ -3292,6 +3337,10 @@ void handleSensorReport(const plantlink::Frame &frame) {
     const uint32_t seed=static_cast<uint32_t>(phraseSlot*2654435761u)^
                         static_cast<uint32_t>(report.soilMoisturePct*257u)^millis();
     (void)espplants_phrases::select(s->phraseRotation,phraseTheme,state,seed,true);
+    // Each genuine moisture report still advances exactly once. The visible
+    // phrase is committed only after this report burst has been quiet briefly.
+    s->phraseDisplayPending = true;
+    s->phraseDisplayDueMs = millis() + kPhraseDisplaySettleMs;
   }
   if (report.fieldFlags & plantlink::SensorHasBattery) s->batteryPct=report.batteryPct;
   if (report.fieldFlags & plantlink::SensorHasWaterWarning) s->waterWarning=report.waterWarning;
@@ -3429,6 +3478,7 @@ void setup() {
 
 void loop() {
   servicePlantLink();
+  servicePhraseDisplaySettle();
   static bool lastActionableUpdate = false;
   espplants_update::service();
   const bool actionableUpdate = espplants_update::updateAvailable();
