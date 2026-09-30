@@ -943,6 +943,7 @@
                 }
               ],
               "widgetFlags": "CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SNAPPABLE",
+              "hiddenFlag": true,
               "hiddenFlagType": "literal",
               "clickableFlagType": "literal",
               "checkedStateType": "literal",
@@ -964,8 +965,7 @@
                   }
                 }
               },
-              "groupIndex": 0,
-              "hiddenFlag": true
+              "groupIndex": 0
             },
             {
               "objID": "468fc362-a02c-4c7e-8810-354ff5739a30",
@@ -2474,9 +2474,9 @@
                     {
                       "objID": "dd05b8ee-9820-4afa-983e-78ce25c824cf",
                       "type": "LVGLLabelWidget",
-                      "left": 24,
-                      "top": 282,
-                      "width": 190,
+                      "left": 193,
+                      "top": 291,
+                      "width": 191,
                       "height": 16,
                       "customInputs": [],
                       "customOutputs": [],
@@ -2512,7 +2512,7 @@
                         }
                       },
                       "groupIndex": 0,
-                      "text": "MOISTURE PREFERENCE",
+                      "text": "MOISTURE PREFERENCE ->",
                       "textType": "literal",
                       "longMode": "CLIP",
                       "recolor": false,
@@ -2521,9 +2521,9 @@
                     {
                       "objID": "6bdf89fb-889b-421f-8622-bec5f0bd7b97",
                       "type": "LVGLSliderWidget",
-                      "left": 24,
-                      "top": 310,
-                      "width": 718,
+                      "left": 390,
+                      "top": 292,
+                      "width": 352,
                       "height": 14,
                       "customInputs": [],
                       "customOutputs": [],
@@ -2543,6 +2543,7 @@
                       "children": [],
                       "widgetFlags": "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_WITH_ARROW|SNAPPABLE",
                       "hiddenFlagType": "literal",
+                      "clickableFlag": true,
                       "clickableFlagType": "literal",
                       "checkedStateType": "literal",
                       "disabledStateType": "literal",
@@ -2552,7 +2553,8 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "bg_color": "#2A352E"
+                              "bg_color": "#2A352E",
+                              "bg_opa": 255
                             }
                           },
                           "INDICATOR": {
@@ -2572,7 +2574,6 @@
                         }
                       },
                       "groupIndex": 0,
-                      "clickableFlag": true,
                       "min": -2,
                       "minType": "literal",
                       "max": 2,
@@ -2589,8 +2590,8 @@
                     {
                       "objID": "022b9542-88bd-4b5b-b1b0-7aa605e510dc",
                       "type": "LVGLLabelWidget",
-                      "left": 590,
-                      "top": 278,
+                      "left": 490,
+                      "top": 262,
                       "width": 152,
                       "height": 24,
                       "customInputs": [],
@@ -2622,7 +2623,7 @@
                             "DEFAULT": {
                               "text_font": "MONTSERRAT_14",
                               "text_color": "#CBE6D2",
-                              "text_align": "RIGHT"
+                              "text_align": "CENTER"
                             }
                           }
                         }

@@ -1,5 +1,6 @@
 {
   "navigation": {
+    "selectedUserPageObject": "[esp_plants_plant_detail.eez-project]:/userPages/0",
     "subnavigationSelectedItems": {}
   },
   "layoutModel": {
@@ -161,7 +162,8 @@
                       "enableClose": false,
                       "icon": "svg:hierarchy"
                     }
-                  ]
+                  ],
+                  "active": true
                 },
                 {
                   "type": "tabset",
@@ -185,22 +187,10 @@
               "type": "tabset",
               "id": "EDITORS",
               "weight": 59.69363707776905,
+              "selected": -1,
               "enableDeleteWhenEmpty": false,
               "enableClose": false,
-              "children": [
-                {
-                  "type": "tab",
-                  "id": "#86b9b565-60de-4850-90b6-db23437ba4e0",
-                  "name": "PlantDetail",
-                  "component": "editor",
-                  "config": {
-                    "objectPath": "[esp_plants_plant_detail.eez-project]:/userPages/0",
-                    "permanent": false
-                  },
-                  "icon": "svg:page"
-                }
-              ],
-              "active": true
+              "children": []
             },
             {
               "type": "row",
@@ -1051,21 +1041,15 @@
       "selectionFront": {},
       "selectionBack": {
         "0": {
-          "1": {
-            "19": {
-              "$selected": true
-            }
-          },
           "2": {
-            "0": {},
-            "1": {}
+            "$selected": true
           }
         }
       },
       "transform": {
         "translate": {
           "x": -400,
-          "y": -240
+          "y": -240.0000000000001
         },
         "scale": 1
       },

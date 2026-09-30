@@ -1643,7 +1643,7 @@ void service() {
       WiFi.SSID() == pendingSsid) {
     commitPendingWifi();
     strncpy(connectedSsid, WiFi.SSID().c_str(), sizeof(connectedSsid) - 1);
-    strncpy(wifiAddressText, WiFi.LocalIP().toString().c_str(), sizeof(wifiAddressText) - 1);
+    strncpy(wifiAddressText, WiFi.localIP().toString().c_str(), sizeof(wifiAddressText) - 1);
     setStatus("Wi-Fi saved: %s", connectedSsid);
   }
 

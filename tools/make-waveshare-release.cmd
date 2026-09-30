@@ -21,8 +21,19 @@ goto pio_missing
 :build
 echo Building H2 distribution target v%H2_VERSION%...
 "%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2_release
+if not errorlevel 1 goto build_waveshare
+
+echo.
+echo H2 release build did not initialize cleanly.
+echo Bootstrapping the normal H2 environment once, then retrying release...
+"%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2
 if errorlevel 1 goto build_failed
 
+echo Retrying H2 distribution target v%H2_VERSION%...
+"%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2_release
+if errorlevel 1 goto build_failed
+
+:build_waveshare
 echo Building Waveshare distribution image v%RELEASE_VERSION%...
 "%PIO%" run -d firmware\waveshare-hub -e waveshare_s3_touch_lcd_7_release
 if errorlevel 1 goto build_failed

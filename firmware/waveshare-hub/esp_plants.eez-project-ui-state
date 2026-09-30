@@ -164,8 +164,7 @@
                       "enableClose": false,
                       "icon": "svg:hierarchy"
                     }
-                  ],
-                  "active": true
+                  ]
                 },
                 {
                   "type": "tabset",
@@ -203,7 +202,8 @@
                   },
                   "icon": "svg:page"
                 }
-              ]
+              ],
+              "active": true
             },
             {
               "type": "row",
@@ -1069,12 +1069,11 @@
         "0": {
           "2": {
             "0": {
-              "0": {
-                "$selected": true
-              }
+              "0": {}
             }
           },
           "9": {
+            "3": {},
             "4": {
               "2": {}
             }
@@ -1102,7 +1101,7 @@
   "searchMatchWholeWord": false,
   "replaceEnabled": false,
   "replaceText": "",
-  "pageRuntimeFrontFace": false,
+  "pageRuntimeFrontFace": true,
   "breakpoints": {},
   "watchExpressions": [],
   "showComponentDescriptions": true,
@@ -1111,8 +1110,8 @@
   "lvglPart": "MAIN",
   "lvglState": "DEFAULT",
   "lvglExpandedPropertiesGroup": [
-    "PADDING",
     "TEXT",
+    "MARGIN",
     "BACKGROUND"
   ],
   "showInactiveFlowsInDebugger": true,
