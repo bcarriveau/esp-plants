@@ -917,7 +917,7 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     bool ok = true;
     bool bodyLimitRejected = false;
     bool transportReadFailure = false;
-    while (!esp_http_client_is_complete_data_received(client)) {
+    for (;;) {
       const int got = esp_http_client_read(
           client, reinterpret_cast<char *>(buffer), sizeof(buffer));
       if (got > 0) {
@@ -926,8 +926,17 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
           ok = false;
           break;
         }
+        if (length > 0 &&
+            body.length() > static_cast<size_t>(length)) {
+          bodyLimitRejected = true;
+          ok = false;
+          break;
+        }
         lastDataMs = millis();
-      } else if (got == 0) {
+        continue;
+      }
+
+      if (got == 0) {
         if (esp_http_client_is_complete_data_received(client)) break;
         if (millis() - lastDataMs >= kMetadataIdleTimeoutMs) {
           transportReadFailure = true;
@@ -935,24 +944,28 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
           break;
         }
         delay(10);
-      } else {
-        const int socketError = esp_http_client_get_errno(client);
-        if (socketError == EAGAIN || socketError == EWOULDBLOCK ||
-            socketError == ETIMEDOUT) {
-          if (millis() - lastDataMs < kMetadataIdleTimeoutMs) continue;
-        }
-        transportReadFailure = true;
-        ok = false;
-        break;
+        continue;
       }
+
+      const int socketError = esp_http_client_get_errno(client);
+      if (socketError == EAGAIN || socketError == EWOULDBLOCK ||
+          socketError == ETIMEDOUT) {
+        if (millis() - lastDataMs < kMetadataIdleTimeoutMs) continue;
+      }
+      transportReadFailure = true;
+      ok = false;
+      break;
     }
     const bool complete = esp_http_client_is_complete_data_received(client);
+    const bool lengthMatches =
+        length <= 0 || body.length() == static_cast<size_t>(length);
     if (opened) esp_http_client_close(client);
     esp_http_client_cleanup(client);
-    if (transportReadFailure || (!complete && !bodyLimitRejected)) {
+    if (transportReadFailure ||
+        ((!complete || !lengthMatches) && !bodyLimitRejected)) {
       lastHttpsTransportFailure = true;
     }
-    return ok && complete;
+    return ok && complete && lengthMatches;
   }
   return false;
 }
@@ -1211,7 +1224,18 @@ bool checkGithubRelease() {
   JsonDocument releases(&psramAllocator);
   const DeserializationError releasesError =
       deserializeJson(releases, releasesBody.data(), releasesBody.length());
-  if (releasesError || !releases.is<JsonArray>()) {
+  if (releasesError) {
+    Serial.printf(
+        "[update] GitHub release JSON invalid: %s http=%d body_bytes=%u\n",
+        releasesError.c_str(), code,
+        static_cast<unsigned>(releasesBody.length()));
+    setStatus("GitHub returned an invalid release list");
+    return false;
+  }
+  if (!releases.is<JsonArray>()) {
+    Serial.printf(
+        "[update] GitHub release JSON invalid: NotArray http=%d body_bytes=%u\n",
+        code, static_cast<unsigned>(releasesBody.length()));
     setStatus("GitHub returned an invalid release list");
     return false;
   }
@@ -1619,7 +1643,7 @@ void service() {
       WiFi.SSID() == pendingSsid) {
     commitPendingWifi();
     strncpy(connectedSsid, WiFi.SSID().c_str(), sizeof(connectedSsid) - 1);
-    strncpy(wifiAddressText, WiFi.localIP().toString().c_str(), sizeof(wifiAddressText) - 1);
+    strncpy(wifiAddressText, WiFi.LocalIP().toString().c_str(), sizeof(wifiAddressText) - 1);
     setStatus("Wi-Fi saved: %s", connectedSsid);
   }
 
