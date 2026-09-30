@@ -22,6 +22,7 @@
 #include <new>
 #include <strings.h>
 
+#include "build_version.h"
 #include "update_policy.h"
 
 namespace espplants_ota_installer {
@@ -34,7 +35,7 @@ constexpr uint16_t kPackageHeaderSize = 512;
 constexpr uint8_t kEspApplicationMagic = 0xE9;
 constexpr uint16_t kEsp32S3ImageChipId = 9;
 constexpr char kPackageMagic[16] = "ESP-PLANTS-OTA";
-constexpr char kPackageHardwareId[32] = "WAVESHARE-ESP32-S3-LCD-7";
+constexpr char kPackageHardwareId[32] = ESP_PLANTS_WAVESHARE_HARDWARE_ID;
 constexpr char kPackageProductId[32] = "ESP-PLANTS-WAVESHARE";
 constexpr char kDistributionMarker[] = "ESP-PLANTS-DISTRIBUTION-BUILD";
 constexpr char kReleaseDownloadPrefix[] =

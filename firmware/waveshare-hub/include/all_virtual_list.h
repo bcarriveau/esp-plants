@@ -6,9 +6,15 @@
 namespace espplants_all_virtual_list {
 
 constexpr size_t kPoolSize = 7;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+constexpr int32_t kViewportHeight = 310;
+constexpr int32_t kRowHeight = 70;
+constexpr int32_t kRowGap = 8;
+#else
 constexpr int32_t kViewportHeight = 248;
 constexpr int32_t kRowHeight = 56;
 constexpr int32_t kRowGap = 6;
+#endif
 constexpr int32_t kStride = kRowHeight + kRowGap;
 
 inline int32_t contentHeight(size_t logicalCount) {

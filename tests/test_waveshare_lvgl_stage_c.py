@@ -30,7 +30,7 @@ def test_home_list_uses_fixed_seven_row_pool_and_virtual_content():
     assert "PlantListRow rows[espplants_home_virtual_list::kPoolSize];" in source
     assert "constexpr size_t kPoolSize = 7;" in read(VIRTUAL)
     assert "homeVirtualContent = lv_obj_create(homeList);" in build
-    assert "lv_obj_set_size(homeVirtualContent, 228," in build
+    assert "lv_obj_set_size(homeVirtualContent, uiX(228)," in build
     assert "lv_obj_set_flex_flow(homeList" not in build
     assert "for (size_t i = 0; i < espplants_home_virtual_list::kPoolSize; ++i)" in build
     assert "lv_obj_set_pos(row.box, 0, 0);" in build
@@ -56,9 +56,9 @@ def test_home_virtual_geometry_preserves_locked_layout():
     ):
         assert required in ui
     for required in (
-        "lv_obj_set_size(row.box, 228, espplants_home_virtual_list::kRowHeight);",
-        "lv_obj_set_pos(row.bar, 2, 30);",
-        "lv_obj_set_size(row.bar, 208, 9);",
+        "lv_obj_set_size(row.box, uiX(228), espplants_home_virtual_list::kRowHeight);",
+        "lv_obj_set_pos(row.bar, uiX(2), uiY(30));",
+        "lv_obj_set_size(row.bar, uiX(208), uiY(9));",
     ):
         assert required in build
 

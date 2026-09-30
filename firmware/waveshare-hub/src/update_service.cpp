@@ -1114,17 +1114,79 @@ bool parseManifest(const char *body, size_t bodyLength, const String &githubTag,
 
   const uint32_t schema = doc["schema"] | 0U;
   const String product = doc["product"] | "";
-  const String hardware = doc["hardware"] | "";
   const String channel = doc["channel"] | "";
   const String version = doc["version"] | "";
   const String tag = doc["tag"] | "";
-  const String buildId = doc["build_id"] | "";
-  const String asset = doc["asset"] | "";
-  const uint32_t packageSize = doc["package_size"] | 0U;
-  String packageSha = doc["package_sha256"] | "";
-  const uint32_t firmwareSize = doc["firmware_size"] | 0U;
-  String firmwareSha = doc["firmware_sha256"] | "";
   const uint32_t minimumUpdater = doc["min_updater"] | 0U;
+
+  if (schema != kManifestSchema ||
+      product != ESP_PLANTS_WAVESHARE_PRODUCT_ID ||
+      channel != ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL ||
+      minimumUpdater > ESP_PLANTS_WAVESHARE_UPDATER_VERSION) {
+    identityMismatch = true;
+    Serial.printf("[update] Skipping historical release %s: incompatible product/channel/updater/schema\n",
+                  githubTag.c_str());
+    return false;
+  }
+  if (tag != githubTag || normalizedVersion(tag.c_str()) != normalizedVersion(version.c_str())) {
+    Serial.printf("[update] Skipping release %s: tag/manifest version mismatch\n",
+                  githubTag.c_str());
+    return false;
+  }
+
+  String hardware;
+  String buildId;
+  String asset;
+  uint32_t packageSize = 0U;
+  String packageSha;
+  uint32_t firmwareSize = 0U;
+  String firmwareSha;
+
+  // New manifests keep schema 1 for backwards compatibility and add a
+  // variants[] array.  Prefer the hardware-specific entry when present.  A
+  // legacy schema-1 manifest without variants[] still follows the original
+  // top-level path below.
+  JsonArray variants = doc["variants"].as<JsonArray>();
+  if (!variants.isNull()) {
+    bool foundVariant = false;
+    for (JsonObject variant : variants) {
+      const String candidateHardware = variant["hardware"] | "";
+      if (candidateHardware != ESP_PLANTS_WAVESHARE_HARDWARE_ID) continue;
+      if (foundVariant) {
+        Serial.printf("[update] Skipping release %s: duplicate hardware variant\n",
+                      githubTag.c_str());
+        return false;
+      }
+      foundVariant = true;
+      hardware = candidateHardware;
+      buildId = variant["build_id"] | "";
+      asset = variant["asset"] | "";
+      packageSize = variant["package_size"] | 0U;
+      packageSha = variant["package_sha256"] | "";
+      firmwareSize = variant["firmware_size"] | 0U;
+      firmwareSha = variant["firmware_sha256"] | "";
+    }
+    if (!foundVariant) {
+      identityMismatch = true;
+      Serial.printf("[update] Skipping historical release %s: no package for hardware %s\n",
+                    githubTag.c_str(), ESP_PLANTS_WAVESHARE_HARDWARE_ID);
+      return false;
+    }
+  } else {
+    hardware = doc["hardware"] | "";
+    buildId = doc["build_id"] | "";
+    asset = doc["asset"] | "";
+    packageSize = doc["package_size"] | 0U;
+    packageSha = doc["package_sha256"] | "";
+    firmwareSize = doc["firmware_size"] | 0U;
+    firmwareSha = doc["firmware_sha256"] | "";
+    if (hardware != ESP_PLANTS_WAVESHARE_HARDWARE_ID) {
+      identityMismatch = true;
+      Serial.printf("[update] Skipping historical release %s: incompatible hardware\n",
+                    githubTag.c_str());
+      return false;
+    }
+  }
 
   JsonObject h2 = doc["h2"].as<JsonObject>();
   const String h2Product = h2["product"] | "";
@@ -1140,26 +1202,12 @@ bool parseManifest(const char *body, size_t bodyLength, const String &githubTag,
   firmwareSha.toLowerCase();
   h2FirmwareSha.toLowerCase();
 
-  if (schema != kManifestSchema || product != ESP_PLANTS_WAVESHARE_PRODUCT_ID ||
-      hardware != ESP_PLANTS_WAVESHARE_HARDWARE_ID ||
-      channel != ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL ||
-      minimumUpdater > ESP_PLANTS_WAVESHARE_UPDATER_VERSION) {
-    identityMismatch = true;
-    Serial.printf("[update] Skipping historical release %s: incompatible product/hardware/channel/updater\n",
-                  githubTag.c_str());
-    return false;
-  }
-  if (tag != githubTag || normalizedVersion(tag.c_str()) != normalizedVersion(version.c_str())) {
-    Serial.printf("[update] Skipping release %s: tag/manifest version mismatch\n",
-                  githubTag.c_str());
-    return false;
-  }
-
   SemVersion parsed;
   SemVersion parsedH2;
   const String expectedH2Build = String(kH2BuildPrefix) + h2Version;
   const String expectedH2Asset = String("esp-plants-h2-") + h2Version + ".bin";
   if (!parseVersion(version, parsed) || !tagValid(tag.c_str()) ||
+      hardware != ESP_PLANTS_WAVESHARE_HARDWARE_ID ||
       !assetNameValid(asset.c_str()) ||
       !boundedPrintableAscii(buildId.c_str(), kMaxBuildIdLength) ||
       !packageLayoutValid(packageSize, firmwareSize) ||

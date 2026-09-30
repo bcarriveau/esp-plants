@@ -13,7 +13,10 @@ def test_release_cmd_builds_only_current_h2_and_waveshare():
 
 def test_release_cmd_explicitly_runs_packager_after_builds():
     source = CMD.read_text(encoding="utf-8")
-    assert "Packaging Waveshare + H2 release assets explicitly..." in source
+    assert "Packaging both Waveshare variants + H2 release assets explicitly..." in source
+    assert "waveshare_s3_touch_lcd_7b_release" in source
+    assert "--variant 7b" in source
+    assert "--combine-existing" in source
     assert 'firmware\\waveshare-hub\\scripts\\build_plants_ota.py' in source
     assert 'waveshare_s3_touch_lcd_7_release\\firmware.bin' in source
 
@@ -21,7 +24,8 @@ def test_release_cmd_explicitly_runs_packager_after_builds():
 def test_release_cmd_verifies_both_controller_release_assets():
     source = CMD.read_text(encoding="utf-8")
     required = (
-        'release\\esp-plants-waveshare-%RELEASE_VERSION%.plantsota',
+        'release\\esp-plants-waveshare-7-%RELEASE_VERSION%.plantsota',
+        'release\\esp-plants-waveshare-7b-%RELEASE_VERSION%.plantsota',
         'release\\esp-plants-waveshare.manifest.json',
         'release\\esp-plants-h2-%H2_VERSION%.bin',
         'release\\esp-plants-h2-%H2_VERSION%.bin.sha256',

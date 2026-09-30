@@ -14,7 +14,11 @@
 #include "phrase_engine.h"
 #include "update_service.h"
 #include "sensor_route_view.h"
+#ifdef ESP_PLANTS_WAVESHARE_7B
+#include "ui_7b/screens.h"
+#else
 #include "ui/screens.h"
+#endif
 
 namespace {
 
@@ -49,6 +53,28 @@ constexpr size_t kSetupQrEncodeBufferBytes =
       (kSetupQrMaxVersion * 4U + 17U) + 7U) / 8U) + 1U;
 static_assert(kSetupQrEncodeBufferBytes == 173U,
               "Unexpected ESP PLANTS setup QR encoder buffer size");
+
+#ifdef ESP_PLANTS_WAVESHARE_7B
+constexpr int32_t kUiScaleXNumerator = 128;
+constexpr int32_t kUiScaleYNumerator = 125;
+#else
+constexpr int32_t kUiScaleXNumerator = 100;
+constexpr int32_t kUiScaleYNumerator = 100;
+#endif
+constexpr int32_t kUiScaleDenominator = 100;
+
+constexpr lv_coord_t scaleUiCoord(int32_t value, int32_t numerator) {
+  return static_cast<lv_coord_t>(
+      value >= 0
+          ? (value * numerator + kUiScaleDenominator / 2) / kUiScaleDenominator
+          : -(((-value) * numerator + kUiScaleDenominator / 2) / kUiScaleDenominator));
+}
+constexpr lv_coord_t uiX(int32_t value) {
+  return scaleUiCoord(value, kUiScaleXNumerator);
+}
+constexpr lv_coord_t uiY(int32_t value) {
+  return scaleUiCoord(value, kUiScaleYNumerator);
+}
 
 enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3, Advanced = 4 };
 enum class RenameTarget : uint8_t { Plant = 0, Device = 1, Infrastructure = 2 };
@@ -1434,9 +1460,9 @@ void themeEvent(lv_event_t *event) {
   pendingTheme=phraseTheme;
   personalityDialogActive=true;
   label(renameTitle,"PLANT PERSONALITY");
-  lv_obj_set_pos(renameTitle,32,8);
-  lv_obj_set_pos(renameHint,32,39);
-  lv_obj_set_width(renameHint,700);
+  lv_obj_set_pos(renameTitle, uiX(32), uiY(8));
+  lv_obj_set_pos(renameHint, uiX(32), uiY(39));
+  lv_obj_set_width(renameHint, uiX(700));
 
   char hint[96]{};
   snprintf(hint,sizeof(hint),"Selected: %s   SAVE to apply",
@@ -1446,8 +1472,8 @@ void themeEvent(lv_event_t *event) {
   // Reuse the existing rename btnmatrix. No new LVGL objects are allocated.
   // The selector starts 36 px below the 68 px header.
   lv_obj_add_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_pos(renameKeyboard,50,104);
-  lv_obj_set_size(renameKeyboard,700,320);
+  lv_obj_set_pos(renameKeyboard, uiX(50), uiY(104));
+  lv_obj_set_size(renameKeyboard, uiX(700), uiY(320));
   lv_btnmatrix_set_map(renameKeyboard,kPersonalityMap);
   lv_obj_set_style_bg_color(renameKeyboard,lv_color_hex(0x3F7A4E),
                             LV_PART_ITEMS | LV_STATE_CHECKED);
@@ -1708,11 +1734,11 @@ void closeRename() {
         static_cast<lv_btnmatrix_ctrl_t>(
             LV_BTNMATRIX_CTRL_CHECKABLE | LV_BTNMATRIX_CTRL_CHECKED));
     lv_obj_clear_flag(renameInput,LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(renameTitle,18,8);
-    lv_obj_set_pos(renameHint,20,36);
-    lv_obj_set_width(renameHint,520);
-    lv_obj_set_pos(renameKeyboard,18,158);
-    lv_obj_set_size(renameKeyboard,764,304);
+    lv_obj_set_pos(renameTitle, uiX(18), uiY(8));
+    lv_obj_set_pos(renameHint, uiX(20), uiY(36));
+    lv_obj_set_width(renameHint, uiX(520));
+    lv_obj_set_pos(renameKeyboard, uiX(18), uiY(158));
+    lv_obj_set_size(renameKeyboard, uiX(764), uiY(304));
   }
   lv_obj_add_flag(renameModal, LV_OBJ_FLAG_HIDDEN);
 }
@@ -2225,7 +2251,7 @@ void buildHome(lv_obj_t *screen) {
 
   homeVirtualContent = lv_obj_create(homeList);
   lv_obj_set_pos(homeVirtualContent, 0, 0);
-  lv_obj_set_size(homeVirtualContent, 228,
+  lv_obj_set_size(homeVirtualContent, uiX(228),
                   espplants_home_virtual_list::contentHeight(0));
   lv_obj_set_style_border_width(homeVirtualContent, 0, 0);
   lv_obj_set_style_bg_opa(homeVirtualContent, LV_OPA_TRANSP, 0);
@@ -2236,7 +2262,7 @@ void buildHome(lv_obj_t *screen) {
     PlantListRow &row = rows[i];
     row.box = lv_obj_create(homeVirtualContent);
     lv_obj_set_pos(row.box, 0, 0);
-    lv_obj_set_size(row.box, 228, espplants_home_virtual_list::kRowHeight);
+    lv_obj_set_size(row.box, uiX(228), espplants_home_virtual_list::kRowHeight);
     lv_obj_set_style_radius(row.box, 12, 0);
     lv_obj_set_style_border_width(row.box, 0, 0);
     lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
@@ -2250,7 +2276,7 @@ void buildHome(lv_obj_t *screen) {
     lv_label_set_text_static(row.name, row.nameText);
     lv_obj_set_style_text_font(row.name, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_width(row.name, 145);
+    lv_obj_set_width(row.name, uiX(145));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
     row.moisture = lv_label_create(row.box);
@@ -2258,11 +2284,11 @@ void buildHome(lv_obj_t *screen) {
     lv_label_set_text_static(row.moisture, row.moistureText);
     lv_obj_set_style_text_font(row.moisture, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_align(row.moisture, LV_ALIGN_TOP_RIGHT, -2, -2);
+    lv_obj_align(row.moisture, LV_ALIGN_TOP_RIGHT, uiX(-2), uiY(-2));
 
     row.bar = lv_bar_create(row.box);
-    lv_obj_set_pos(row.bar, 2, 30);
-    lv_obj_set_size(row.bar, 208, 9);
+    lv_obj_set_pos(row.bar, uiX(2), uiY(30));
+    lv_obj_set_size(row.bar, uiX(208), uiY(9));
     lv_bar_set_range(row.bar, 0, 100);
     lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(row.bar, LV_OPA_COVER, LV_PART_MAIN);
@@ -2285,7 +2311,7 @@ void buildAll(lv_obj_t *screen) {
 
   allVirtualContent = lv_obj_create(allList);
   lv_obj_set_pos(allVirtualContent, 0, 0);
-  lv_obj_set_size(allVirtualContent, 742,
+  lv_obj_set_size(allVirtualContent, uiX(742),
                   espplants_all_virtual_list::contentHeight(0));
   lv_obj_set_style_border_width(allVirtualContent, 0, 0);
   lv_obj_set_style_bg_opa(allVirtualContent, LV_OPA_TRANSP, 0);
@@ -2296,7 +2322,7 @@ void buildAll(lv_obj_t *screen) {
     AllSensorRow &row = allRows[i];
     row.box = lv_obj_create(allVirtualContent);
     lv_obj_set_pos(row.box, 0, 0);
-    lv_obj_set_size(row.box, 742, espplants_all_virtual_list::kRowHeight);
+    lv_obj_set_size(row.box, uiX(742), espplants_all_virtual_list::kRowHeight);
     lv_obj_set_style_radius(row.box, 10, 0);
     lv_obj_set_style_border_width(row.box, 0, 0);
     lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
@@ -2308,29 +2334,29 @@ void buildAll(lv_obj_t *screen) {
     row.name = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.name, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(row.name, 4, 9);
-    lv_obj_set_width(row.name, 285);
+    lv_obj_set_pos(row.name, uiX(4), uiY(9));
+    lv_obj_set_width(row.name, uiX(285));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
     row.moisture = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.moisture, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(row.moisture, 305, 8);
-    lv_obj_set_width(row.moisture, 110);
+    lv_obj_set_pos(row.moisture, uiX(305), uiY(8));
+    lv_obj_set_width(row.moisture, uiX(110));
     lv_obj_set_style_text_align(row.moisture, LV_TEXT_ALIGN_CENTER, 0);
 
     row.battery = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.battery, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(row.battery, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(row.battery, 435, 9);
-    lv_obj_set_width(row.battery, 115);
+    lv_obj_set_pos(row.battery, uiX(435), uiY(9));
+    lv_obj_set_width(row.battery, uiX(115));
     lv_obj_set_style_text_align(row.battery, LV_TEXT_ALIGN_CENTER, 0);
 
     row.updated = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.updated, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(row.updated, lv_color_hex(0xD1DED5), 0);
-    lv_obj_set_pos(row.updated, 565, 10);
-    lv_obj_set_width(row.updated, 155);
+    lv_obj_set_pos(row.updated, uiX(565), uiY(10));
+    lv_obj_set_width(row.updated, uiX(155));
     lv_obj_set_style_text_align(row.updated, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(row.updated, LV_LABEL_LONG_DOT);
   }
@@ -2465,7 +2491,7 @@ void buildAdvanced(lv_obj_t *screen) {
 
   advancedVirtualContent = lv_obj_create(advancedList);
   lv_obj_set_pos(advancedVirtualContent, 0, 0);
-  lv_obj_set_size(advancedVirtualContent, 742,
+  lv_obj_set_size(advancedVirtualContent, uiX(742),
                   espplants_advanced_virtual_list::kViewportHeight);
   lv_obj_set_style_border_width(advancedVirtualContent, 0, 0);
   lv_obj_set_style_bg_opa(advancedVirtualContent, LV_OPA_TRANSP, 0);
@@ -2476,7 +2502,7 @@ void buildAdvanced(lv_obj_t *screen) {
     InfrastructureRow &row = infrastructureRows[i];
     row.box = lv_obj_create(advancedVirtualContent);
     lv_obj_set_pos(row.box, 0, 0);
-    lv_obj_set_size(row.box, 742, 50);
+    lv_obj_set_size(row.box, uiX(742), espplants_advanced_virtual_list::kRowHeight);
     lv_obj_set_style_radius(row.box, 10, 0);
     lv_obj_set_style_border_width(row.box, 0, 0);
     lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
@@ -2488,23 +2514,23 @@ void buildAdvanced(lv_obj_t *screen) {
     row.name = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.name, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
-    lv_obj_set_pos(row.name, 2, 6);
-    lv_obj_set_width(row.name, 390);
+    lv_obj_set_pos(row.name, uiX(2), uiY(6));
+    lv_obj_set_width(row.name, uiX(390));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
     lv_label_set_text_static(row.name, row.nameText);
 
     row.status = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.status, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(row.status, lv_color_hex(0xD1DED5), 0);
-    lv_obj_set_pos(row.status, 430, 7);
-    lv_obj_set_width(row.status, 110);
+    lv_obj_set_pos(row.status, uiX(430), uiY(7));
+    lv_obj_set_width(row.status, uiX(110));
     lv_label_set_text_static(row.status, row.statusText);
 
     row.signal = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.signal, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(row.signal, lv_color_hex(0xD1DED5), 0);
-    lv_obj_set_pos(row.signal, 570, 7);
-    lv_obj_set_width(row.signal, 145);
+    lv_obj_set_pos(row.signal, uiX(570), uiY(7));
+    lv_obj_set_width(row.signal, uiX(145));
     lv_label_set_text_static(row.signal, row.signalText);
   }
 
@@ -3032,8 +3058,8 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         lv_obj_clear_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
       else
         lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_set_pos(updatePortalInfo, 150, 268);
-      lv_obj_set_width(updatePortalInfo, 196);
+      lv_obj_set_pos(updatePortalInfo, uiX(150), uiY(268));
+      lv_obj_set_width(updatePortalInfo, uiX(196));
       snprintf(text, sizeof(text),
                "PHONE SETUP READY\nSSID: %s\nPassword: %s\n\nScan QR. If the captive page does not open, use 192.168.4.1",
                espplants_update::setupSsid(), espplants_update::setupPassword());
@@ -3042,8 +3068,8 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
       updateQrPayload[0] = '\0';
       lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
       lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_set_pos(updatePortalInfo, 20, 260);
-      lv_obj_set_width(updatePortalInfo, 326);
+      lv_obj_set_pos(updatePortalInfo, uiX(20), uiY(260));
+      lv_obj_set_width(updatePortalInfo, uiX(326));
       label(updatePortalInfo,
             "Tap SET UP / CHANGE WI-FI. Scan the QR when it appears.");
     }
@@ -3460,7 +3486,7 @@ void setup() {
   Serial.printf("[plantlink] UART0 RX=%d TX=%d baud=%lu\n", kPlantLinkRxPin, kPlantLinkTxPin,
                 static_cast<unsigned long>(kPlantLinkBaud));
 
-  Serial.println("[display] initializing Waveshare 800x480...");
+  Serial.printf("[display] initializing Waveshare %dx%d...\n", ESP_PANEL_LCD_WIDTH, ESP_PANEL_LCD_HEIGHT);
   logEspMemory("display-pre-init");
   lcd_init();
   logEspMemory("display-post-init");

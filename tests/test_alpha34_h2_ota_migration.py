@@ -70,7 +70,8 @@ def test_release_manifest_uses_regular_7_and_current_h2_target():
             h2,
         )
     )
-    assert manifest["hardware"] == "waveshare-esp32-s3-touch-lcd-7"
+    assert manifest["schema"] == 1
+    assert manifest["variants"][0]["hardware"] == "waveshare-esp32-s3-touch-lcd-7"
     assert manifest["h2"]["version"] == h2_identity.version
     assert manifest["h2"]["asset"] == f"esp-plants-h2-{h2_identity.version}.bin"
 
@@ -125,6 +126,8 @@ def test_historical_incompatible_manifest_does_not_replace_live_status():
     parser = source[parse_start:scan_start]
     assert "bool &identityMismatch" in parser
     assert "identityMismatch = true;" in parser
-    assert "Skipping historical release %s: incompatible product/hardware/channel/updater" in parser
+    assert "Skipping historical release %s: incompatible product/channel/updater/schema" in source
+    assert "Skipping historical release %s: incompatible hardware" in source
+    assert "Skipping historical release %s: no package for hardware %s" in source
     assert 'setStatus("Release manifest is incompatible with this ESP PLANTS display")' not in parser
     assert "if (!identityMismatch) manifestRejected = true;" in source

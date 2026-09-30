@@ -19,9 +19,16 @@ where platformio >nul 2>&1 && set "PIO=platformio" && goto build
 goto pio_missing
 
 :build
+if not exist "release" mkdir "release"
+del /q "release\esp-plants-waveshare-7-%RELEASE_VERSION%.plantsota" >nul 2>&1
+del /q "release\esp-plants-waveshare-7b-%RELEASE_VERSION%.plantsota" >nul 2>&1
+del /q "release\esp-plants-waveshare.manifest.json" >nul 2>&1
+del /q "release\esp-plants-h2-%H2_VERSION%.bin" >nul 2>&1
+del /q "release\esp-plants-h2-%H2_VERSION%.bin.sha256" >nul 2>&1
+
 echo Building H2 distribution target v%H2_VERSION%...
 "%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2_release
-if not errorlevel 1 goto build_waveshare
+if not errorlevel 1 goto build_waveshare_7
 
 echo.
 echo H2 release build did not initialize cleanly.
@@ -33,41 +40,54 @@ echo Retrying H2 distribution target v%H2_VERSION%...
 "%PIO%" run -d firmware\m5-h2-zigbee -e m5_gateway_h2_release
 if errorlevel 1 goto build_failed
 
-:build_waveshare
-echo Building Waveshare distribution image v%RELEASE_VERSION%...
+:build_waveshare_7
+echo Building Waveshare 7 distribution image v%RELEASE_VERSION%...
 "%PIO%" run -d firmware\waveshare-hub -e waveshare_s3_touch_lcd_7_release
 if errorlevel 1 goto build_failed
 
-echo Packaging Waveshare + H2 release assets explicitly...
+echo Building Waveshare 7B distribution image v%RELEASE_VERSION%...
+"%PIO%" run -d firmware\waveshare-hub -e waveshare_s3_touch_lcd_7b_release
+if errorlevel 1 goto build_failed
+
+echo Packaging both Waveshare variants + H2 release assets explicitly...
 if not exist "firmware\m5-h2-zigbee\.pio\build\m5_gateway_h2_release\firmware.bin" goto package_missing_binary
 if not exist "firmware\waveshare-hub\.pio\build\waveshare_s3_touch_lcd_7_release\firmware.bin" goto package_missing_binary
+if not exist "firmware\waveshare-hub\.pio\build\waveshare_s3_touch_lcd_7b_release\firmware.bin" goto package_missing_binary
 if exist "%PYTHON%" goto run_packager
 where python >nul 2>&1 && set "PYTHON=python" && goto run_packager
 goto python_missing
 
 :run_packager
-if not exist "release" mkdir "release"
-del /q "release\esp-plants-waveshare-%RELEASE_VERSION%.plantsota" >nul 2>&1
-del /q "release\esp-plants-waveshare.manifest.json" >nul 2>&1
-del /q "release\esp-plants-h2-%H2_VERSION%.bin" >nul 2>&1
-del /q "release\esp-plants-h2-%H2_VERSION%.bin.sha256" >nul 2>&1
-
 "%PYTHON%" "firmware\waveshare-hub\scripts\build_plants_ota.py" ^
   "firmware\waveshare-hub\.pio\build\waveshare_s3_touch_lcd_7_release\firmware.bin" ^
   "firmware\waveshare-hub\include\build_version.h" ^
-  "release"
+  "release" ^
+  --variant 7
 if errorlevel 1 goto package_failed
 
-if not exist "release\esp-plants-waveshare-%RELEASE_VERSION%.plantsota" goto package_failed
+"%PYTHON%" "firmware\waveshare-hub\scripts\build_plants_ota.py" ^
+  "firmware\waveshare-hub\.pio\build\waveshare_s3_touch_lcd_7b_release\firmware.bin" ^
+  "firmware\waveshare-hub\include\build_version.h" ^
+  "release" ^
+  --variant 7b ^
+  --combine-existing
+if errorlevel 1 goto package_failed
+
+if not exist "release\esp-plants-waveshare-7-%RELEASE_VERSION%.plantsota" goto package_failed
+if not exist "release\esp-plants-waveshare-7b-%RELEASE_VERSION%.plantsota" goto package_failed
 if not exist "release\esp-plants-waveshare.manifest.json" goto package_failed
 if not exist "release\esp-plants-h2-%H2_VERSION%.bin" goto package_failed
 if not exist "release\esp-plants-h2-%H2_VERSION%.bin.sha256" goto package_failed
+
+findstr /c:"waveshare-esp32-s3-touch-lcd-7" "release\esp-plants-waveshare.manifest.json" >nul || goto package_failed
+findstr /c:"waveshare-esp32-s3-touch-lcd-7b" "release\esp-plants-waveshare.manifest.json" >nul || goto package_failed
 
 echo.
 echo Waveshare release v%RELEASE_VERSION% complete.
 echo Target H2 firmware: v%H2_VERSION%
 echo Verified generated files in release\:
-echo   esp-plants-waveshare-%RELEASE_VERSION%.plantsota
+echo   esp-plants-waveshare-7-%RELEASE_VERSION%.plantsota
+echo   esp-plants-waveshare-7b-%RELEASE_VERSION%.plantsota
 echo   esp-plants-waveshare.manifest.json
 echo   esp-plants-h2-%H2_VERSION%.bin
 echo   esp-plants-h2-%H2_VERSION%.bin.sha256
@@ -85,7 +105,7 @@ pause
 exit /b 1
 
 :package_failed
-echo RELEASE PACKAGING FAILED. Expected release files were not produced.
+echo RELEASE PACKAGING FAILED. Expected dual-variant release files were not produced.
 pause
 exit /b 1
 

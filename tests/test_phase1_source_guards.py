@@ -27,7 +27,7 @@ class Phase1SourceGuardTests(unittest.TestCase):
         source = self.text("firmware/waveshare-hub/src/plants_ota_installer.cpp")
         for required in (
             "ESP-PLANTS-OTA",
-            "WAVESHARE-ESP32-S3-LCD-7",
+            "ESP_PLANTS_WAVESHARE_HARDWARE_ID",
             "ESP-PLANTS-WAVESHARE",
             "ESP-PLANTS-DISTRIBUTION-BUILD",
             "packageSha256",

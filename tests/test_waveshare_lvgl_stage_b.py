@@ -30,7 +30,7 @@ def test_advanced_list_uses_fixed_five_row_pool_and_virtual_content():
     assert "InfrastructureRow infrastructureRows[espplants_advanced_virtual_list::kPoolSize];" in source
     assert "constexpr size_t kPoolSize = 5;" in read(VIRTUAL)
     assert "advancedVirtualContent = lv_obj_create(advancedList);" in build
-    assert "lv_obj_set_size(advancedVirtualContent, 742," in build
+    assert "lv_obj_set_size(advancedVirtualContent, uiX(742)," in build
     assert "lv_obj_set_flex_flow(advancedList" not in build
     assert "for (size_t i = 0; i < espplants_advanced_virtual_list::kPoolSize; ++i)" in build
     assert "lv_obj_set_pos(row.box, 0, 0);" in build
@@ -55,7 +55,7 @@ def test_virtual_geometry_preserves_locked_advanced_layout():
         "objects.advanced_remove_button = obj;",
     ):
         assert required in ui
-    assert "lv_obj_set_size(row.box, 742, 50);" in build
+    assert "lv_obj_set_size(row.box, uiX(742), espplants_advanced_virtual_list::kRowHeight);" in build
 
 
 def test_virtual_content_height_and_scroll_binding_are_explicit():

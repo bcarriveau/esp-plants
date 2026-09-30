@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 PACKAGE_MAGIC = b"ESP-PLANTS-OTA"
-PACKAGE_HARDWARE_ID = b"WAVESHARE-ESP32-S3-LCD-7"
 PACKAGE_PRODUCT_ID = b"ESP-PLANTS-WAVESHARE"
 FORMAT_VERSION = 1
 HEADER_SIZE = 512
@@ -17,13 +16,17 @@ ESP_IMAGE_MAGIC = 0xE9
 ESP32_S3_CHIP_ID = 9
 HEADER_STRUCT = struct.Struct("<16sHH32s32s96sI32s296s")
 MANIFEST_ASSET_NAME = "esp-plants-waveshare.manifest.json"
+MANIFEST_SCHEMA = 1
 MAX_MANIFEST_BYTES = 2048
 DISTRIBUTION_FIRMWARE_MARKER = b"ESP-PLANTS-DISTRIBUTION-BUILD"
 H2_DISTRIBUTION_MARKER = b"ESP-PLANTS-H2-DISTRIBUTION-BUILD"
 DISTRIBUTION_BUILD_FLAG = "ESP_PLANTS_DISTRIBUTION_BUILD"
+WAVESHARE_7B_BUILD_FLAG = "ESP_PLANTS_WAVESHARE_7B"
 MIN_FIRMWARE_BYTES = 64 * 1024
 MAX_PACKAGE_BYTES = 7 * 1024 * 1024
 H2_MAX_BYTES = 0xE0000
+VARIANT_7 = "7"
+VARIANT_7B = "7b"
 
 
 class BuildIdentity(NamedTuple):
@@ -75,12 +78,39 @@ def _int(text: str, name: str) -> int:
     return int(match.group(1))
 
 
-def read_build_identity(path: Path) -> BuildIdentity:
+def _normalize_variant(variant: str) -> str:
+    value = str(variant).strip().lower()
+    if value in ("7", "waveshare_s3_touch_lcd_7", "waveshare_s3_touch_lcd_7_release"):
+        return VARIANT_7
+    if value in ("7b", "waveshare_s3_touch_lcd_7b", "waveshare_s3_touch_lcd_7b_release"):
+        return VARIANT_7B
+    raise ValueError(f"unsupported Waveshare variant: {variant}")
+
+
+def _generic_hardware_id(text: str, variant: str) -> str:
+    """Resolve the generic runtime macro exactly as the selected build does."""
+    variant = _normalize_variant(variant)
+    wanted_symbol = (
+        "ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID"
+        if variant == VARIANT_7B
+        else "ESP_PLANTS_WAVESHARE_7_HARDWARE_ID"
+    )
+    generic_targets = re.findall(
+        r"#define\s+ESP_PLANTS_WAVESHARE_HARDWARE_ID\s+([A-Za-z0-9_]+)", text
+    )
+    if wanted_symbol not in generic_targets:
+        raise ValueError(
+            "ESP_PLANTS_WAVESHARE_HARDWARE_ID does not resolve to the selected variant"
+        )
+    return _str(text, wanted_symbol)
+
+
+def read_build_identity(path: Path, variant: str = VARIANT_7) -> BuildIdentity:
     text = path.read_text(encoding="utf-8")
     version = _str(text, "ESP_PLANTS_WAVESHARE_VERSION")
     return BuildIdentity(
         version,
-        _str(text, "ESP_PLANTS_WAVESHARE_7_HARDWARE_ID"),
+        _generic_hardware_id(text, variant),
         _str(text, "ESP_PLANTS_WAVESHARE_PRODUCT_ID"),
         _str(text, "ESP_PLANTS_WAVESHARE_RELEASE_CHANNEL"),
         f"ESPPLANTS-WAVESHARE-{version}",
@@ -116,6 +146,7 @@ def create_package(firmware: bytes, identity: BuildIdentity) -> bytes:
     if (
         DISTRIBUTION_FIRMWARE_MARKER not in firmware
         or identity.build_id.encode() not in firmware
+        or identity.hardware.encode() not in firmware
     ):
         raise ValueError("Waveshare firmware lacks distribution/build identity")
     digest = hashlib.sha256(firmware).digest()
@@ -123,9 +154,9 @@ def create_package(firmware: bytes, identity: BuildIdentity) -> bytes:
         _fixed(PACKAGE_MAGIC, 16, "magic"),
         FORMAT_VERSION,
         HEADER_SIZE,
-        _fixed(PACKAGE_HARDWARE_ID, 32, "hardware"),
+        _fixed(identity.hardware.encode("ascii"), 32, "hardware"),
         _fixed(PACKAGE_PRODUCT_ID, 32, "product"),
-        _fixed(identity.build_id.encode(), 96, "build"),
+        _fixed(identity.build_id.encode("ascii"), 96, "build"),
         len(firmware),
         digest,
         bytes(296),
@@ -147,7 +178,9 @@ def metadata(package: bytes, identity: BuildIdentity) -> PackageMetadata:
     )
 
 
-def read_plantlink_version(repo: Path) -> int:
+def read_plantlink_version(repo: Path | None = None) -> int:
+    if repo is None:
+        repo = Path(__file__).resolve().parents[3]
     header = repo / "shared" / "plantlink" / "plantlink.h"
     match = re.search(r"kProtocolVersion\s*=\s*(\d+)", header.read_text(encoding="utf-8"))
     if not match:
@@ -218,27 +251,68 @@ def h2_asset(repo: Path, release_dir: Path) -> dict:
     )
 
 
-def create_manifest(
-    identity: BuildIdentity,
-    package_metadata: PackageMetadata,
-    asset: str,
-    h2: dict,
-) -> bytes:
-    document = {
-        "schema": 1,
-        "tag": f"v{identity.version}",
-        "product": identity.product,
+def package_asset_name(identity: BuildIdentity) -> str:
+    suffix = "7b" if identity.hardware.endswith("-7b") else "7"
+    return f"esp-plants-waveshare-{suffix}-{identity.version}.plantsota"
+
+
+def _variant_manifest_entry(
+    identity: BuildIdentity, package_metadata: PackageMetadata, asset: str
+) -> dict:
+    return {
         "hardware": identity.hardware,
-        "channel": identity.channel,
-        "version": identity.version,
         "build_id": package_metadata.build_id,
         "asset": asset,
         "package_size": package_metadata.package_size,
         "package_sha256": package_metadata.package_sha256,
         "firmware_size": package_metadata.firmware_size,
         "firmware_sha256": package_metadata.firmware_sha256,
+    }
+
+
+def create_multi_manifest(variants: list[tuple[BuildIdentity, PackageMetadata, str]], h2: dict) -> bytes:
+    if not variants:
+        raise ValueError("at least one Waveshare variant is required")
+    identity = variants[0][0]
+    for candidate, _, _ in variants[1:]:
+        if (
+            candidate.version != identity.version
+            or candidate.product != identity.product
+            or candidate.channel != identity.channel
+            or candidate.updater_version != identity.updater_version
+        ):
+            raise ValueError("Waveshare variants do not share one release identity")
+    entries = [
+        _variant_manifest_entry(candidate, package_metadata, asset)
+        for candidate, package_metadata, asset in variants
+    ]
+    entries.sort(key=lambda item: item["hardware"])
+    # Keep schema 1 and its top-level Waveshare fields for installed 7-inch
+    # firmware.  The additive variants[] list is understood by new 7/7B builds,
+    # while older 7-inch builds safely ignore it and keep using the legacy 7
+    # fields below.  This makes the first dual-hardware release OTA-reachable.
+    legacy_index = 0
+    for index, (candidate, _, _) in enumerate(variants):
+        if candidate.hardware.endswith("-7"):
+            legacy_index = index
+            break
+    legacy_identity, legacy_metadata, legacy_asset = variants[legacy_index]
+    document = {
+        "schema": MANIFEST_SCHEMA,
+        "tag": f"v{identity.version}",
+        "product": identity.product,
+        "hardware": legacy_identity.hardware,
+        "channel": identity.channel,
+        "version": identity.version,
+        "build_id": legacy_metadata.build_id,
+        "asset": legacy_asset,
+        "package_size": legacy_metadata.package_size,
+        "package_sha256": legacy_metadata.package_sha256,
+        "firmware_size": legacy_metadata.firmware_size,
+        "firmware_sha256": legacy_metadata.firmware_sha256,
         "min_updater": identity.updater_version,
         "notes": identity.release_notes,
+        "variants": entries,
         "h2": h2,
     }
     encoded = (json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n").encode(
@@ -249,29 +323,74 @@ def create_manifest(
     return encoded
 
 
+def create_manifest(
+    identity: BuildIdentity,
+    package_metadata: PackageMetadata,
+    asset: str,
+    h2: dict,
+) -> bytes:
+    # Compatibility helper used by host tests and single-variant tooling.
+    return create_multi_manifest([(identity, package_metadata, asset)], h2)
+
+
+def _metadata_from_asset(path: Path, identity: BuildIdentity) -> PackageMetadata:
+    package = path.read_bytes()
+    if len(package) < HEADER_SIZE:
+        raise ValueError(f"package is truncated: {path}")
+    fields = HEADER_STRUCT.unpack_from(package)
+    hardware = fields[3].split(b"\0", 1)[0].decode("ascii")
+    build_id = fields[5].split(b"\0", 1)[0].decode("ascii")
+    if hardware != identity.hardware or build_id != identity.build_id:
+        raise ValueError(f"package identity mismatch: {path}")
+    return metadata(package, identity)
+
+
 def write_release_assets(
     firmware: Path,
     build_header: Path,
     release_dir: Path,
+    variant: str = VARIANT_7,
+    combine_existing: bool = False,
 ):
-    identity = read_build_identity(build_header)
+    variant = _normalize_variant(variant)
+    identity = read_build_identity(build_header, variant)
     package = create_package(firmware.read_bytes(), identity)
     package_metadata = metadata(package, identity)
     release_dir.mkdir(parents=True, exist_ok=True)
 
-    asset = f"esp-plants-waveshare-{identity.version}.plantsota"
-    (release_dir / asset).write_bytes(package)
+    asset = package_asset_name(identity)
+    asset_path = release_dir / asset
+    asset_path.write_bytes(package)
 
     repo = build_header.parents[3]
     h2 = h2_asset(repo, release_dir)
 
+    manifest_variants: list[tuple[BuildIdentity, PackageMetadata, str]] = [
+        (identity, package_metadata, asset)
+    ]
+    if combine_existing:
+        for other_variant in (VARIANT_7, VARIANT_7B):
+            other_identity = read_build_identity(build_header, other_variant)
+            if other_identity.hardware == identity.hardware:
+                continue
+            other_asset = package_asset_name(other_identity)
+            other_path = release_dir / other_asset
+            if other_path.is_file():
+                manifest_variants.append(
+                    (other_identity, _metadata_from_asset(other_path, other_identity), other_asset)
+                )
+
     manifest_path = release_dir / MANIFEST_ASSET_NAME
-    manifest_path.write_bytes(create_manifest(identity, package_metadata, asset, h2))
-    return release_dir / asset, manifest_path, package_metadata
+    manifest_path.write_bytes(create_multi_manifest(manifest_variants, h2))
+    return asset_path, manifest_path, package_metadata
 
 
 def _enabled(env) -> bool:
     return DISTRIBUTION_BUILD_FLAG in str(env.get("BUILD_FLAGS", []))
+
+
+def _variant_from_env(env) -> str:
+    return VARIANT_7B if WAVESHARE_7B_BUILD_FLAG in str(env.get("BUILD_FLAGS", [])) else VARIANT_7
 
 
 def _post(source, target, env):
@@ -282,6 +401,8 @@ def _post(source, target, env):
         Path(target[0].get_abspath()),
         project / "include" / "build_version.h",
         project.parents[1] / "release",
+        variant=_variant_from_env(env),
+        combine_existing=False,
     )
     print(asset)
     print(manifest)
@@ -293,12 +414,20 @@ def main() -> int:
     parser.add_argument("firmware", type=Path)
     parser.add_argument("build_header", type=Path)
     parser.add_argument("release_dir", type=Path)
+    parser.add_argument("--variant", choices=(VARIANT_7, VARIANT_7B), default=VARIANT_7)
+    parser.add_argument(
+        "--combine-existing",
+        action="store_true",
+        help="include the other current-version Waveshare package in the unified manifest",
+    )
     args = parser.parse_args()
     print(
         write_release_assets(
             args.firmware,
             args.build_header,
             args.release_dir,
+            variant=args.variant,
+            combine_existing=args.combine_existing,
         )
     )
     return 0

@@ -47,7 +47,10 @@ def test_no_prebuild_source_mutators_are_active():
         for match in re.finditer(r"^\s*((?:pre|post):[^\s;]+)\s*$", text, re.MULTILINE):
             active.append((pio.relative_to(ROOT).as_posix(), match.group(1)))
 
-    assert active == [("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT)]
+    assert active == [
+        ("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT),
+        ("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT),
+    ]
 
 
 def test_dead_injectors_are_gone():

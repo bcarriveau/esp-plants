@@ -44,7 +44,9 @@ def test_historical_incompatible_manifest_does_not_replace_live_status():
 
     assert "bool &identityMismatch" in parser
     assert "identityMismatch = true;" in parser
-    assert "Skipping historical release %s: incompatible product/hardware/channel/updater" in parser
+    assert "Skipping historical release %s: incompatible product/channel/updater/schema" in parser
+    assert "Skipping historical release %s: incompatible hardware" in parser
+    assert "Skipping historical release %s: no package for hardware %s" in parser
     assert 'setStatus("Release manifest is incompatible with this ESP PLANTS display")' not in parser
 
     assert "if (!identityMismatch) manifestRejected = true;" in source

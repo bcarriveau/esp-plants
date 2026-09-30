@@ -30,7 +30,7 @@ def test_all_list_uses_fixed_seven_row_pool_and_virtual_content():
     assert "AllSensorRow allRows[espplants_all_virtual_list::kPoolSize];" in source
     assert "constexpr size_t kPoolSize = 7;" in read(VIRTUAL)
     assert "allVirtualContent = lv_obj_create(allList);" in build
-    assert "lv_obj_set_size(allVirtualContent, 742," in build
+    assert "lv_obj_set_size(allVirtualContent, uiX(742)," in build
     assert "lv_obj_set_flex_flow(allList" not in build
     assert "for (size_t i = 0; i < espplants_all_virtual_list::kPoolSize; ++i)" in build
     assert "lv_obj_set_pos(row.box, 0, 0);" in build
@@ -53,11 +53,11 @@ def test_all_virtual_geometry_preserves_locked_layout():
     ):
         assert required in ui
     for required in (
-        "lv_obj_set_size(row.box, 742, espplants_all_virtual_list::kRowHeight);",
-        "lv_obj_set_pos(row.name, 4, 9);",
-        "lv_obj_set_pos(row.moisture, 305, 8);",
-        "lv_obj_set_pos(row.battery, 435, 9);",
-        "lv_obj_set_pos(row.updated, 565, 10);",
+        "lv_obj_set_size(row.box, uiX(742), espplants_all_virtual_list::kRowHeight);",
+        "lv_obj_set_pos(row.name, uiX(4), uiY(9));",
+        "lv_obj_set_pos(row.moisture, uiX(305), uiY(8));",
+        "lv_obj_set_pos(row.battery, uiX(435), uiY(9));",
+        "lv_obj_set_pos(row.updated, uiX(565), uiY(10));",
     ):
         assert required in build
 

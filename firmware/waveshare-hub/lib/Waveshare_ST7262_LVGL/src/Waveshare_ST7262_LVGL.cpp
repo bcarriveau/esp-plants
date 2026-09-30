@@ -7,6 +7,9 @@
  * uses counting task notifications and bounded waits to prevent LVGL deadlock.
  */
 #include <Arduino.h>
+#ifdef ESP_PLANTS_WAVESHARE_7B
+#include <Wire.h>
+#endif
 #include <ESP_Panel_Library.h>
 #include <ESP_IOExpander_Library.h>
 #include <lvgl.h>
@@ -20,6 +23,49 @@ static SemaphoreHandle_t lvgl_mux = nullptr; // LVGL mutex
 static TaskHandle_t lvgl_task_handle = nullptr;
 
 ESP_IOExpander *expander = NULL;
+
+#ifdef ESP_PLANTS_WAVESHARE_7B
+static uint8_t seven_b_io_state = 0xFF;
+
+static bool seven_b_write_register(uint8_t reg, uint8_t value)
+{
+    Wire.beginTransmission(ESP_PLANTS_7B_IO_EXTENSION_ADDR);
+    Wire.write(reg);
+    Wire.write(value);
+    return Wire.endTransmission() == 0;
+}
+
+static bool seven_b_set_output(uint8_t pin, bool high)
+{
+    if (pin > 7) return false;
+    if (high) seven_b_io_state |= static_cast<uint8_t>(1U << pin);
+    else seven_b_io_state &= static_cast<uint8_t>(~(1U << pin));
+    return seven_b_write_register(ESP_PLANTS_7B_IO_OUTPUT_REG, seven_b_io_state);
+}
+
+static bool seven_b_set_backlight_percent(uint8_t percent)
+{
+    if (percent > ESP_PLANTS_7B_BACKLIGHT_PERCENT) {
+        percent = ESP_PLANTS_7B_BACKLIGHT_PERCENT;
+    }
+    const uint8_t pwm = static_cast<uint8_t>((static_cast<uint16_t>(percent) * 255U) / 100U);
+    return seven_b_write_register(ESP_PLANTS_7B_IO_PWM_REG, pwm);
+}
+
+static bool seven_b_io_init()
+{
+    Wire.begin(I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, I2C_MASTER_FREQ_HZ);
+    seven_b_io_state = 0xFF;
+    const bool mode_ok = seven_b_write_register(ESP_PLANTS_7B_IO_MODE_REG, 0xFF);
+    const bool output_ok = seven_b_write_register(ESP_PLANTS_7B_IO_OUTPUT_REG, seven_b_io_state);
+    const bool pwm_ok = seven_b_set_backlight_percent(ESP_PLANTS_7B_BACKLIGHT_PERCENT);
+    if (!mode_ok || !output_ok || !pwm_ok) {
+        Serial.println("[display] 7B IO-extension init failed");
+        return false;
+    }
+    return true;
+}
+#endif
 
 #if LVGL_PORT_AVOID_TEAR
 static inline void prepareRgbVsyncWait(void)
@@ -688,7 +734,10 @@ bool lvgl_port_init(ESP_PanelLcd *lcd, ESP_PanelTouch *tp)
     lv_disp_t *disp = nullptr;
     lv_indev_t *indev = nullptr;
 
-    lv_init();
+    if (!lv_is_initialized())
+    {
+        lv_init();
+    }
 #if !LV_TICK_CUSTOM
     ESP_PANEL_CHECK_ERR_RET(tick_init(), false, "Initialize LVGL tick failed");
 #endif
@@ -761,30 +810,41 @@ bool lvgl_port_unlock(void)
 void lcd_init(void)
 {
     pinMode(GPIO_INPUT_IO_4, OUTPUT);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    Serial.println("Initialize 7B IO extension");
+    seven_b_io_init();
+    delay(100);
+
+    // Match Waveshare's 7B reset sequence: touch reset is IO1, LCD reset is
+    // IO3, and GPIO4 supplies the GT911 interrupt/reset strap.
+    seven_b_set_output(ESP_PLANTS_7B_TOUCH_RESET_IO, false);
+    seven_b_set_output(ESP_PLANTS_7B_LCD_RESET_IO, false);
+    delay(100);
+    digitalWrite(GPIO_INPUT_IO_4, LOW);
+    delay(100);
+    seven_b_set_output(ESP_PLANTS_7B_TOUCH_RESET_IO, true);
+    seven_b_set_output(ESP_PLANTS_7B_LCD_RESET_IO, true);
+    delay(200);
+#else
     /**
-     * These development boards require the use of an IO expander to configure the screen,
-     * so it needs to be initialized in advance and registered with the panel for use.
-     *
+     * The original 800x480 board uses a CH422G IO expander for screen reset
+     * and backlight enable. Keep this hardware-proven path unchanged.
      */
     Serial.println("Initialize IO expander");
-    /* Initialize IO expander */
     expander = new ESP_IOExpander_CH422G((i2c_port_t)I2C_MASTER_NUM, ESP_IO_EXPANDER_I2C_CH422G_ADDRESS_000, I2C_MASTER_SCL_IO, I2C_MASTER_SDA_IO);
-    // ESP_IOExpander *expander = new ESP_IOExpander_CH422G(I2C_MASTER_NUM, ESP_IO_EXPANDER_I2C_CH422G_ADDRESS_000);
     expander->init();
     expander->begin();
     expander->multiPinMode(TP_RST | LCD_BL | LCD_RST | SD_CS | USB_SEL, OUTPUT);
     expander->multiDigitalWrite(TP_RST | LCD_BL | LCD_RST, HIGH);
     delay(100);
-    // gt911 initialization, must be added, otherwise the touch screen will not be recognized
-    // gt911 初始化，必须要加，否则会无法识别到触摸屏
-    // initialization begin
     expander->multiDigitalWrite(TP_RST | LCD_RST, LOW);
     delay(100);
     digitalWrite(GPIO_INPUT_IO_4, LOW);
     delay(100);
     expander->multiDigitalWrite(TP_RST | LCD_RST, HIGH);
     delay(200);
-    // initialization end
+#endif
+
     Serial.println("Initialize panel device");
     ESP_Panel *panel = new ESP_Panel();
     panel->init();
@@ -796,12 +856,31 @@ void lcd_init(void)
 #endif
     panel->begin();
 
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    // IO2 is the 7B backlight enable and register 0x05 controls brightness.
+    seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
+    seven_b_set_backlight_percent(ESP_PLANTS_7B_BACKLIGHT_PERCENT);
+#endif
+
     Serial.println("Initialize LVGL");
     lvgl_port_init(panel->getLcd(), panel->getTouch());
 }
 
 void toggle_backlight(int &isOn)
 {
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    if (isOn)
+    {
+        seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, false);
+        isOn = 0;
+    }
+    else
+    {
+        seven_b_set_backlight_percent(ESP_PLANTS_7B_BACKLIGHT_PERCENT);
+        seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
+        isOn = 1;
+    }
+#else
     if (isOn)
     {
         expander->digitalWrite(LCD_BL, LOW);
@@ -812,4 +891,5 @@ void toggle_backlight(int &isOn)
         expander->digitalWrite(LCD_BL, HIGH);
         isOn = 1;
     }
+#endif
 }

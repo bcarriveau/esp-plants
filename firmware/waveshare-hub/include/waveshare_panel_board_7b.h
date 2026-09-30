@@ -92,8 +92,19 @@
 #define ESP_PANEL_TOUCH_INT_LEVEL (0)
 #endif
 
-// 7B CH422G/backlight support is intentionally gated until physical bring-up.
-// Waveshare documents I2C 0x24, IO2 backlight enable, PWM register 0x05.
+// The 7B uses Waveshare's I2C IO-extension MCU at address 0x24.
+// ESP PLANTS initializes it directly because its register protocol is not the
+// CH422G protocol used by the original 800x480 board.
+#define ESP_PLANTS_7B_IO_EXTENSION_ADDR (0x24)
+#define ESP_PLANTS_7B_IO_MODE_REG (0x02)
+#define ESP_PLANTS_7B_IO_OUTPUT_REG (0x03)
+#define ESP_PLANTS_7B_IO_PWM_REG (0x05)
+#define ESP_PLANTS_7B_TOUCH_RESET_IO (1)
+#define ESP_PLANTS_7B_BACKLIGHT_IO (2)
+#define ESP_PLANTS_7B_LCD_RESET_IO (3)
+#define ESP_PLANTS_7B_BACKLIGHT_PERCENT (97)
+
+// Backlight/reset are handled explicitly in Waveshare_ST7262_LVGL.cpp.
 #define ESP_PANEL_USE_BACKLIGHT (0)
 #define ESP_PANEL_USE_EXPANDER (0)
 

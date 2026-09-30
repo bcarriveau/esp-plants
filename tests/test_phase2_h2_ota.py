@@ -55,8 +55,9 @@ def test_release_builds_h2_first():
     )
 
 
-def test_manifest_keeps_schema_one_and_h2_metadata():
+def test_manifest_keeps_schema_one_and_adds_variant_list_with_h2_metadata():
     s = read("firmware/waveshare-hub/scripts/build_plants_ota.py")
-    assert '"schema": 1' in s
+    assert "MANIFEST_SCHEMA = 1" in s
+    assert '"variants": entries' in s
     assert '"h2": h2' in s
     assert "read_h2_build_identity" in s
