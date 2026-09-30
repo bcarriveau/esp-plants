@@ -1,10 +1,10 @@
 #pragma once
 #include <Arduino.h>
+#include "moisture_policy.h"
 namespace espplants_phrases {
 enum class Theme:uint8_t { CLASSIC=0,FUNNY=1,SARCASTIC=2,DRAMATIC=3,RUDE=4,MIXED=5 };
-enum class State:uint8_t { CRITICAL=0,VERY_DRY=1,DRY=2,GOOD=3,WET=4,VERY_WET=5 };
+using State=espplants_moisture::CareState;
 struct Rotation { uint8_t state=0xff; uint16_t cursor=0,step=1,offset=0; };
-inline State stateFor(uint8_t m,bool warning){ if(warning||m<=10)return State::CRITICAL;if(m<=20)return State::VERY_DRY;if(m<=40)return State::DRY;if(m<=70)return State::GOOD;if(m<=85)return State::WET;return State::VERY_WET; }
 static const char *const kCLASSIC_CRITICAL[]={
   "Emergency drink required.",
   "Soil moisture is critically low.",

@@ -10,6 +10,7 @@
 #include "advanced_virtual_list.h"
 #include "all_virtual_list.h"
 #include "home_virtual_list.h"
+#include "moisture_policy.h"
 #include "phrase_engine.h"
 #include "update_service.h"
 #include "sensor_route_view.h"
@@ -86,6 +87,7 @@ struct PlantSensor {
   uint8_t soilMoisturePct = 0;
   uint8_t batteryPct = 0;
   uint8_t waterWarning = 0;
+  int8_t moisturePreference = 0;
   uint8_t lqi = 0;
   int8_t rssi = plantlink::kRssiUnavailableDbm;
   uint32_t lastSeenMs = 0;
@@ -275,7 +277,9 @@ lv_obj_t *detailBattery = nullptr;
 lv_obj_t *detailSignal = nullptr;
 lv_obj_t *detailUpdated = nullptr;
 lv_obj_t *detailBar = nullptr;
-lv_obj_t *detailWarning = nullptr;
+lv_obj_t *detailPreferenceLabel = nullptr;
+lv_obj_t *detailPreferenceSlider = nullptr;
+lv_obj_t *detailPreferenceValue = nullptr;
 lv_obj_t *renameButton = nullptr;
 lv_obj_t *replaceButton = nullptr;
 lv_obj_t *removeButton = nullptr;
@@ -572,6 +576,17 @@ void slotKey(size_t slot, char out[12]) {
   snprintf(out, 12, "plant%02u", static_cast<unsigned>(slot));
 }
 
+void moisturePreferenceKey(size_t slot, char out[12]) {
+  snprintf(out, 12, "moist%02u", static_cast<unsigned>(slot));
+}
+
+void saveMoisturePreference(size_t slot) {
+  if (slot >= kMaxSensors || !sensors[slot].used) return;
+  char key[12]{};
+  moisturePreferenceKey(slot, key);
+  preferences.putChar(key, sensors[slot].moisturePreference);
+}
+
 void defaultName(size_t slot, char *out, size_t size) {
   snprintf(out, size, "PLANT %u", static_cast<unsigned>(slot + 1));
 }
@@ -820,8 +835,14 @@ size_t buildSortedSlots(size_t out[kMaxSensors]) {
       bool before = valueRank < previousRank;
 
       if (valueRank == previousRank && valueRank == 0) {
-        if (sensors[value].soilMoisturePct != sensors[previous].soilMoisturePct) {
-          before = sensors[value].soilMoisturePct < sensors[previous].soilMoisturePct;
+        const auto valueKey = espplants_moisture::rankingKey(
+            sensors[value].soilMoisturePct, sensors[value].moisturePreference);
+        const auto previousKey = espplants_moisture::rankingKey(
+            sensors[previous].soilMoisturePct, sensors[previous].moisturePreference);
+        if (valueKey.band != previousKey.band) {
+          before = valueKey.band < previousKey.band;
+        } else if (valueKey.positionPermille != previousKey.positionPermille) {
+          before = valueKey.positionPermille < previousKey.positionPermille;
         } else {
           before = value < previous;
         }
@@ -898,6 +919,10 @@ void loadRegistry() {
     p.name[sizeof(p.name) - 1] = '\0';
     if (p.name[0]) strncpy(s.name, p.name, sizeof(s.name) - 1);
     else defaultName(slot, s.name, sizeof(s.name));
+    char preferenceKey[12]{};
+    moisturePreferenceKey(slot, preferenceKey);
+    s.moisturePreference = espplants_moisture::clampPreference(
+        preferences.getChar(preferenceKey, 0));
 
     char ieee[24]{};
     plantlink::formatIeee(s.ieee, ieee, sizeof(ieee));
@@ -957,8 +982,8 @@ const char *mood(PlantSensor &s) {
   if (!s.seenThisBoot) return "Waiting for this plant to check in";
   if (!(s.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture))
     return "Waiting for a moisture reading";
-  const bool warning=(s.reportedFieldFlagsThisBoot & plantlink::SensorHasWaterWarning) && s.waterWarning;
-  const auto state=espplants_phrases::stateFor(s.soilMoisturePct,warning);
+  const auto state=espplants_moisture::careState(
+      s.soilMoisturePct, s.moisturePreference);
   const size_t slot=static_cast<size_t>(&s-sensors);
   const uint32_t seed=static_cast<uint32_t>(slot*2654435761u)^static_cast<uint32_t>(s.soilMoisturePct*257u);
   return espplants_phrases::select(s.phraseRotation,phraseTheme,state,seed,false);
@@ -1012,6 +1037,8 @@ void clearPlantSlot(size_t slot) {
   char key[12]{};
   slotKey(slot, key);
   preferences.remove(key);
+  moisturePreferenceKey(slot, key);
+  preferences.remove(key);
   sensors[slot] = PlantSensor{};
 
   if (manualHomeSensor == static_cast<int>(slot)) {
@@ -1029,11 +1056,13 @@ PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t s
 
   char preservedName[kPlantNameBytes]{};
   strncpy(preservedName, sensors[slot].name, sizeof(preservedName) - 1);
+  const int8_t preservedMoisturePreference = sensors[slot].moisturePreference;
 
   PlantSensor replacement{};
   replacement.used = true;
   memcpy(replacement.ieee, ieee, sizeof(replacement.ieee));
   replacement.shortAddress = shortAddress;
+  replacement.moisturePreference = preservedMoisturePreference;
   strncpy(replacement.name, preservedName, sizeof(replacement.name) - 1);
   replacement.name[sizeof(replacement.name) - 1] = '\0';
   sensors[slot] = replacement;
@@ -1292,9 +1321,9 @@ void refreshAllVirtualList(bool forceValues = false) {
       label(row.updated, text);
 
       const bool thirsty =
-          sensors[slot].seenThisBoot &&
-          ((sensors[slot].fieldFlags & plantlink::SensorHasWaterWarning) &&
-           sensors[slot].waterWarning);
+          hasFreshMoisture(sensors[slot]) &&
+          espplants_moisture::needsWater(espplants_moisture::careState(
+              sensors[slot].soilMoisturePct, sensors[slot].moisturePreference));
       lv_obj_set_style_bg_color(row.box,
                                 lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
     }
@@ -2265,6 +2294,38 @@ void buildAll(lv_obj_t *screen) {
   }
 }
 
+void moisturePreferenceEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+  if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
+      !sensors[selectedSensor].used) return;
+
+  PlantSensor &sensor = sensors[selectedSensor];
+  const int8_t next = espplants_moisture::clampPreference(
+      static_cast<int8_t>(lv_slider_get_value(detailPreferenceSlider)));
+  if (next == sensor.moisturePreference) return;
+
+  sensor.moisturePreference = next;
+  saveMoisturePreference(static_cast<size_t>(selectedSensor));
+
+  if (hasFreshMoisture(sensor)) {
+    const auto state = espplants_moisture::careState(
+        sensor.soilMoisturePct, sensor.moisturePreference);
+    const size_t slot = static_cast<size_t>(selectedSensor);
+    const uint32_t seed = static_cast<uint32_t>(slot * 2654435761u) ^
+                          static_cast<uint32_t>(sensor.soilMoisturePct * 257u);
+    // A user preference change may move to a new phrase pool, but it must not
+    // advance the rotation cursor as though a moisture report arrived.
+    (void)espplants_phrases::select(
+        sensor.phraseRotation, phraseTheme, state, seed, false);
+  }
+
+  Serial.printf("[settings] plant slot=%u moisture preference=%d (%s)\n",
+                static_cast<unsigned>(selectedSensor + 1),
+                static_cast<int>(sensor.moisturePreference),
+                espplants_moisture::preferenceLabel(sensor.moisturePreference));
+  markSensorValuesDirty(true);
+}
+
 void buildPlant(lv_obj_t *screen) {
   (void)screen;
 
@@ -2282,7 +2343,6 @@ void buildPlant(lv_obj_t *screen) {
   detailSignal = objects.detail_signal;
   detailBar = objects.detail_bar;
   detailUpdated = objects.detail_updated;
-  detailWarning = objects.detail_warning;
   renameButton = objects.rename_button;
   replaceButton = objects.replace_button;
   removeButton = objects.remove_button;
@@ -2291,7 +2351,16 @@ void buildPlant(lv_obj_t *screen) {
   lv_obj_add_event_cb(renameButton, renameEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(replaceButton, replaceEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(removeButton, removeEvent, LV_EVENT_CLICKED, nullptr);
-  lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+
+  detailPreferenceLabel = objects.detail_preference_label;
+  detailPreferenceSlider = objects.detail_preference_slider;
+  detailPreferenceValue = objects.detail_preference_value;
+
+  lv_slider_set_range(detailPreferenceSlider,
+                      espplants_moisture::kPreferenceMin,
+                      espplants_moisture::kPreferenceMax);
+  lv_obj_add_event_cb(detailPreferenceSlider, moisturePreferenceEvent,
+                      LV_EVENT_VALUE_CHANGED, nullptr);
 }
 
 void buildSettings(lv_obj_t *screen) {
@@ -2673,8 +2742,9 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         label(homeTemp, text);
         formatHumidity(home, text, sizeof(text));
         label(homeHumidity, text);
-        if (home.seenThisBoot &&
-            (home.fieldFlags & plantlink::SensorHasWaterWarning) && home.waterWarning)
+        if (hasFreshMoisture(home) &&
+            espplants_moisture::needsWater(espplants_moisture::careState(
+                home.soilMoisturePct, home.moisturePreference)))
           lv_obj_clear_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
         else
           lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
@@ -2710,7 +2780,9 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         label(detailSignal, "LQI --");
         label(detailUpdated, "No sensor data yet");
         lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
-        lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+              lv_slider_set_value(detailPreferenceSlider, 0, LV_ANIM_OFF);
+        label(detailPreferenceValue, "NORMAL");
+        lv_obj_add_state(detailPreferenceSlider, LV_STATE_DISABLED);
         lv_obj_add_state(renameButton, LV_STATE_DISABLED);
         lv_obj_add_state(replaceButton, LV_STATE_DISABLED);
         lv_obj_add_state(removeButton, LV_STATE_DISABLED);
@@ -2778,12 +2850,11 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
           snprintf(text, sizeof(text), "%s", updatedText);
         label(detailUpdated, text);
 
-        if (s.seenThisBoot &&
-            (s.fieldFlags & plantlink::SensorHasWaterWarning) &&
-            s.waterWarning)
-          lv_obj_clear_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
-        else
-          lv_obj_add_flag(detailWarning, LV_OBJ_FLAG_HIDDEN);
+        // Plant Detail intentionally has no duplicate WATER ME badge.
+              lv_slider_set_value(detailPreferenceSlider, s.moisturePreference, LV_ANIM_OFF);
+        label(detailPreferenceValue,
+              espplants_moisture::preferenceLabel(s.moisturePreference));
+        lv_obj_clear_state(detailPreferenceSlider, LV_STATE_DISABLED);
         lv_obj_clear_state(renameButton, LV_STATE_DISABLED);
         lv_obj_clear_state(replaceButton, LV_STATE_DISABLED);
         lv_obj_clear_state(removeButton, LV_STATE_DISABLED);
@@ -3215,8 +3286,8 @@ void handleSensorReport(const plantlink::Frame &frame) {
     s->soilMoisturePct=report.soilMoisturePct;
     // ONLY a soil-moisture report advances/selects a phrase.
     // Temperature, humidity, battery, LQI/signal, etc. never touch it.
-    const bool warning=(s->reportedFieldFlagsThisBoot & plantlink::SensorHasWaterWarning) && s->waterWarning;
-    const auto state=espplants_phrases::stateFor(report.soilMoisturePct,warning);
+    const auto state=espplants_moisture::careState(
+        report.soilMoisturePct, s->moisturePreference);
     const size_t phraseSlot=static_cast<size_t>(s-sensors);
     const uint32_t seed=static_cast<uint32_t>(phraseSlot*2654435761u)^
                         static_cast<uint32_t>(report.soilMoisturePct*257u)^millis();

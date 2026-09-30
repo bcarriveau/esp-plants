@@ -68,7 +68,9 @@ typedef struct _objects_t {
     lv_obj_t *detail_signal;
     lv_obj_t *detail_bar;
     lv_obj_t *detail_updated;
-    lv_obj_t *detail_warning;
+    lv_obj_t *detail_preference_label;
+    lv_obj_t *detail_preference_slider;
+    lv_obj_t *detail_preference_value;
     lv_obj_t *settings_page;
     lv_obj_t *settings_system_card;
     lv_obj_t *settings_system_title;

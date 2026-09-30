@@ -116,7 +116,7 @@
             {
               "type": "row",
               "id": "#d6a4d598-5210-49a7-acdd-4beb904ae710",
-              "weight": 15,
+              "weight": 27.04507512520868,
               "children": [
                 {
                   "type": "tabset",
@@ -164,7 +164,8 @@
                       "enableClose": false,
                       "icon": "svg:hierarchy"
                     }
-                  ]
+                  ],
+                  "active": true
                 },
                 {
                   "type": "tabset",
@@ -187,26 +188,13 @@
             {
               "type": "tabset",
               "id": "EDITORS",
-              "weight": 65,
-              "selected": 1,
+              "weight": 52.95492487479132,
               "enableDeleteWhenEmpty": false,
               "enableClose": false,
               "children": [
                 {
                   "type": "tab",
-                  "id": "#d9855f79-0d21-4c71-92af-913f041af1dc",
-                  "name": "Settings",
-                  "component": "editor",
-                  "config": {
-                    "objectPath": "[esp_plants.eez-project]:/settings",
-                    "subObjectPath": "[esp_plants.eez-project]:/settings",
-                    "permanent": false
-                  },
-                  "icon": "material:settings"
-                },
-                {
-                  "type": "tab",
-                  "id": "#3fc221fd-1b6b-4595-9848-0bcaf6187de8",
+                  "id": "#39added9-e5cc-4937-ae5a-90a425506856",
                   "name": "Home",
                   "component": "editor",
                   "config": {
@@ -215,8 +203,7 @@
                   },
                   "icon": "svg:page"
                 }
-              ],
-              "active": true
+              ]
             },
             {
               "type": "row",
@@ -1080,14 +1067,17 @@
       "selectionFront": {},
       "selectionBack": {
         "0": {
-          "0": {
+          "2": {
             "0": {
-              "2": {}
-            },
-            "1": {}
+              "0": {
+                "$selected": true
+              }
+            }
           },
-          "4": {
-            "0": {}
+          "9": {
+            "4": {
+              "2": {}
+            }
           }
         }
       },
@@ -1112,7 +1102,7 @@
   "searchMatchWholeWord": false,
   "replaceEnabled": false,
   "replaceText": "",
-  "pageRuntimeFrontFace": true,
+  "pageRuntimeFrontFace": false,
   "breakpoints": {},
   "watchExpressions": [],
   "showComponentDescriptions": true,
@@ -1121,8 +1111,9 @@
   "lvglPart": "MAIN",
   "lvglState": "DEFAULT",
   "lvglExpandedPropertiesGroup": [
-    "BACKGROUND",
-    "PADDING"
+    "PADDING",
+    "TEXT",
+    "BACKGROUND"
   ],
   "showInactiveFlowsInDebugger": true,
   "globalFlowZoom": true,
