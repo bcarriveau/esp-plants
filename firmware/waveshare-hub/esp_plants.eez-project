@@ -2634,6 +2634,99 @@
                       "longMode": "CLIP",
                       "recolor": false,
                       "useStaticText": false
+                    },
+                    {
+                      "objID": "d9f86b84-7256-4e9d-954e-d7f57a3c1f24",
+                      "type": "LVGLButtonWidget",
+                      "left": 650,
+                      "top": 252,
+                      "width": 92,
+                      "height": 34,
+                      "customInputs": [],
+                      "customOutputs": [],
+                      "style": {
+                        "objID": "b8021962-a89d-4462-a6d7-61b74f34359a",
+                        "useStyle": "default",
+                        "conditionalStyles": [],
+                        "childStyles": []
+                      },
+                      "timeline": [],
+                      "eventHandlers": [],
+                      "identifier": "detail_preference_save_button",
+                      "leftUnit": "px",
+                      "topUnit": "px",
+                      "widthUnit": "px",
+                      "heightUnit": "px",
+                      "children": [
+                        {
+                          "objID": "bc1ee2d4-d516-426a-a0df-33f092cc5ea5",
+                          "type": "LVGLLabelWidget",
+                          "left": 0,
+                          "top": 0,
+                          "width": 39,
+                          "height": 16,
+                          "customInputs": [],
+                          "customOutputs": [],
+                          "style": {
+                            "objID": "75805378-35a1-4d2d-a701-901f872da3c4",
+                            "useStyle": "default",
+                            "conditionalStyles": [],
+                            "childStyles": []
+                          },
+                          "timeline": [],
+                          "eventHandlers": [],
+                          "identifier": "detail_preference_save_label",
+                          "leftUnit": "px",
+                          "topUnit": "px",
+                          "widthUnit": "content",
+                          "heightUnit": "content",
+                          "children": [],
+                          "widgetFlags": "CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_WITH_ARROW|SNAPPABLE",
+                          "hiddenFlagType": "literal",
+                          "clickableFlagType": "literal",
+                          "checkedStateType": "literal",
+                          "disabledStateType": "literal",
+                          "states": "",
+                          "localStyles": {
+                            "objID": "6de899d0-91c7-4c30-a0c7-37cf7453e780",
+                            "definition": {
+                              "MAIN": {
+                                "DEFAULT": {
+                                  "align": "CENTER",
+                                  "text_font": "MONTSERRAT_14",
+                                  "text_color": "#E5ECE7"
+                                }
+                              }
+                            }
+                          },
+                          "groupIndex": 0,
+                          "text": "SAVE",
+                          "textType": "literal",
+                          "longMode": "WRAP",
+                          "recolor": false,
+                          "useStaticText": true
+                        }
+                      ],
+                      "widgetFlags": "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_ON_FOCUS|SCROLL_WITH_ARROW|SNAPPABLE",
+                      "hiddenFlagType": "literal",
+                      "clickableFlag": true,
+                      "clickableFlagType": "literal",
+                      "checkedStateType": "literal",
+                      "disabledStateType": "literal",
+                      "states": "",
+                      "localStyles": {
+                        "objID": "2661663a-1b60-48b4-91c5-c0bc8e9474cc",
+                        "definition": {
+                          "MAIN": {
+                            "DEFAULT": {
+                              "bg_color": "#244F39",
+                              "radius": 10,
+                              "border_width": 0
+                            }
+                          }
+                        }
+                      },
+                      "groupIndex": 0
                     }
                   ],
                   "widgetFlags": "CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SNAPPABLE",

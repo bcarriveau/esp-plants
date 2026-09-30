@@ -1069,7 +1069,9 @@
         "0": {
           "2": {
             "0": {
-              "0": {}
+              "0": {},
+              "6": {},
+              "7": {}
             }
           },
           "9": {
@@ -1110,8 +1112,10 @@
   "lvglPart": "MAIN",
   "lvglState": "DEFAULT",
   "lvglExpandedPropertiesGroup": [
-    "TEXT",
     "MARGIN",
+    "TEXT",
+    "POSITION AND SIZE",
+    "LAYOUT",
     "BACKGROUND"
   ],
   "showInactiveFlowsInDebugger": true,

@@ -310,6 +310,11 @@ lv_obj_t *detailBar = nullptr;
 lv_obj_t *detailPreferenceLabel = nullptr;
 lv_obj_t *detailPreferenceSlider = nullptr;
 lv_obj_t *detailPreferenceValue = nullptr;
+lv_obj_t *detailPreferenceSaveButton = nullptr;
+bool detailPreferenceSyncing = false;
+bool detailPreferencePendingDirty = false;
+int8_t detailPreferencePendingValue = 0;
+int detailPreferencePendingSensor = -1;
 lv_obj_t *renameButton = nullptr;
 lv_obj_t *replaceButton = nullptr;
 lv_obj_t *removeButton = nullptr;
@@ -1172,6 +1177,11 @@ void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **valu
 }
 
 void showPage(Page page) {
+  const Page previousPage = currentPage;
+  if (previousPage == Page::Plant && page != Page::Plant) {
+    detailPreferencePendingDirty = false;
+    detailPreferencePendingSensor = -1;
+  }
   currentPage = page;
   if (homePage) (page == Page::Home) ? lv_obj_clear_flag(homePage, LV_OBJ_FLAG_HIDDEN)
                                      : lv_obj_add_flag(homePage, LV_OBJ_FLAG_HIDDEN);
@@ -2362,15 +2372,55 @@ void buildAll(lv_obj_t *screen) {
   }
 }
 
+void updateMoisturePreferenceSaveState(bool pending) {
+  detailPreferencePendingDirty = pending;
+  if (!detailPreferenceSaveButton) return;
+
+  if (pending) {
+    lv_obj_clear_state(detailPreferenceSaveButton, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(detailPreferenceSaveButton, lv_color_hex(0x3E7A50),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_opa(detailPreferenceSaveButton, LV_OPA_COVER,
+                         LV_PART_MAIN | LV_STATE_DEFAULT);
+  } else {
+    lv_obj_add_state(detailPreferenceSaveButton, LV_STATE_DISABLED);
+    lv_obj_set_style_bg_color(detailPreferenceSaveButton, lv_color_hex(0x26342D),
+                              LV_PART_MAIN | LV_STATE_DISABLED);
+    lv_obj_set_style_opa(detailPreferenceSaveButton, LV_OPA_50,
+                         LV_PART_MAIN | LV_STATE_DISABLED);
+  }
+}
+
 void moisturePreferenceEvent(lv_event_t *event) {
-  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED ||
+      detailPreferenceSyncing) return;
   if (selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
+      !sensors[selectedSensor].used) return;
+
+  const PlantSensor &sensor = sensors[selectedSensor];
+  const int8_t next = espplants_moisture::clampPreference(
+      static_cast<int8_t>(lv_slider_get_value(detailPreferenceSlider)));
+
+  detailPreferencePendingSensor = selectedSensor;
+  detailPreferencePendingValue = next;
+  label(detailPreferenceValue, espplants_moisture::preferenceLabel(next));
+  updateMoisturePreferenceSaveState(next != sensor.moisturePreference);
+}
+
+void saveMoisturePreferenceEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  if (!detailPreferencePendingDirty ||
+      detailPreferencePendingSensor != selectedSensor ||
+      selectedSensor < 0 || selectedSensor >= static_cast<int>(kMaxSensors) ||
       !sensors[selectedSensor].used) return;
 
   PlantSensor &sensor = sensors[selectedSensor];
   const int8_t next = espplants_moisture::clampPreference(
-      static_cast<int8_t>(lv_slider_get_value(detailPreferenceSlider)));
-  if (next == sensor.moisturePreference) return;
+      detailPreferencePendingValue);
+  if (next == sensor.moisturePreference) {
+    updateMoisturePreferenceSaveState(false);
+    return;
+  }
 
   sensor.moisturePreference = next;
   saveMoisturePreference(static_cast<size_t>(selectedSensor));
@@ -2381,7 +2431,7 @@ void moisturePreferenceEvent(lv_event_t *event) {
     const size_t slot = static_cast<size_t>(selectedSensor);
     const uint32_t seed = static_cast<uint32_t>(slot * 2654435761u) ^
                           static_cast<uint32_t>(sensor.soilMoisturePct * 257u);
-    // A user preference change may move to a new phrase pool, but it must not
+    // A saved preference change may move to a new phrase pool, but it must not
     // advance the rotation cursor as though a moisture report arrived.
     (void)espplants_phrases::select(
         sensor.phraseRotation, phraseTheme, state, seed, false);
@@ -2390,10 +2440,12 @@ void moisturePreferenceEvent(lv_event_t *event) {
     sensor.phraseDisplayDueMs = 0;
   }
 
-  Serial.printf("[settings] plant slot=%u moisture preference=%d (%s)\n",
+  Serial.printf("[settings] plant slot=%u moisture preference=%d (%s) saved\n",
                 static_cast<unsigned>(selectedSensor + 1),
                 static_cast<int>(sensor.moisturePreference),
                 espplants_moisture::preferenceLabel(sensor.moisturePreference));
+  detailPreferencePendingValue = sensor.moisturePreference;
+  updateMoisturePreferenceSaveState(false);
   markSensorValuesDirty(true);
 }
 
@@ -2426,12 +2478,16 @@ void buildPlant(lv_obj_t *screen) {
   detailPreferenceLabel = objects.detail_preference_label;
   detailPreferenceSlider = objects.detail_preference_slider;
   detailPreferenceValue = objects.detail_preference_value;
+  detailPreferenceSaveButton = objects.detail_preference_save_button;
 
   lv_slider_set_range(detailPreferenceSlider,
                       espplants_moisture::kPreferenceMin,
                       espplants_moisture::kPreferenceMax);
   lv_obj_add_event_cb(detailPreferenceSlider, moisturePreferenceEvent,
                       LV_EVENT_VALUE_CHANGED, nullptr);
+  lv_obj_add_event_cb(detailPreferenceSaveButton, saveMoisturePreferenceEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  updateMoisturePreferenceSaveState(false);
 }
 
 void buildSettings(lv_obj_t *screen) {
@@ -2851,9 +2907,14 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         label(detailSignal, "LQI --");
         label(detailUpdated, "No sensor data yet");
         lv_bar_set_value(detailBar, 0, LV_ANIM_OFF);
-              lv_slider_set_value(detailPreferenceSlider, 0, LV_ANIM_OFF);
+        detailPreferencePendingSensor = -1;
+        detailPreferencePendingValue = 0;
+        detailPreferenceSyncing = true;
+        lv_slider_set_value(detailPreferenceSlider, 0, LV_ANIM_OFF);
+        detailPreferenceSyncing = false;
         label(detailPreferenceValue, "NORMAL");
         lv_obj_add_state(detailPreferenceSlider, LV_STATE_DISABLED);
+        updateMoisturePreferenceSaveState(false);
         lv_obj_add_state(renameButton, LV_STATE_DISABLED);
         lv_obj_add_state(replaceButton, LV_STATE_DISABLED);
         lv_obj_add_state(removeButton, LV_STATE_DISABLED);
@@ -2922,10 +2983,21 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         label(detailUpdated, text);
 
         // Plant Detail intentionally has no duplicate WATER ME badge.
-              lv_slider_set_value(detailPreferenceSlider, s.moisturePreference, LV_ANIM_OFF);
+        if (detailPreferencePendingSensor != selectedSensor) {
+          detailPreferencePendingSensor = selectedSensor;
+          detailPreferencePendingValue = s.moisturePreference;
+          detailPreferencePendingDirty = false;
+        }
+        const int8_t displayedPreference = detailPreferencePendingDirty
+                                             ? detailPreferencePendingValue
+                                             : s.moisturePreference;
+        detailPreferenceSyncing = true;
+        lv_slider_set_value(detailPreferenceSlider, displayedPreference, LV_ANIM_OFF);
+        detailPreferenceSyncing = false;
         label(detailPreferenceValue,
-              espplants_moisture::preferenceLabel(s.moisturePreference));
+              espplants_moisture::preferenceLabel(displayedPreference));
         lv_obj_clear_state(detailPreferenceSlider, LV_STATE_DISABLED);
+        updateMoisturePreferenceSaveState(detailPreferencePendingDirty);
         lv_obj_clear_state(renameButton, LV_STATE_DISABLED);
         lv_obj_clear_state(replaceButton, LV_STATE_DISABLED);
         lv_obj_clear_state(removeButton, LV_STATE_DISABLED);

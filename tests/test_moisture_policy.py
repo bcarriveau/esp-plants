@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import textwrap
 
@@ -101,21 +102,47 @@ def test_preference_persistence_and_plant_detail_geometry():
     assert 'preferences.remove(key);\n  sensors[slot] = PlantSensor{};' in main
     assert 'replacement.moisturePreference = preservedMoisturePreference;' in main
 
-    # Plant page is 800x356 at screen y=66. New controls stay below existing
-    # detail footer and above the reserved bottom navigation at screen y=422.
-    assert 'lv_obj_set_pos(detailPreferenceLabel, 24, 307);' in main
-    assert 'lv_obj_set_size(detailPreferenceLabel, 178, LV_SIZE_CONTENT);' in main
-    assert 'lv_obj_set_pos(detailPreferenceSlider, 220, 311);' in main
-    assert 'lv_obj_set_size(detailPreferenceSlider, 400, 16);' in main
-    assert 'lv_obj_set_pos(detailPreferenceValue, 640, 304);' in main
-    assert 'lv_obj_set_size(detailPreferenceValue, 110, 24);' in main
-    assert 24 + 178 <= 800
-    assert 220 + 400 <= 800
-    assert 640 + 110 <= 800
-    assert 311 + 16 <= 356
-    assert 304 + 24 <= 356
-    assert 66 + 328 < 422
-    assert 276 + 18 < 304  # visible gap after existing detail footer
+    def find_identifier(node, identifier):
+        if isinstance(node, dict):
+            if node.get("identifier") == identifier:
+                return node
+            for value in node.values():
+                found = find_identifier(value, identifier)
+                if found is not None:
+                    return found
+        elif isinstance(node, list):
+            for value in node:
+                found = find_identifier(value, identifier)
+                if found is not None:
+                    return found
+        return None
+
+    projects = [
+        ("esp_plants.eez-project", 772, 334),
+        ("esp_plants_7b.eez-project", 988, 418),
+    ]
+    for project_name, card_width, card_height in projects:
+        project = json.loads((ROOT / "firmware" / "waveshare-hub" / project_name).read_text())
+        slider = find_identifier(project, "detail_preference_slider")
+        value = find_identifier(project, "detail_preference_value")
+        save = find_identifier(project, "detail_preference_save_button")
+        assert slider is not None and value is not None and save is not None
+        for control in (slider, value, save):
+            assert control["left"] >= 0 and control["top"] >= 0
+            assert control["left"] + control["width"] <= card_width
+            assert control["top"] + control["height"] <= card_height
+
+    # Slider movement is only a pending UI change; persistence happens in SAVE.
+    slider_event = main.split("void moisturePreferenceEvent", 1)[1].split(
+        "void saveMoisturePreferenceEvent", 1
+    )[0]
+    save_event = main.split("void saveMoisturePreferenceEvent", 1)[1].split(
+        "void buildPlant", 1
+    )[0]
+    assert "saveMoisturePreference(" not in slider_event
+    assert "sensor.moisturePreference =" not in slider_event
+    assert "saveMoisturePreference(" in save_event
+    assert "sensor.moisturePreference = next;" in save_event
 
 
 def test_preference_change_does_not_fake_phrase_advance():

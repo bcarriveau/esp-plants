@@ -1,5 +1,5 @@
 #pragma once
-#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.52"
+#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.53"
 #define ESP_PLANTS_WAVESHARE_7_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7"
 #define ESP_PLANTS_WAVESHARE_7B_HARDWARE_ID "waveshare-esp32-s3-touch-lcd-7b"
 #ifdef ESP_PLANTS_WAVESHARE_7B
@@ -12,7 +12,7 @@
 #define ESP_PLANTS_WAVESHARE_BUILD_ID "ESPPLANTS-WAVESHARE-" ESP_PLANTS_WAVESHARE_VERSION
 #define ESP_PLANTS_WAVESHARE_UPDATER_VERSION 1
 #define ESP_PLANTS_WAVESHARE_RELEASE_NOTES \
-  "Fix GitHub OTA metadata body reads for small valid release responses while preserving HTTPS validation, bounded downloads, and update safety."
+  "Plant detail: add save button, save moisture preference only on SAVE"
 #ifdef ESP_PLANTS_DISTRIBUTION_BUILD
 #define ESP_PLANTS_DISTRIBUTION_MARKER "ESP-PLANTS-DISTRIBUTION-BUILD"
 #endif

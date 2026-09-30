@@ -683,6 +683,31 @@ void create_screen_home() {
                             lv_obj_set_style_text_color(obj, lv_color_hex(0xcbe6d2), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "NORMAL");
+                        {
+                            // detail_preference_save_button
+                            lv_obj_t *obj = lv_btn_create(parent_obj);
+                            objects.detail_preference_save_button = obj;
+                            lv_obj_set_pos(obj, 650, 252);
+                            lv_obj_set_size(obj, 92, 34);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0x244f39), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_radius(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            {
+                                lv_obj_t *parent_obj = obj;
+                                {
+                                    // detail_preference_save_label
+                                    lv_obj_t *obj = lv_label_create(parent_obj);
+                                    objects.detail_preference_save_label = obj;
+                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                                    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xe5ece7), LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_label_set_text_static(obj, "SAVE");
+                                }
+                            }
+                        }
                         }
                     }
                 }
