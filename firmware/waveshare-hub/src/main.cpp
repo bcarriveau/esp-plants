@@ -1442,7 +1442,6 @@ void brightnessEvent(lv_event_t *event) {
 #ifdef ESP_PLANTS_WAVESHARE_7B
   brightnessLevel = static_cast<uint8_t>((brightnessLevel % 5U) + 1U);
   if (set_backlight_brightness_level(brightnessLevel)) {
-    preferences.putUChar("bright_lvl", brightnessLevel);
     Serial.printf("[display] brightness level=%u/5\n", static_cast<unsigned>(brightnessLevel));
   }
   updateBrightnessButtonLabel();

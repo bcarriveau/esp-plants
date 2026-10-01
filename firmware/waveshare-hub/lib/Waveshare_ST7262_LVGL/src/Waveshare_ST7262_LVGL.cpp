@@ -44,6 +44,7 @@ static bool seven_b_set_output(uint8_t pin, bool high)
 }
 
 static uint8_t seven_b_brightness_level = ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL;
+static bool seven_b_display_ready = false;
 
 static bool seven_b_set_backlight_duty(uint8_t duty_percent)
 {
@@ -55,14 +56,36 @@ static bool seven_b_set_backlight_duty(uint8_t duty_percent)
     return seven_b_write_register(ESP_PLANTS_7B_IO_PWM_REG, pwm);
 }
 
+static bool seven_b_write_brightness_level(uint8_t level)
+{
+    const uint8_t brightness_percent = static_cast<uint8_t>(level * 20U);
+    const uint8_t duty_percent = static_cast<uint8_t>(100U - brightness_percent);
+    return seven_b_set_backlight_duty(duty_percent);
+}
+
 static bool seven_b_apply_brightness_level(uint8_t level)
 {
     if (level < 1) level = 1;
     if (level > 5) level = 5;
     seven_b_brightness_level = level;
-    const uint8_t brightness_percent = static_cast<uint8_t>(level * 20U);
-    const uint8_t duty_percent = static_cast<uint8_t>(100U - brightness_percent);
-    return seven_b_set_backlight_duty(duty_percent);
+
+    // Before panel startup this is only a queued preference. lcd_init() writes
+    // the PWM value before RGB streaming begins, so boot cannot disturb sync.
+    if (!seven_b_display_ready) return true;
+
+    // On this 7B hardware, changing EXIO_PWM while the RGB panel is actively
+    // scanning can make the image lose vertical lock. Blank/reset the LCD,
+    // update PWM while reset is asserted, then release reset into the already
+    // running RGB stream. This converts the roll into one controlled blink.
+    const bool backlight_off_ok = seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, false);
+    const bool reset_low_ok = seven_b_set_output(ESP_PLANTS_7B_LCD_RESET_IO, false);
+    delay(100);
+    const bool pwm_ok = seven_b_write_brightness_level(level);
+    delay(20);
+    const bool reset_high_ok = seven_b_set_output(ESP_PLANTS_7B_LCD_RESET_IO, true);
+    delay(200);
+    const bool backlight_on_ok = seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
+    return backlight_off_ok && reset_low_ok && pwm_ok && reset_high_ok && backlight_on_ok;
 }
 
 static bool seven_b_io_init()
@@ -866,13 +889,18 @@ void lcd_init(void)
     rgb_bus->configRgbFrameBufferNumber(LVGL_PORT_DISP_BUFFER_NUM);
     rgb_bus->configRgbBounceBufferSize(LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE);
 #endif
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    // Program the saved PWM level before RGB streaming starts. Writing EXIO_PWM
+    // after panel->begin() can make this hardware lose vertical lock.
+    if (!seven_b_write_brightness_level(seven_b_brightness_level)) {
+        Serial.println("[display] 7B initial brightness write failed");
+    }
+#endif
     panel->begin();
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
-    // Match Waveshare's 7B brightness path: IO2 enables the backlight while
-    // GPIO6 PWM and IO-extension register 0x05 control the active-low duty.
     seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
-    seven_b_apply_brightness_level(seven_b_brightness_level);
+    seven_b_display_ready = true;
 #endif
 
     Serial.println("Initialize LVGL");
