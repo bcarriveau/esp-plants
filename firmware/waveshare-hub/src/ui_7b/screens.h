@@ -195,6 +195,7 @@ typedef struct _objects_t {
     lv_obj_t *release_notes_label;
     lv_obj_t *release_notes_check_button;
     lv_obj_t *obj30;
+    lv_obj_t *wifi_forget_scrim;
     lv_obj_t *wifi_forget_confirm;
     lv_obj_t *obj31;
     lv_obj_t *obj32;

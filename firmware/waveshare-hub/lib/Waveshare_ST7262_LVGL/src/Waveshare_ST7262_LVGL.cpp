@@ -20,6 +20,22 @@
 #define LVGL_PORT_RGB_VSYNC_TIMEOUT_MS (100)
 
 static const char *TAG = "lvgl_port";
+
+#if defined(CONFIG_SPIRAM_FETCH_INSTRUCTIONS) && CONFIG_SPIRAM_FETCH_INSTRUCTIONS
+static constexpr int kSdkconfigXipFetch = 1;
+#else
+static constexpr int kSdkconfigXipFetch = 0;
+#endif
+#if defined(CONFIG_SPIRAM_RODATA) && CONFIG_SPIRAM_RODATA
+static constexpr int kSdkconfigXipRodata = 1;
+#else
+static constexpr int kSdkconfigXipRodata = 0;
+#endif
+#if defined(CONFIG_ESP32S3_DATA_CACHE_LINE_64B) && CONFIG_ESP32S3_DATA_CACHE_LINE_64B
+static constexpr int kSdkconfigDataCacheLine64B = 1;
+#else
+static constexpr int kSdkconfigDataCacheLine64B = 0;
+#endif
 static SemaphoreHandle_t lvgl_mux = nullptr; // LVGL mutex
 static TaskHandle_t lvgl_task_handle = nullptr;
 
@@ -838,6 +854,9 @@ bool lvgl_port_unlock(void)
 void lcd_init(void)
 {
     pinMode(GPIO_INPUT_IO_4, OUTPUT);
+    Serial.printf("[display] sdkconfig xip_fetch=%d xip_rodata=%d data_cache_line_64b=%d\n",
+                  kSdkconfigXipFetch, kSdkconfigXipRodata,
+                  kSdkconfigDataCacheLine64B);
 #ifdef ESP_PLANTS_WAVESHARE_7B
     Serial.println("Initialize 7B IO extension");
     seven_b_io_init();

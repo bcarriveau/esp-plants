@@ -216,6 +216,7 @@ static void simOpenUpdateEvent(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     simSetHidden(objects.release_notes_modal, true);
     simSetHidden(objects.wifi_forget_confirm, true);
+    simSetHidden(objects.wifi_forget_scrim, true);
     simOpenModal(objects.update_modal);
 }
 
@@ -223,6 +224,7 @@ static void simCloseUpdateEvent(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     simSetHidden(objects.release_notes_modal, true);
     simSetHidden(objects.wifi_forget_confirm, true);
+    simSetHidden(objects.wifi_forget_scrim, true);
     simSetHidden(objects.update_modal, true);
 }
 
@@ -239,7 +241,14 @@ static void simOpenReleaseNotesEvent(lv_event_t *event) {
 static void simOpenForgetConfirmEvent(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     simOpenModal(objects.update_modal);
+    simOpenModal(objects.wifi_forget_scrim);
     simOpenModal(objects.wifi_forget_confirm);
+}
+
+static void simCloseForgetConfirmEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    simSetHidden(objects.wifi_forget_confirm, true);
+    simSetHidden(objects.wifi_forget_scrim, true);
 }
 
 static void simOpenRenameEvent(lv_event_t *event) {
@@ -903,10 +912,10 @@ static void simInitNavigation(void) {
                         LV_EVENT_CLICKED, objects.release_notes_modal);
     lv_obj_add_event_cb(objects.update_forget_button, simOpenForgetConfirmEvent,
                         LV_EVENT_CLICKED, 0);
-    lv_obj_add_event_cb(objects.wifi_forget_cancel_button, simCloseModalEvent,
-                        LV_EVENT_CLICKED, objects.wifi_forget_confirm);
-    lv_obj_add_event_cb(objects.wifi_forget_confirm_button, simCloseModalEvent,
-                        LV_EVENT_CLICKED, objects.wifi_forget_confirm);
+    lv_obj_add_event_cb(objects.wifi_forget_cancel_button, simCloseForgetConfirmEvent,
+                        LV_EVENT_CLICKED, 0);
+    lv_obj_add_event_cb(objects.wifi_forget_confirm_button, simCloseForgetConfirmEvent,
+                        LV_EVENT_CLICKED, 0);
 
     lv_obj_add_event_cb(objects.settings_device_button, simOpenRenameEvent,
                         LV_EVENT_CLICKED, (void *)"RENAME ESP PLANTS");

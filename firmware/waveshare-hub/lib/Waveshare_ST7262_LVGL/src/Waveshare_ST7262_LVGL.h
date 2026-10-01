@@ -80,7 +80,11 @@
  *      - 3: LCD double-buffer & LVGL direct-mode (recommended)
  *
  */
+#ifdef ESP_PLANTS_WAVESHARE_7B
+#define LVGL_PORT_AVOID_TEARING_MODE (3)
+#else
 #define LVGL_PORT_AVOID_TEARING_MODE (2)
+#endif
 
 #if LVGL_PORT_AVOID_TEARING_MODE != 0
 /**

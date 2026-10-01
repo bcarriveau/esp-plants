@@ -13,6 +13,7 @@
 #include "moisture_policy.h"
 #include "phrase_engine.h"
 #include "update_service.h"
+#include "runtime_flash_guard.h"
 #include "sensor_route_view.h"
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #include "ui_7b/screens.h"
@@ -190,11 +191,62 @@ uint32_t lastH2Uptime = 0;
 bool networkReady = false;
 bool useFahrenheit = true;
 uint8_t brightnessLevel = 5;
-#ifdef ESP_PLANTS_WAVESHARE_7B
-constexpr uint32_t kBrightnessPersistDelayMs = 1500;
-bool brightnessSavePending = false;
-uint32_t brightnessSaveDueMs = 0;
-#endif
+
+constexpr uint32_t kUiPersistenceDelayMs = 1500;
+enum UiPersistenceBits : uint32_t {
+  kPersistBrightness = 1U << 0,
+  kPersistTemperatureUnit = 1U << 1,
+  kPersistPhraseTheme = 1U << 2,
+  kPersistDeviceName = 1U << 3,
+};
+portMUX_TYPE uiPersistenceMux = portMUX_INITIALIZER_UNLOCKED;
+uint32_t pendingUiPersistenceBits = 0;
+uint32_t pendingPlantPersistenceMask = 0;
+uint32_t pendingInfrastructurePersistenceMask = 0;
+uint32_t pendingMoisturePersistenceMask = 0;
+uint32_t uiPersistenceDueMs = 0;
+
+void queueUiPersistence(uint32_t bits) {
+  const uint32_t due = millis() + kUiPersistenceDelayMs;
+  portENTER_CRITICAL(&uiPersistenceMux);
+  pendingUiPersistenceBits |= bits;
+  uiPersistenceDueMs = due;
+  portEXIT_CRITICAL(&uiPersistenceMux);
+}
+
+void queuePlantPersistence(size_t slot) {
+  if (slot >= kMaxSensors) return;
+  const uint32_t due = millis() + kUiPersistenceDelayMs;
+  portENTER_CRITICAL(&uiPersistenceMux);
+  pendingPlantPersistenceMask |= (1UL << slot);
+  uiPersistenceDueMs = due;
+  portEXIT_CRITICAL(&uiPersistenceMux);
+}
+
+void queueInfrastructurePersistence(size_t slot) {
+  if (slot >= kMaxInfrastructure) return;
+  const uint32_t due = millis() + kUiPersistenceDelayMs;
+  portENTER_CRITICAL(&uiPersistenceMux);
+  pendingInfrastructurePersistenceMask |= (1UL << slot);
+  uiPersistenceDueMs = due;
+  portEXIT_CRITICAL(&uiPersistenceMux);
+}
+
+void queueMoisturePersistence(size_t slot) {
+  if (slot >= kMaxSensors) return;
+  const uint32_t due = millis() + kUiPersistenceDelayMs;
+  portENTER_CRITICAL(&uiPersistenceMux);
+  pendingMoisturePersistenceMask |= (1UL << slot);
+  uiPersistenceDueMs = due;
+  portEXIT_CRITICAL(&uiPersistenceMux);
+}
+
+void logRuntimePreferenceWrite(const char *reason, bool success) {
+  Serial.printf("[flash] runtime write %s: %s\n",
+                success ? "complete" : "FAILED",
+                reason ? reason : "preferences");
+}
+
 // Alpha.23 persistent phrase theme selector
 espplants_phrases::Theme phraseTheme = espplants_phrases::Theme::MIXED;
 struct UiDirtyState {
@@ -357,6 +409,7 @@ lv_obj_t *updateCheckLabel = nullptr;
 lv_obj_t *updateDisconnectButton = nullptr;
 lv_obj_t *updateDisconnectLabel = nullptr;
 lv_obj_t *updateForgetButton = nullptr;
+lv_obj_t *wifiForgetScrim = nullptr;
 lv_obj_t *wifiForgetConfirm = nullptr;
 lv_obj_t *updateInstallButton = nullptr;
 lv_obj_t *updateInstallLabel = nullptr;
@@ -625,7 +678,8 @@ void saveMoisturePreference(size_t slot) {
   if (slot >= kMaxSensors || !sensors[slot].used) return;
   char key[12]{};
   moisturePreferenceKey(slot, key);
-  preferences.putChar(key, sensors[slot].moisturePreference);
+  const size_t written = preferences.putChar(key, sensors[slot].moisturePreference);
+  logRuntimePreferenceWrite("moisture preference", written == sizeof(int8_t));
 }
 
 void defaultName(size_t slot, char *out, size_t size) {
@@ -664,6 +718,9 @@ void copyLegacyPreference(Preferences &legacy, Preferences &target, const char *
 }
 
 void migrateUserPreferences() {
+  // Boot-only migration: this runs before lcd_init(), so these raw Preferences
+  // writes cannot disturb a live RGB scan and intentionally bypass the runtime
+  // coalescing path. Existing keys/schema remain unchanged.
   Preferences target;
   if (!target.begin("espplants", false, "plantdata")) {
     Serial.println("[storage] ERROR: could not open dedicated plantdata partition");
@@ -737,7 +794,8 @@ void saveInfrastructureSlot(size_t slot) {
   strncpy(p.name, infrastructure[slot].name, sizeof(p.name) - 1);
   char key[12]{};
   infrastructureKey(slot, key);
-  preferences.putBytes(key, &p, sizeof(p));
+  const size_t written = preferences.putBytes(key, &p, sizeof(p));
+  logRuntimePreferenceWrite("repeater registry", written == sizeof(p));
 }
 
 void loadInfrastructureRegistry() {
@@ -822,7 +880,8 @@ void clearInfrastructureSlot(size_t slot) {
   if (slot >= kMaxInfrastructure || !infrastructure[slot].used) return;
   char key[12]{};
   infrastructureKey(slot, key);
-  preferences.remove(key);
+  const bool removed = preferences.remove(key);
+  logRuntimePreferenceWrite("repeater registry removal", removed);
   infrastructure[slot] = InfrastructureNode{};
 
   if (selectedInfrastructure == static_cast<int>(slot)) {
@@ -940,7 +999,62 @@ void saveSlot(size_t slot) {
   strncpy(p.name, sensors[slot].name, sizeof(p.name) - 1);
   char key[12]{};
   slotKey(slot, key);
-  preferences.putBytes(key, &p, sizeof(p));
+  const size_t written = preferences.putBytes(key, &p, sizeof(p));
+  logRuntimePreferenceWrite("plant registry", written == sizeof(p));
+}
+
+void serviceDeferredPersistence() {
+  const uint32_t now = millis();
+  uint32_t settings = 0;
+  uint32_t plants = 0;
+  uint32_t infrastructureSlots = 0;
+  uint32_t moisture = 0;
+
+  portENTER_CRITICAL(&uiPersistenceMux);
+  const bool pending = pendingUiPersistenceBits || pendingPlantPersistenceMask ||
+                       pendingInfrastructurePersistenceMask ||
+                       pendingMoisturePersistenceMask;
+  if (!pending || static_cast<int32_t>(now - uiPersistenceDueMs) < 0) {
+    portEXIT_CRITICAL(&uiPersistenceMux);
+    return;
+  }
+  settings = pendingUiPersistenceBits;
+  plants = pendingPlantPersistenceMask;
+  infrastructureSlots = pendingInfrastructurePersistenceMask;
+  moisture = pendingMoisturePersistenceMask;
+  pendingUiPersistenceBits = 0;
+  pendingPlantPersistenceMask = 0;
+  pendingInfrastructurePersistenceMask = 0;
+  pendingMoisturePersistenceMask = 0;
+  portEXIT_CRITICAL(&uiPersistenceMux);
+
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  if (settings & kPersistBrightness) {
+    const size_t written = preferences.putUChar("bright_lvl", brightnessLevel);
+    logRuntimePreferenceWrite("brightness", written == sizeof(uint8_t));
+  }
+#endif
+  if (settings & kPersistTemperatureUnit) {
+    const size_t written = preferences.putBool("fahrenheit", useFahrenheit);
+    logRuntimePreferenceWrite("temperature unit", written == sizeof(uint8_t));
+  }
+  if (settings & kPersistPhraseTheme) {
+    const size_t written = preferences.putUChar(
+        "phrase_theme", static_cast<uint8_t>(phraseTheme));
+    logRuntimePreferenceWrite("phrase theme", written == sizeof(uint8_t));
+  }
+  if (settings & kPersistDeviceName) {
+    const size_t written = preferences.putString("device_name", deviceName);
+    logRuntimePreferenceWrite("device name", written == strlen(deviceName));
+  }
+
+  for (size_t slot = 0; slot < kMaxSensors; ++slot) {
+    if (plants & (1UL << slot)) saveSlot(slot);
+    if (moisture & (1UL << slot)) saveMoisturePreference(slot);
+  }
+  for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
+    if (infrastructureSlots & (1UL << slot)) saveInfrastructureSlot(slot);
+  }
 }
 
 void loadRegistry() {
@@ -1110,9 +1224,10 @@ void clearPlantSlot(size_t slot) {
 
   char key[12]{};
   slotKey(slot, key);
-  preferences.remove(key);
+  const bool plantRemoved = preferences.remove(key);
   moisturePreferenceKey(slot, key);
-  preferences.remove(key);
+  const bool moistureRemoved = !preferences.isKey(key) || preferences.remove(key);
+  logRuntimePreferenceWrite("plant registry removal", plantRemoved && moistureRemoved);
   sensors[slot] = PlantSensor{};
 
   if (manualHomeSensor == static_cast<int>(slot)) {
@@ -1447,8 +1562,7 @@ void brightnessEvent(lv_event_t *event) {
 #ifdef ESP_PLANTS_WAVESHARE_7B
   brightnessLevel = static_cast<uint8_t>((brightnessLevel % 5U) + 1U);
   if (set_backlight_brightness_level(brightnessLevel)) {
-    brightnessSavePending = true;
-    brightnessSaveDueMs = millis() + kBrightnessPersistDelayMs;
+    queueUiPersistence(kPersistBrightness);
     Serial.printf("[display] brightness level=%u/5; save deferred\n",
                   static_cast<unsigned>(brightnessLevel));
   }
@@ -1456,35 +1570,10 @@ void brightnessEvent(lv_event_t *event) {
 #endif
 }
 
-#ifdef ESP_PLANTS_WAVESHARE_7B
-void serviceBrightnessPersistence() {
-  if (!brightnessSavePending) return;
-  const uint32_t now = millis();
-  if (static_cast<int32_t>(now - brightnessSaveDueMs) < 0) return;
-
-  brightnessSavePending = false;
-  const size_t written = preferences.putUChar("bright_lvl", brightnessLevel);
-  if (written == 0) {
-    Serial.println("[display] brightness preference save failed");
-    return;
-  }
-
-  // NVS writes can pause flash/cache long enough to desynchronize an ESP32-S3
-  // RGB bounce-buffer stream. Espressif's supported recovery schedules the DMA
-  // restart on the next VSYNC, avoiding LCD reset/backlight blanking.
-  if (!restart_rgb_panel_scan()) {
-    Serial.println("[display] brightness saved; RGB resync request failed");
-  } else {
-    Serial.printf("[display] brightness saved level=%u/5; RGB resync queued\n",
-                  static_cast<unsigned>(brightnessLevel));
-  }
-}
-#endif
-
 void unitEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   useFahrenheit = !useFahrenheit;
-  preferences.putBool("fahrenheit", useFahrenheit);
+  queueUiPersistence(kPersistTemperatureUnit);
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
   dirty.home = true;
   dirty.plant = true;
@@ -1574,6 +1663,8 @@ void closeReleaseNotes();
 
 void openUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
+  if (wifiForgetScrim) lv_obj_add_flag(wifiForgetScrim, LV_OBJ_FLAG_HIDDEN);
+  if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(updateModal);
   updateModalOpen = true;
@@ -1585,6 +1676,7 @@ void openUpdateEvent(lv_event_t *event) {
 void closeUpdateEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !updateModal) return;
   if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
+  if (wifiForgetScrim) lv_obj_add_flag(wifiForgetScrim, LV_OBJ_FLAG_HIDDEN);
   closeReleaseNotes();
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
   updateModalOpen = false;
@@ -1609,7 +1701,10 @@ void wifiDisconnectEvent(lv_event_t *event) {
 }
 
 void wifiForgetAskEvent(lv_event_t *event) {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !wifiForgetConfirm) return;
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !wifiForgetConfirm ||
+      !wifiForgetScrim) return;
+  lv_obj_clear_flag(wifiForgetScrim, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(wifiForgetScrim);
   lv_obj_clear_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(wifiForgetConfirm);
 }
@@ -1617,12 +1712,14 @@ void wifiForgetAskEvent(lv_event_t *event) {
 void wifiForgetCancelEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED || !wifiForgetConfirm) return;
   lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
+  if (wifiForgetScrim) lv_obj_add_flag(wifiForgetScrim, LV_OBJ_FLAG_HIDDEN);
 }
 
 void wifiForgetConfirmEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   espplants_update::forgetWifi();
   if (wifiForgetConfirm) lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
+  if (wifiForgetScrim) lv_obj_add_flag(wifiForgetScrim, LV_OBJ_FLAG_HIDDEN);
   dirty.update = true;
 }
 
@@ -1815,7 +1912,7 @@ void saveRename() {
   if (renameTarget == RenameTarget::Device) {
     strncpy(deviceName, text, sizeof(deviceName) - 1);
     deviceName[sizeof(deviceName) - 1] = '\0';
-    preferences.putString("device_name", deviceName);
+    queueUiPersistence(kPersistDeviceName);
     label(headerTitle, deviceName);
     label(settingsDeviceName, deviceName);
     Serial.printf("[settings] device name=\"%s\"\n", deviceName);
@@ -1838,8 +1935,8 @@ void saveRename() {
     InfrastructureNode &node = infrastructure[selectedInfrastructure];
     strncpy(node.name, text, sizeof(node.name) - 1);
     node.name[sizeof(node.name) - 1] = '\0';
-    saveInfrastructureSlot(static_cast<size_t>(selectedInfrastructure));
-    Serial.printf("[registry] renamed repeater slot=%u name=\"%s\"\n",
+    queueInfrastructurePersistence(static_cast<size_t>(selectedInfrastructure));
+    Serial.printf("[registry] renamed repeater slot=%u name=\"%s\"; save deferred\n",
                   static_cast<unsigned>(selectedInfrastructure + 1), node.name);
     markInfrastructureDirty();
     closeRename();
@@ -1855,8 +1952,8 @@ void saveRename() {
   PlantSensor &s = sensors[selectedSensor];
   strncpy(s.name, text, sizeof(s.name) - 1);
   s.name[sizeof(s.name) - 1] = '\0';
-  saveSlot(static_cast<size_t>(selectedSensor));
-  Serial.printf("[registry] renamed slot=%u name=\"%s\"\n",
+  queuePlantPersistence(static_cast<size_t>(selectedSensor));
+  Serial.printf("[registry] renamed slot=%u name=\"%s\"; save deferred\n",
                 static_cast<unsigned>(selectedSensor + 1), s.name);
   dirty.home = true;
   dirty.all = true;
@@ -1889,7 +1986,7 @@ void renameKeyboardEvent(lv_event_t *event) {
     if (strcmp(key,"SAVE")==0) {
       if (pendingTheme!=phraseTheme) {
         phraseTheme=pendingTheme;
-        preferences.putUChar("phrase_theme",static_cast<uint8_t>(phraseTheme));
+        queueUiPersistence(kPersistPhraseTheme);
         for (auto &sensor : sensors) {
           sensor.phraseRotation = espplants_phrases::Rotation{};
           sensor.displayedPhrase = nullptr;
@@ -2478,7 +2575,7 @@ void saveMoisturePreferenceEvent(lv_event_t *event) {
   }
 
   sensor.moisturePreference = next;
-  saveMoisturePreference(static_cast<size_t>(selectedSensor));
+  queueMoisturePersistence(static_cast<size_t>(selectedSensor));
 
   if (hasFreshMoisture(sensor)) {
     const auto state = espplants_moisture::careState(
@@ -2495,7 +2592,7 @@ void saveMoisturePreferenceEvent(lv_event_t *event) {
     sensor.phraseDisplayDueMs = 0;
   }
 
-  Serial.printf("[settings] plant slot=%u moisture preference=%d (%s) saved\n",
+  Serial.printf("[settings] plant slot=%u moisture preference=%d (%s); save deferred\n",
                 static_cast<unsigned>(selectedSensor + 1),
                 static_cast<int>(sensor.moisturePreference),
                 espplants_moisture::preferenceLabel(sensor.moisturePreference));
@@ -2701,6 +2798,7 @@ void buildUpdateDialog(lv_obj_t *screen) {
   updateInstallLabel = objects.update_install_label;
   releaseNotesModal = objects.release_notes_modal;
   releaseNotesLabel = objects.release_notes_label;
+  wifiForgetScrim = objects.wifi_forget_scrim;
   wifiForgetConfirm = objects.wifi_forget_confirm;
 
   lv_obj_add_event_cb(objects.update_close_button, closeUpdateEvent,
@@ -2739,6 +2837,7 @@ void buildUpdateDialog(lv_obj_t *screen) {
   lv_obj_add_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateQrCard, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(releaseNotesModal, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(wifiForgetScrim, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(wifiForgetConfirm, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(updateModal, LV_OBJ_FLAG_HIDDEN);
 }
@@ -3630,6 +3729,7 @@ void setup() {
   set_backlight_brightness_level(brightnessLevel);
 #endif
   lcd_init();
+  espplants_runtime_flash::markDisplayReady();
   logEspMemory("display-post-init");
   if (lvgl_port_lock(-1)) {
     logDisplayRuntimeConfig();
@@ -3646,11 +3746,22 @@ void setup() {
 void loop() {
   servicePlantLink();
   servicePhraseDisplaySettle();
-#ifdef ESP_PLANTS_WAVESHARE_7B
-  serviceBrightnessPersistence();
-#endif
+  serviceDeferredPersistence();
+  espplants_runtime_flash::serviceDisplayRecovery();
+
   static bool lastActionableUpdate = false;
+  static bool updateWorkerWasBusy = false;
   espplants_update::service();
+  const bool updateWorkerBusy =
+      espplants_update::checking() || espplants_update::installing();
+  if (updateWorkerWasBusy && !updateWorkerBusy) {
+    // TLS/OTA is the heaviest PSRAM/cache workload. Even if no NVS write
+    // occurred, ask the 7B to re-align RGB DMA once when the worker goes idle.
+    espplants_runtime_flash::requestDisplayRecovery("OTA worker idle");
+  }
+  updateWorkerWasBusy = updateWorkerBusy;
+  espplants_runtime_flash::serviceDisplayRecovery();
+
   const bool actionableUpdate = espplants_update::updateAvailable();
   if (actionableUpdate != lastActionableUpdate) {
     lastActionableUpdate = actionableUpdate;
