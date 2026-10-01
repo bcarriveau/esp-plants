@@ -189,6 +189,7 @@ bool haveH2Uptime = false;
 uint32_t lastH2Uptime = 0;
 bool networkReady = false;
 bool useFahrenheit = true;
+uint8_t brightnessLevel = 5;
 // Alpha.23 persistent phrase theme selector
 espplants_phrases::Theme phraseTheme = espplants_phrases::Theme::MIXED;
 struct UiDirtyState {
@@ -1429,6 +1430,25 @@ void featuredEvent(lv_event_t *event) {
   }
 }
 
+void updateBrightnessButtonLabel() {
+  if (!objects.settings_brightness_label) return;
+  char text[4];
+  snprintf(text, sizeof(text), "B%u", static_cast<unsigned>(brightnessLevel));
+  lv_label_set_text(objects.settings_brightness_label, text);
+}
+
+void brightnessEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  brightnessLevel = static_cast<uint8_t>((brightnessLevel % 5U) + 1U);
+  if (set_backlight_brightness_level(brightnessLevel)) {
+    preferences.putUChar("bright_lvl", brightnessLevel);
+    Serial.printf("[display] brightness level=%u/5\n", static_cast<unsigned>(brightnessLevel));
+  }
+  updateBrightnessButtonLabel();
+#endif
+}
+
 void unitEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   useFahrenheit = !useFahrenheit;
@@ -1767,6 +1787,9 @@ void saveRename() {
     label(headerTitle, deviceName);
     label(settingsDeviceName, deviceName);
     Serial.printf("[settings] device name=\"%s\"\n", deviceName);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  Serial.printf("[settings] brightness=%u/5\n", static_cast<unsigned>(brightnessLevel));
+#endif
     dirty.header = true;
     dirty.settings = true;
     closeRename();
@@ -2508,6 +2531,13 @@ void buildSettings(lv_obj_t *screen) {
                       LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(objects.settings_network_button, openUpdateEvent,
                       LV_EVENT_CLICKED, nullptr);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  updateBrightnessButtonLabel();
+  lv_obj_add_event_cb(objects.settings_brightness_button, brightnessEvent,
+                      LV_EVENT_CLICKED, nullptr);
+#else
+  lv_obj_add_flag(objects.settings_brightness_button, LV_OBJ_FLAG_HIDDEN);
+#endif
   lv_obj_add_event_cb(objects.settings_unit_button, unitEvent,
                       LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(objects.settings_theme_button, themeEvent,
@@ -3540,6 +3570,8 @@ void setup() {
     preferences.begin("espplants", false);
   }
   useFahrenheit = preferences.getBool("fahrenheit", true);
+  brightnessLevel = preferences.getUChar("bright_lvl", 5);
+  if (brightnessLevel < 1 || brightnessLevel > 5) brightnessLevel = 5;
   {
     const uint8_t savedTheme=preferences.getUChar(
         "phrase_theme", static_cast<uint8_t>(espplants_phrases::Theme::MIXED));
@@ -3561,6 +3593,9 @@ void setup() {
   Serial.printf("[display] initializing Waveshare %dx%d...\n", ESP_PANEL_LCD_WIDTH, ESP_PANEL_LCD_HEIGHT);
   logEspMemory("display-pre-init");
   lcd_init();
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  set_backlight_brightness_level(brightnessLevel);
+#endif
   logEspMemory("display-post-init");
   if (lvgl_port_lock(-1)) {
     logDisplayRuntimeConfig();

@@ -203,6 +203,15 @@ static void simCloseModalEvent(lv_event_t *event) {
     simSetHidden(modal, true);
 }
 
+static void simBrightnessEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    static uint8_t level = 5;
+    level = (uint8_t)((level % 5) + 1);
+    if (objects.settings_brightness_label) {
+        lv_label_set_text_fmt(objects.settings_brightness_label, "B%u", (unsigned)level);
+    }
+}
+
 static void simOpenUpdateEvent(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     simSetHidden(objects.release_notes_modal, true);
@@ -881,6 +890,8 @@ static void simInitNavigation(void) {
                         LV_EVENT_CLICKED, (void *)(uintptr_t)SIM_PAGE_SETTINGS);
 
     lv_obj_add_event_cb(objects.settings_network_button, simOpenUpdateEvent,
+                        LV_EVENT_CLICKED, 0);
+    lv_obj_add_event_cb(objects.settings_brightness_button, simBrightnessEvent,
                         LV_EVENT_CLICKED, 0);
     lv_obj_add_event_cb(objects.header_update_button, simOpenUpdateEvent,
                         LV_EVENT_CLICKED, 0);

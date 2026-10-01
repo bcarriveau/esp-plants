@@ -102,7 +102,7 @@
 #define ESP_PLANTS_7B_TOUCH_RESET_IO (1)
 #define ESP_PLANTS_7B_BACKLIGHT_IO (2)
 #define ESP_PLANTS_7B_LCD_RESET_IO (3)
-#define ESP_PLANTS_7B_BACKLIGHT_PERCENT (97)
+#define ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL (5)
 
 // Backlight/reset are handled explicitly in Waveshare_ST7262_LVGL.cpp.
 #define ESP_PANEL_USE_BACKLIGHT (0)

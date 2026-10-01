@@ -43,13 +43,26 @@ static bool seven_b_set_output(uint8_t pin, bool high)
     return seven_b_write_register(ESP_PLANTS_7B_IO_OUTPUT_REG, seven_b_io_state);
 }
 
-static bool seven_b_set_backlight_percent(uint8_t percent)
+static uint8_t seven_b_brightness_level = ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL;
+
+static bool seven_b_set_backlight_duty(uint8_t duty_percent)
 {
-    if (percent > ESP_PLANTS_7B_BACKLIGHT_PERCENT) {
-        percent = ESP_PLANTS_7B_BACKLIGHT_PERCENT;
-    }
-    const uint8_t pwm = static_cast<uint8_t>((static_cast<uint16_t>(percent) * 255U) / 100U);
+    // Waveshare 7B brightness is controlled by the IO-extension MCU's
+    // EXIO_PWM output (register 0x05). 0 = full brightness; larger duty
+    // values dim the backlight. GPIO6 is unrelated to the LCD backlight.
+    if (duty_percent > 97) duty_percent = 97;
+    const uint8_t pwm = static_cast<uint8_t>((static_cast<uint16_t>(duty_percent) * 255U) / 100U);
     return seven_b_write_register(ESP_PLANTS_7B_IO_PWM_REG, pwm);
+}
+
+static bool seven_b_apply_brightness_level(uint8_t level)
+{
+    if (level < 1) level = 1;
+    if (level > 5) level = 5;
+    seven_b_brightness_level = level;
+    const uint8_t brightness_percent = static_cast<uint8_t>(level * 20U);
+    const uint8_t duty_percent = static_cast<uint8_t>(100U - brightness_percent);
+    return seven_b_set_backlight_duty(duty_percent);
 }
 
 static bool seven_b_io_init()
@@ -58,8 +71,7 @@ static bool seven_b_io_init()
     seven_b_io_state = 0xFF;
     const bool mode_ok = seven_b_write_register(ESP_PLANTS_7B_IO_MODE_REG, 0xFF);
     const bool output_ok = seven_b_write_register(ESP_PLANTS_7B_IO_OUTPUT_REG, seven_b_io_state);
-    const bool pwm_ok = seven_b_set_backlight_percent(ESP_PLANTS_7B_BACKLIGHT_PERCENT);
-    if (!mode_ok || !output_ok || !pwm_ok) {
+    if (!mode_ok || !output_ok) {
         Serial.println("[display] 7B IO-extension init failed");
         return false;
     }
@@ -857,13 +869,24 @@ void lcd_init(void)
     panel->begin();
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
-    // IO2 is the 7B backlight enable and register 0x05 controls brightness.
+    // Match Waveshare's 7B brightness path: IO2 enables the backlight while
+    // GPIO6 PWM and IO-extension register 0x05 control the active-low duty.
     seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
-    seven_b_set_backlight_percent(ESP_PLANTS_7B_BACKLIGHT_PERCENT);
+    seven_b_apply_brightness_level(seven_b_brightness_level);
 #endif
 
     Serial.println("Initialize LVGL");
     lvgl_port_init(panel->getLcd(), panel->getTouch());
+}
+
+bool set_backlight_brightness_level(uint8_t level)
+{
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    return seven_b_apply_brightness_level(level);
+#else
+    (void)level;
+    return false;
+#endif
 }
 
 void toggle_backlight(int &isOn)
@@ -876,7 +899,7 @@ void toggle_backlight(int &isOn)
     }
     else
     {
-        seven_b_set_backlight_percent(ESP_PLANTS_7B_BACKLIGHT_PERCENT);
+        seven_b_apply_brightness_level(seven_b_brightness_level);
         seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
         isOn = 1;
     }

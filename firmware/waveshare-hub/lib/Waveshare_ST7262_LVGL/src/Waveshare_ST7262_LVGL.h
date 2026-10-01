@@ -177,6 +177,8 @@ extern "C"
 
     void lcd_init(void);
 
+    bool set_backlight_brightness_level(uint8_t level);
+
     void toggle_backlight(int &isOn);
 
 #ifdef __cplusplus

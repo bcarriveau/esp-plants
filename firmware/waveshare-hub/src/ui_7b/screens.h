@@ -88,6 +88,8 @@ typedef struct _objects_t {
     lv_obj_t *settings_legend;
     lv_obj_t *settings_network_button;
     lv_obj_t *settings_network_button_label;
+    lv_obj_t *settings_brightness_button;
+    lv_obj_t *settings_brightness_label;
     lv_obj_t *settings_setup_card;
     lv_obj_t *settings_setup_title;
     lv_obj_t *settings_personality_caption;

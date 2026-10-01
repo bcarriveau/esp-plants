@@ -873,7 +873,7 @@ void create_screen_home() {
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.settings_network_button = obj;
                             lv_obj_set_pos(obj, 243, 18);
-                            lv_obj_set_size(obj, 207, 45);
+                            lv_obj_set_size(obj, 150, 45);
                             lv_obj_set_style_bg_color(obj, lv_color_hex(0x244f39), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_radius(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -889,9 +889,34 @@ void create_screen_home() {
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_color(obj, lv_color_hex(0xe5ece7), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text_static(obj, "NETWORK & UPDATES  >");
+                                    lv_label_set_text_static(obj, "NETWORK >");
                                 }
                             }
+                        }
+                    }
+                }
+                {
+                    // settings_brightness_button
+                    lv_obj_t *obj = lv_btn_create(objects.settings_system_card);
+                    objects.settings_brightness_button = obj;
+                    lv_obj_set_pos(obj, 405, 18);
+                    lv_obj_set_size(obj, 45, 45);
+                    lv_obj_set_style_bg_color(obj, lv_color_hex(0x244f39), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_radius(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    {
+                        lv_obj_t *parent_obj = obj;
+                        {
+                            // settings_brightness_label
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            objects.settings_brightness_label = obj;
+                            lv_obj_set_pos(obj, 0, 0);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_text_color(obj, lv_color_hex(0xe5ece7), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text_static(obj, "B5");
                         }
                     }
                 }
