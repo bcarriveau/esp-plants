@@ -208,7 +208,7 @@ static void simBrightnessEvent(lv_event_t *event) {
     static uint8_t level = 5;
     level = (uint8_t)((level % 5) + 1);
     if (objects.settings_brightness_label) {
-        lv_label_set_text_fmt(objects.settings_brightness_label, "B%u", (unsigned)level);
+        lv_label_set_text_fmt(objects.settings_brightness_label, "%u", (unsigned)level);
     }
 }
 

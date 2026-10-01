@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #include <Wire.h>
+#include <esp_lcd_panel_rgb.h>
 #endif
 #include <ESP_Panel_Library.h>
 #include <ESP_IOExpander_Library.h>
@@ -45,6 +46,7 @@ static bool seven_b_set_output(uint8_t pin, bool high)
 
 static uint8_t seven_b_brightness_level = ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL;
 static bool seven_b_display_ready = false;
+static esp_lcd_panel_handle_t seven_b_rgb_panel_handle = nullptr;
 
 static bool seven_b_set_backlight_duty(uint8_t duty_percent)
 {
@@ -73,19 +75,10 @@ static bool seven_b_apply_brightness_level(uint8_t level)
     // the PWM value before RGB streaming begins, so boot cannot disturb sync.
     if (!seven_b_display_ready) return true;
 
-    // On this 7B hardware, changing EXIO_PWM while the RGB panel is actively
-    // scanning can make the image lose vertical lock. Blank/reset the LCD,
-    // update PWM while reset is asserted, then release reset into the already
-    // running RGB stream. This converts the roll into one controlled blink.
-    const bool backlight_off_ok = seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, false);
-    const bool reset_low_ok = seven_b_set_output(ESP_PLANTS_7B_LCD_RESET_IO, false);
-    delay(100);
-    const bool pwm_ok = seven_b_write_brightness_level(level);
-    delay(20);
-    const bool reset_high_ok = seven_b_set_output(ESP_PLANTS_7B_LCD_RESET_IO, true);
-    delay(200);
-    const bool backlight_on_ok = seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
-    return backlight_off_ok && reset_low_ok && pwm_ok && reset_high_ok && backlight_on_ok;
+    // Live brightness is a two-byte IO-extension PWM write only. Do not touch
+    // LCD reset, backlight enable, or GPIO6 here; Waveshare's own slider changes
+    // EXIO_PWM live while the RGB panel continues scanning.
+    return seven_b_write_brightness_level(level);
 }
 
 static bool seven_b_io_init()
@@ -899,6 +892,7 @@ void lcd_init(void)
     panel->begin();
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
+    seven_b_rgb_panel_handle = panel->getLcd()->getHandle();
     seven_b_set_output(ESP_PLANTS_7B_BACKLIGHT_IO, true);
     seven_b_display_ready = true;
 #endif
@@ -913,6 +907,21 @@ bool set_backlight_brightness_level(uint8_t level)
     return seven_b_apply_brightness_level(level);
 #else
     (void)level;
+    return false;
+#endif
+}
+
+bool restart_rgb_panel_scan(void)
+{
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    if (seven_b_rgb_panel_handle == nullptr) return false;
+    const esp_err_t err = esp_lcd_rgb_panel_restart(seven_b_rgb_panel_handle);
+    if (err != ESP_OK) {
+        Serial.printf("[display] RGB panel restart request failed: %d\n", static_cast<int>(err));
+        return false;
+    }
+    return true;
+#else
     return false;
 #endif
 }

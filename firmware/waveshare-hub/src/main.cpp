@@ -190,6 +190,11 @@ uint32_t lastH2Uptime = 0;
 bool networkReady = false;
 bool useFahrenheit = true;
 uint8_t brightnessLevel = 5;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+constexpr uint32_t kBrightnessPersistDelayMs = 1500;
+bool brightnessSavePending = false;
+uint32_t brightnessSaveDueMs = 0;
+#endif
 // Alpha.23 persistent phrase theme selector
 espplants_phrases::Theme phraseTheme = espplants_phrases::Theme::MIXED;
 struct UiDirtyState {
@@ -1433,7 +1438,7 @@ void featuredEvent(lv_event_t *event) {
 void updateBrightnessButtonLabel() {
   if (!objects.settings_brightness_label) return;
   char text[4];
-  snprintf(text, sizeof(text), "B%u", static_cast<unsigned>(brightnessLevel));
+  snprintf(text, sizeof(text), "%u", static_cast<unsigned>(brightnessLevel));
   lv_label_set_text(objects.settings_brightness_label, text);
 }
 
@@ -1442,11 +1447,39 @@ void brightnessEvent(lv_event_t *event) {
 #ifdef ESP_PLANTS_WAVESHARE_7B
   brightnessLevel = static_cast<uint8_t>((brightnessLevel % 5U) + 1U);
   if (set_backlight_brightness_level(brightnessLevel)) {
-    Serial.printf("[display] brightness level=%u/5\n", static_cast<unsigned>(brightnessLevel));
+    brightnessSavePending = true;
+    brightnessSaveDueMs = millis() + kBrightnessPersistDelayMs;
+    Serial.printf("[display] brightness level=%u/5; save deferred\n",
+                  static_cast<unsigned>(brightnessLevel));
   }
   updateBrightnessButtonLabel();
 #endif
 }
+
+#ifdef ESP_PLANTS_WAVESHARE_7B
+void serviceBrightnessPersistence() {
+  if (!brightnessSavePending) return;
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - brightnessSaveDueMs) < 0) return;
+
+  brightnessSavePending = false;
+  const size_t written = preferences.putUChar("bright_lvl", brightnessLevel);
+  if (written == 0) {
+    Serial.println("[display] brightness preference save failed");
+    return;
+  }
+
+  // NVS writes can pause flash/cache long enough to desynchronize an ESP32-S3
+  // RGB bounce-buffer stream. Espressif's supported recovery schedules the DMA
+  // restart on the next VSYNC, avoiding LCD reset/backlight blanking.
+  if (!restart_rgb_panel_scan()) {
+    Serial.println("[display] brightness saved; RGB resync request failed");
+  } else {
+    Serial.printf("[display] brightness saved level=%u/5; RGB resync queued\n",
+                  static_cast<unsigned>(brightnessLevel));
+  }
+}
+#endif
 
 void unitEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
@@ -3591,10 +3624,12 @@ void setup() {
 
   Serial.printf("[display] initializing Waveshare %dx%d...\n", ESP_PANEL_LCD_WIDTH, ESP_PANEL_LCD_HEIGHT);
   logEspMemory("display-pre-init");
-  lcd_init();
 #ifdef ESP_PLANTS_WAVESHARE_7B
+  // Queue the persisted level before lcd_init(); the driver writes it before
+  // RGB streaming begins so boot-time brightness cannot disturb panel sync.
   set_backlight_brightness_level(brightnessLevel);
 #endif
+  lcd_init();
   logEspMemory("display-post-init");
   if (lvgl_port_lock(-1)) {
     logDisplayRuntimeConfig();
@@ -3611,6 +3646,9 @@ void setup() {
 void loop() {
   servicePlantLink();
   servicePhraseDisplaySettle();
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  serviceBrightnessPersistence();
+#endif
   static bool lastActionableUpdate = false;
   espplants_update::service();
   const bool actionableUpdate = espplants_update::updateAvailable();

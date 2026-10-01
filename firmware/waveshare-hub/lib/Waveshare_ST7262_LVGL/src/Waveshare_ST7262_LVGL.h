@@ -179,6 +179,8 @@ extern "C"
 
     bool set_backlight_brightness_level(uint8_t level);
 
+    bool restart_rgb_panel_scan(void);
+
     void toggle_backlight(int &isOn);
 
 #ifdef __cplusplus
