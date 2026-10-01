@@ -211,11 +211,32 @@ def write_h2_asset(
 
     name = f"esp-plants-h2-{version}.bin"
     output = release_dir / name
-    output.write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()
-    (release_dir / f"{name}.sha256").write_text(
-        f"{digest}  {name}\n", encoding="ascii"
-    )
+
+    # The release script packages Waveshare 7 and 7B separately and then runs
+    # an explicit combined-manifest pass. Each pass references the same H2
+    # binary. Reuse an identical release asset instead of repeatedly opening
+    # and truncating it; on Windows a just-written file can transiently reject
+    # that redundant rewrite with OSError(EINVAL).
+    reuse_output = False
+    if output.is_file() and output.stat().st_size == len(data):
+        try:
+            reuse_output = output.read_bytes() == data
+        except OSError:
+            reuse_output = False
+    if not reuse_output:
+        output.write_bytes(data)
+
+    digest_path = release_dir / f"{name}.sha256"
+    digest_text = f"{digest}  {name}\n"
+    reuse_digest = False
+    if digest_path.is_file():
+        try:
+            reuse_digest = digest_path.read_text(encoding="ascii") == digest_text
+        except OSError:
+            reuse_digest = False
+    if not reuse_digest:
+        digest_path.write_text(digest_text, encoding="ascii")
     return {
         "product": product,
         "hardware": hardware,

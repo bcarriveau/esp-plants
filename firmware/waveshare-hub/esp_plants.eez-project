@@ -5139,10 +5139,10 @@
                 {
                   "objID": "c63e06ff-32e1-4bf1-b3a3-016245b76b15",
                   "type": "LVGLButtonWidget",
-                  "left": 548,
-                  "top": 16,
-                  "width": 104,
-                  "height": 34,
+                  "left": 649,
+                  "top": 7,
+                  "width": 27,
+                  "height": 30,
                   "customInputs": [],
                   "customOutputs": [],
                   "style": {
@@ -5192,15 +5192,15 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
-                              "text_color": "#FFF4E6",
+                              "text_font": "MONTSERRAT_16",
+                              "text_color": "#B4FFCD",
                               "align": "CENTER"
                             }
                           }
                         }
                       },
                       "groupIndex": 0,
-                      "text": "UPDATE",
+                      "text": "",
                       "textType": "literal",
                       "longMode": "WRAP",
                       "recolor": false,
@@ -5220,10 +5220,15 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#B86E2F",
-                          "radius": 10,
-                          "border_width": 0,
-                          "shadow_width": 0
+                          "bg_color": "#12583A",
+                          "radius": 6,
+                          "border_width": 1,
+                          "shadow_width": 0,
+                          "border_color": "#3FFF9B",
+                          "pad_left": 0,
+                          "pad_right": 0,
+                          "pad_top": 0,
+                          "pad_bottom": 0
                         }
                       }
                     }
