@@ -872,8 +872,8 @@ void create_screen_home() {
                             // settings_network_button
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.settings_network_button = obj;
-                            lv_obj_set_pos(obj, 190, 14);
-                            lv_obj_set_size(obj, 116, 36);
+                            lv_obj_set_pos(obj, 144, 14);
+                            lv_obj_set_size(obj, 162, 36);
                             lv_obj_set_style_bg_color(obj, lv_color_hex(0x244f39), LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_radius(obj, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -889,7 +889,7 @@ void create_screen_home() {
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_color(obj, lv_color_hex(0xe5ece7), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text_static(obj, "NETWORK >");
+                                    lv_label_set_text_static(obj, "NETWORK & UPDATES >");
                                 }
                             }
                         }

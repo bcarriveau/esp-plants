@@ -3339,9 +3339,9 @@
                     {
                       "objID": "1c5df224-4556-41d9-ad9a-779a2162a47d",
                       "type": "LVGLButtonWidget",
-                      "left": 243,
+                      "left": 186,
                       "top": 18,
-                      "width": 150,
+                      "width": 207,
                       "height": 45,
                       "customInputs": [],
                       "customOutputs": [],
@@ -3401,7 +3401,7 @@
                             }
                           },
                           "groupIndex": 0,
-                          "text": "NETWORK >",
+                          "text": "NETWORK & UPDATES >",
                           "textType": "literal",
                           "longMode": "WRAP",
                           "recolor": false,
