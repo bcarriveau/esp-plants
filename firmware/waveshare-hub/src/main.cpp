@@ -1962,6 +1962,7 @@ void saveRename() {
 }
 
 static const char *kRenameUpperMap[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
     "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
     "A", "S", "D", "F", "G", "H", "J", "K", "L", "\n",
     "abc", "Z", "X", "C", "V", "B", "N", "M", "DEL", "\n",
@@ -1969,6 +1970,7 @@ static const char *kRenameUpperMap[] = {
 };
 
 static const char *kRenameLowerMap[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
     "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
     "a", "s", "d", "f", "g", "h", "j", "k", "l", "\n",
     "ABC", "z", "x", "c", "v", "b", "n", "m", "DEL", "\n",
