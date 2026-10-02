@@ -45,7 +45,7 @@ def test_7b_only_uses_real_sdk_overlay_without_fake_config_define():
     seven_b = env_section("waveshare_s3_touch_lcd_7b")
     assert "upload_port = COM13" in seven_b
     assert "post:scripts/use_7b_vsync_sdk.py" in seven_b
-    assert "-include esp_plants_7b_vsync_guard.h" in seven_b
+    assert "-include esp_plants_7b_vsync_guard.h" not in seven_b
     assert "-Wl,--wrap=esp_mbedtls_mem_calloc" in seven_b
     assert "-DCONFIG_LCD_RGB_RESTART_IN_VSYNC" not in PIO
     assert "-DCONFIG_GDMA_CTRL_FUNC_IN_IRAM" not in PIO
@@ -162,16 +162,12 @@ def test_platformio_hook_verifies_hashes_config_and_actual_link_map_members():
     assert "AddPostAction" in HOOK
 
 
-def test_compile_guard_rejects_header_only_or_partial_sdk_builds():
-    for token in (
-        "CONFIG_LCD_RGB_RESTART_IN_VSYNC",
-        "CONFIG_GDMA_CTRL_FUNC_IN_IRAM",
-        "CONFIG_COMPILER_OPTIMIZATION_PERF",
-        "CONFIG_ESP32S3_DATA_CACHE_LINE_64B",
-        "CONFIG_SPIRAM_FETCH_INSTRUCTIONS",
-        "CONFIG_SPIRAM_RODATA",
-    ):
-        assert token in GUARD
+def test_overlay_validation_does_not_replace_application_sdkconfig():
+    assert "CPPPATH" not in HOOK
+    assert "CONFIG_DIR" in HOOK
+    assert "SDKCONFIG.read_text" in HOOK
+    assert "generated sdkconfig.h is missing" in HOOK
+    assert "-include esp_plants_7b_vsync_guard.h" not in PIO
 
 
 def test_windows_task_uses_supported_wsl_lib_builder_path():

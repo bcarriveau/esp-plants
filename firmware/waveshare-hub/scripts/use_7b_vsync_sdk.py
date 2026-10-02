@@ -78,11 +78,10 @@ for token in REQUIRED_CONFIGS:
     if token not in config_text:
         fail("generated sdkconfig.h is missing: %s" % token)
 
-# This is a POST extra script: pioarduino has already constructed its normal
-# framework search paths. Prepending here affects only the 7B environments and
-# leaves the original Waveshare 7 on the stock esp32-3.0.7-h package.
-env.Prepend(CPPPATH=[str(CONFIG_DIR)])
-projenv.Prepend(CPPPATH=[str(CONFIG_DIR)])
+# Keep application/framework compilation on the stock 3.0.7-h sdkconfig.
+# The generated sdkconfig above is validation input for the rebuilt archives,
+# not a global header override. The actual custom code path is proved again
+# after link by checking that members were extracted from both custom archives.
 env.Prepend(LIBPATH=[str(COMMON_DIR), str(MEM_DIR)])
 env.Prepend(LIBS=["esp_lcd_vsync", "esp_hw_support_vsync"])
 
