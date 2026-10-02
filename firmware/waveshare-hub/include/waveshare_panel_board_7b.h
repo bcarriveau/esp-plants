@@ -26,7 +26,7 @@
 #define ESP_PANEL_LCD_BUS_SKIP_INIT_HOST (1)
 #define ESP_PANEL_LCD_BUS_TYPE (ESP_PANEL_BUS_TYPE_RGB)
 
-#define ESP_PANEL_LCD_RGB_CLK_HZ (26 * 1000 * 1000)
+#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)
 #define ESP_PANEL_LCD_RGB_HPW (162)
 #define ESP_PANEL_LCD_RGB_HBP (152)
 #define ESP_PANEL_LCD_RGB_HFP (48)
@@ -40,10 +40,9 @@
 // Conservative first bring-up: one PSRAM framebuffer. Waveshare's demo uses
 // two; ESP PLANTS will only increase this after memory/TLS/OTA stress testing.
 #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM (1)
-// Diagnostic-only refill-margin test. The active LVGL RGB bus configuration
-// below uses the same 20-line 7B bounce size; production suitability depends
-// on internal-RAM headroom and is intentionally not assumed here.
-#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 20)
+// VSYNC-restart experiment baseline: retain the tested 24 MHz 7B pixel
+// clock and 15-line bounce buffer while changing only the linked IDF driver.
+#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)
 
 #define ESP_PANEL_LCD_RGB_IO_HSYNC (46)
 #define ESP_PANEL_LCD_RGB_IO_VSYNC (3)

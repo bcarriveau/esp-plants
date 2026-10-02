@@ -99,6 +99,19 @@
       "problemMatcher": []
     },
     {
+      "label": "ESP PLANTS: Build 7B VSYNC SDK",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\firmware\\waveshare-hub\\scripts\\build_7b_vsync_sdk.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "ESP PLANTS: Build Waveshare 7B",
       "type": "process",
       "command": "pio",

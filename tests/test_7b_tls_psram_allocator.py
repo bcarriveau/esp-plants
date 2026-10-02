@@ -37,10 +37,10 @@ def test_existing_ports_and_7b_display_tuning_stay_locked():
     assert "upload_port = COM11" in env_section("waveshare_s3_touch_lcd_7")
     assert "upload_port = COM13" in env_section("waveshare_s3_touch_lcd_7b")
 
-    assert "#define ESP_PANEL_LCD_RGB_CLK_HZ (26 * 1000 * 1000)" in BOARD_7B
+    assert "#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)" in BOARD_7B
     assert (
         "#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE "
-        "(ESP_PANEL_LCD_WIDTH * 20)"
+        "(ESP_PANEL_LCD_WIDTH * 15)"
     ) in BOARD_7B
 
 

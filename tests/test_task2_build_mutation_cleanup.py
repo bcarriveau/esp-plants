@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 ALLOWED_EXTRA_SCRIPT = "post:scripts/build_plants_ota.py"
+ALLOWED_7B_VSYNC_SCRIPT = "post:scripts/use_7b_vsync_sdk.py"
 DEAD_H2_INJECTORS = {
     "alpha18_zigbee_rejoin_inject.py",
     "alpha20_zigbee_rejoin_inject.py",
@@ -49,8 +50,15 @@ def test_no_prebuild_source_mutators_are_active():
 
     assert active == [
         ("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT),
+        ("firmware/waveshare-hub/platformio.ini", ALLOWED_7B_VSYNC_SCRIPT),
         ("firmware/waveshare-hub/platformio.ini", ALLOWED_EXTRA_SCRIPT),
     ]
+
+    vsync_hook = (
+        ROOT / "firmware/waveshare-hub/scripts/use_7b_vsync_sdk.py"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("write_text(", "write_bytes(", "shutil.copy", "os.replace", "unlink("):
+        assert forbidden not in vsync_hook
 
 
 def test_dead_injectors_are_gone():
