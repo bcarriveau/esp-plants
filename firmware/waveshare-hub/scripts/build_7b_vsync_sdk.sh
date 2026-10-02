@@ -12,7 +12,7 @@ BUILDER_COMMIT="9e2e6b17b99af5b677f7a09b7c208cfe9a4c6e1d"
 ARDUINO_CORE="3.0.7"
 ARDUINO_CORE_COMMIT="3bfa3e0a56c80305eec90f10e8318af8d8091bab"
 IDF_BRANCH="release/v5.1"
-IDF_COMMIT="632e0c2a9fc7c754db4135dabb67f7fc6aa9fb87"
+IDF_COMMIT_EXPECTED="632e0c2a9fc7c754db4135dabb67f7fc6aa9fb87"
 STOCK_SDK_SHA256="41f67e1c11f68b57d651955c93b63d6a8d35808ce6aff6ba3d1e1476178758f2"
 
 required_commands=(git python3 cmake ninja jq flex bison gperf)
@@ -43,7 +43,13 @@ fi
 
 git -C "$BUILDER_DIR" fetch --all --tags --prune
 git -C "$BUILDER_DIR" reset --hard
-git -C "$BUILDER_DIR" clean -xfd
+# Reset the builder itself without throwing away the large pinned source clones
+# from a previous attempt. Each preserved clone is independently reset/pinned
+# below before it is used.
+git -C "$BUILDER_DIR" clean -xfd \
+    -e components/arduino/ \
+    -e components/arduino_tinyusb/tinyusb/ \
+    -e esp-idf/
 git -C "$BUILDER_DIR" checkout --detach "$BUILDER_COMMIT"
 
 # Reproduce the documented esp32-3.0.7-h S3 settings, then add only the
@@ -82,11 +88,41 @@ PY
 
 pushd "$BUILDER_DIR" >/dev/null
 
+# The pinned builder's tools/install-arduino.sh performs a `git pull` after
+# checking out AR_BRANCH. When AR_BRANCH is the 3.0.7 tag, Git is detached and
+# that pull fails. Reproduce the builder setup explicitly so both Arduino and
+# IDF stay pinned to the exact commits, then use build.sh -s to skip its updater.
+./tools/update-components.sh
+
+ARDUINO_DIR="$BUILDER_DIR/components/arduino"
+if [[ ! -d "$ARDUINO_DIR/.git" ]]; then
+    git clone https://github.com/espressif/arduino-esp32.git "$ARDUINO_DIR"
+else
+    git -C "$ARDUINO_DIR" fetch --all --tags --prune
+fi
+git -C "$ARDUINO_DIR" reset --hard
+git -C "$ARDUINO_DIR" clean -xfd
+git -C "$ARDUINO_DIR" checkout --detach "$ARDUINO_CORE_COMMIT"
+if [[ "$(git -C "$ARDUINO_DIR" rev-parse HEAD)" != "$ARDUINO_CORE_COMMIT" ]]; then
+    echo "ERROR: Arduino core did not pin to $ARDUINO_CORE_COMMIT" >&2
+    exit 3
+fi
+
+export IDF_PATH="$BUILDER_DIR/esp-idf"
+export IDF_BRANCH
+export IDF_COMMIT="$IDF_COMMIT_EXPECTED"
+# shellcheck disable=SC1091
+source "$BUILDER_DIR/tools/install-esp-idf.sh"
+if [[ "$(git -C "$IDF_PATH" rev-parse HEAD)" != "$IDF_COMMIT_EXPECTED" ]]; then
+    echo "ERROR: ESP-IDF did not pin to $IDF_COMMIT_EXPECTED" >&2
+    exit 3
+fi
+
 # Build the common ESP32-S3 IDF libraries first. This produces libesp_lcd.a.
+# -s is intentional: the exact Arduino + IDF revisions were installed above,
+# and skipping the updater avoids the lib-builder's detached-tag git-pull bug.
 ./build.sh \
-    -A "$ARDUINO_CORE" \
-    -I "$IDF_BRANCH" \
-    -i "$IDF_COMMIT" \
+    -s \
     -t esp32s3 \
     -b idf-libs \
     qio 80m qio_ram
@@ -98,22 +134,11 @@ if [[ ! -f "$COMMON_LCD" ]]; then
     exit 3
 fi
 
-# The first build installed/exported IDF inside the builder checkout. Export it
-# again in this parent shell so the second, -s build can reuse the exact toolchain.
-if [[ ! -f "$BUILDER_DIR/esp-idf/export.sh" ]]; then
-    echo "ERROR: expected pinned ESP-IDF checkout is missing" >&2
-    exit 3
-fi
-# shellcheck disable=SC1091
-source "$BUILDER_DIR/esp-idf/export.sh" >/dev/null
-
 # Build only the qio + 80 MHz flash + OPI-PSRAM memory variant. The selected
-# GDMA IRAM Kconfig changes libesp_hw_support.a in this variant.
+# GDMA IRAM Kconfig changes libesp_hw_support.a in this variant. The same pinned
+# environment remains exported in this shell from install-esp-idf.sh above.
 ./build.sh \
     -s \
-    -A "$ARDUINO_CORE" \
-    -I "$IDF_BRANCH" \
-    -i "$IDF_COMMIT" \
     -t esp32s3 \
     -b mem-variant \
     qio 80m opi_ram
@@ -163,7 +188,7 @@ cp "$COMMON_LCD" "$OUTPUT_DIR/common/libesp_lcd_vsync.a"
 cp "$HW_LIB" "$OUTPUT_DIR/qio_opi/libesp_hw_support_vsync.a"
 cp "$SDKCONFIG" "$OUTPUT_DIR/qio_opi/include/sdkconfig.h"
 
-python3 - "$OUTPUT_DIR" "$BUILDER_COMMIT" "$ARDUINO_CORE" "$ARDUINO_CORE_COMMIT" "$IDF_COMMIT" "$STOCK_SDK_SHA256" <<'PY'
+python3 - "$OUTPUT_DIR" "$BUILDER_COMMIT" "$ARDUINO_CORE" "$ARDUINO_CORE_COMMIT" "$IDF_COMMIT_EXPECTED" "$STOCK_SDK_SHA256" <<'PY'
 from pathlib import Path
 import hashlib
 import json

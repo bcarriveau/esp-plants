@@ -66,9 +66,19 @@ def test_builder_is_pinned_to_3_0_7_h_identity_and_exact_idf_commit():
     assert 'ARDUINO_CORE="3.0.7"' in BUILDER
     assert 'ARDUINO_CORE_COMMIT="3bfa3e0a56c80305eec90f10e8318af8d8091bab"' in BUILDER
     assert 'IDF_BRANCH="release/v5.1"' in BUILDER
-    assert 'IDF_COMMIT="632e0c2a9fc7c754db4135dabb67f7fc6aa9fb87"' in BUILDER
+    assert 'IDF_COMMIT_EXPECTED="632e0c2a9fc7c754db4135dabb67f7fc6aa9fb87"' in BUILDER
     assert "41f67e1c11f68b57d651955c93b63d6a8d35808ce6aff6ba3d1e1476178758f2" in BUILDER
 
+
+
+def test_builder_bypasses_detached_arduino_tag_pull_bug():
+    assert 'checkout --detach "$ARDUINO_CORE_COMMIT"' in BUILDER
+    assert 'source "$BUILDER_DIR/tools/install-esp-idf.sh"' in BUILDER
+    assert BUILDER.count("./build.sh \\\n    -s") >= 2
+    assert '-A "$ARDUINO_CORE"' not in BUILDER
+    assert 'IDF_COMMIT_EXPECTED' in BUILDER
+    assert '-e components/arduino/' in BUILDER
+    assert '-e components/arduino_tinyusb/tinyusb/' in BUILDER
 
 def test_builder_preserves_high_perf_settings_and_adds_only_lcd_kconfig():
     assert 'unset_config(common, "COMPILER_OPTIMIZATION_SIZE")' in BUILDER
