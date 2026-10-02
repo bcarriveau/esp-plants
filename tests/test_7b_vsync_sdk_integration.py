@@ -88,7 +88,7 @@ def test_builder_checks_openocd_libusb_runtime_early():
 
 def test_builder_bypasses_detached_arduino_tag_pull_bug():
     assert 'checkout --detach "$ARDUINO_CORE_COMMIT"' in BUILDER
-    assert BUILDER.count("./build.sh \\\n    -s") >= 2
+    assert './tools/install-arduino.sh' not in BUILDER
     assert '-A "$ARDUINO_CORE"' not in BUILDER
     assert 'IDF_COMMIT_EXPECTED' in BUILDER
     assert '-e components/arduino/' in BUILDER
@@ -123,7 +123,7 @@ def test_builder_preserves_high_perf_settings_and_adds_only_lcd_kconfig():
     assert "#define CONFIG_GDMA_CTRL_FUNC_IN_IRAM 1" in BUILDER
 
 
-def test_builder_outputs_only_the_two_rebuilt_archives_and_matching_config():
+def test_builder_targets_only_lcd_and_hw_support_archives():
     for token in (
         "common/libesp_lcd_vsync.a",
         "qio_opi/libesp_hw_support_vsync.a",
@@ -131,12 +131,25 @@ def test_builder_outputs_only_the_two_rebuilt_archives_and_matching_config():
         "manifest.json",
     ):
         assert token in BUILDER or token in HOOK
-    assert "-b idf-libs" in BUILDER
-    assert "qio 80m qio_ram" in BUILDER
-    assert "-b mem-variant" in BUILDER
-    assert "qio 80m opi_ram" in BUILDER
+    assert "-b idf-libs" not in BUILDER
+    assert "-b mem-variant" not in BUILDER
+    assert "cmake --build build --target __idf_esp_lcd" in BUILDER
+    assert "cmake --build build --target __idf_esp_hw_support" in BUILDER
+    assert "configs/defconfig.qio_ram" in BUILDER
+    assert "configs/defconfig.opi_ram" in BUILDER
+    assert "build/esp-idf/esp_lcd/libesp_lcd.a" in BUILDER
+    assert "build/esp-idf/esp_hw_support/libesp_hw_support.a" in BUILDER
+    assert "build/config/sdkconfig.h" in BUILDER
     assert "esp_lcd_panel_rgb" in BUILDER
     assert "grep -qi 'gdma'" in BUILDER
+
+
+def test_builder_avoids_full_elf_and_unrelated_managed_component_compilation():
+    assert 'idf.py -DIDF_TARGET=esp32s3 -DSDKCONFIG_DEFAULTS="$COMMON_CONFIGS" reconfigure' in BUILDER
+    assert 'idf.py -DIDF_TARGET=esp32s3 -DSDKCONFIG_DEFAULTS="$MEM_CONFIGS" reconfigure' in BUILDER
+    assert "__idf_espressif__esp-tflite-micro" not in BUILDER
+    assert "complete application ELF" in BUILDER
+    assert "IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS=1" in BUILDER
 
 
 def test_platformio_hook_verifies_hashes_config_and_actual_link_map_members():

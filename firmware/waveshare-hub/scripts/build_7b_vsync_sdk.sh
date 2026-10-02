@@ -212,40 +212,50 @@ set +u
 source "$IDF_PATH/export.sh"
 set -u
 
-# Build the common ESP32-S3 IDF libraries first. This produces libesp_lcd.a.
-# -s is intentional: the exact Arduino + IDF revisions were installed above,
-# and skipping the updater avoids the lib-builder's detached-tag git-pull bug.
-./build.sh \
-    -s \
-    -t esp32s3 \
-    -b idf-libs \
-    qio 80m qio_ram
+# The lib-builder's idf-libs and mem-variant convenience targets both depend
+# on the complete application ELF. That needlessly compiles thousands of
+# unrelated managed components (TensorFlow Lite, Matter, speech, etc.) and
+# makes this two-library experiment vulnerable to upstream component drift.
+# Configure the exact same S3 SDK variants, then ask CMake/Ninja only for the
+# two component archives required by the VSYNC experiment.
+export IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS=1
+STAGE_DIR="$WORK_ROOT/vsync-stage"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR/common" "$STAGE_DIR/qio_opi/include"
 
-SDK_ROOT="$BUILDER_DIR/out/tools/esp32-arduino-libs/esp32s3"
-COMMON_LCD="$SDK_ROOT/lib/libesp_lcd.a"
-if [[ ! -f "$COMMON_LCD" ]]; then
-    echo "ERROR: lib-builder did not produce $COMMON_LCD" >&2
+COMMON_CONFIGS="configs/defconfig.common;configs/defconfig.esp32s3;configs/defconfig.debug_default;configs/defconfig.esp_sr;configs/defconfig.qio;configs/defconfig.80m;configs/defconfig.qio_ram"
+rm -rf build sdkconfig
+idf.py -DIDF_TARGET=esp32s3 -DSDKCONFIG_DEFAULTS="$COMMON_CONFIGS" reconfigure
+cmake --build build --target __idf_esp_lcd
+COMMON_LCD_BUILD="$BUILDER_DIR/build/esp-idf/esp_lcd/libesp_lcd.a"
+if [[ ! -f "$COMMON_LCD_BUILD" ]]; then
+    echo "ERROR: targeted esp_lcd build did not produce $COMMON_LCD_BUILD" >&2
     exit 3
 fi
+cp "$COMMON_LCD_BUILD" "$STAGE_DIR/common/libesp_lcd_vsync.a"
 
-# Build only the qio + 80 MHz flash + OPI-PSRAM memory variant. The selected
-# GDMA IRAM Kconfig changes libesp_hw_support.a in this variant. The same pinned
-# environment remains exported in this shell from install-esp-idf.sh above.
-./build.sh \
-    -s \
-    -t esp32s3 \
-    -b mem-variant \
-    qio 80m opi_ram
-
-MEM_ROOT="$SDK_ROOT/qio_opi"
-HW_LIB="$MEM_ROOT/libesp_hw_support.a"
-SDKCONFIG="$MEM_ROOT/include/sdkconfig.h"
-for required in "$COMMON_LCD" "$HW_LIB" "$SDKCONFIG"; do
+# Reconfigure only for the stock qio + 80 MHz flash + OPI-PSRAM memory
+# variant, then compile esp_hw_support. CONFIG_LCD_RGB_RESTART_IN_VSYNC selects
+# GDMA_CTRL_FUNC_IN_IRAM in this generated config, so this archive contains the
+# matching GDMA ISR-safe implementation without building unrelated components.
+MEM_CONFIGS="configs/defconfig.common;configs/defconfig.esp32s3;configs/defconfig.debug_default;configs/defconfig.esp_sr;configs/defconfig.qio;configs/defconfig.80m;configs/defconfig.opi_ram"
+rm -rf build sdkconfig
+idf.py -DIDF_TARGET=esp32s3 -DSDKCONFIG_DEFAULTS="$MEM_CONFIGS" reconfigure
+cmake --build build --target __idf_esp_hw_support
+HW_LIB_BUILD="$BUILDER_DIR/build/esp-idf/esp_hw_support/libesp_hw_support.a"
+SDKCONFIG_BUILD="$BUILDER_DIR/build/config/sdkconfig.h"
+for required in "$HW_LIB_BUILD" "$SDKCONFIG_BUILD"; do
     if [[ ! -f "$required" ]]; then
-        echo "ERROR: required lib-builder output missing: $required" >&2
+        echo "ERROR: targeted qio_opi build output missing: $required" >&2
         exit 3
     fi
 done
+cp "$HW_LIB_BUILD" "$STAGE_DIR/qio_opi/libesp_hw_support_vsync.a"
+cp "$SDKCONFIG_BUILD" "$STAGE_DIR/qio_opi/include/sdkconfig.h"
+
+COMMON_LCD="$STAGE_DIR/common/libesp_lcd_vsync.a"
+HW_LIB="$STAGE_DIR/qio_opi/libesp_hw_support_vsync.a"
+SDKCONFIG="$STAGE_DIR/qio_opi/include/sdkconfig.h"
 
 required_config_lines=(
     '#define CONFIG_LCD_RGB_RESTART_IN_VSYNC 1'
