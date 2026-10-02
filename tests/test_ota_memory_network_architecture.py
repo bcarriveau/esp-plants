@@ -126,6 +126,28 @@ def test_network_recovery_preserves_credentials_and_user_wifi_policy():
     assert 'networkPreferences.remove("ssid")' in function_body(source, "void forgetWifi()")
 
 
+def test_manual_disconnect_keeps_station_netif_for_safe_reconnect():
+    source = read(UPDATE)
+    disconnect = function_body(source, "void disconnectWifi()")
+    reconnect = function_body(source, "void reconnectWifi()")
+    station = function_body(source, "void beginStationConnection(")
+
+    assert "WiFi.disconnect(false, false)" in disconnect
+    assert "WiFi.disconnect(true, false)" not in disconnect
+    assert "reconnectSuppressed = true" in disconnect
+    assert "reconnectSuppressed = false" in reconnect
+    assert "beginStationConnection()" in reconnect
+
+    # A failed STA-mode bring-up must abort before WiFi.begin() instead of
+    # continuing with a missing Arduino STA netif. The hard OTA recovery path
+    # still intentionally powers the radio down with disconnect(true, false).
+    assert "if (!WiFi.mode(WIFI_STA))" in station
+    assert "if (!WiFi.mode(mode))" in station
+    assert 'setStatus("Could not enable Wi-Fi station mode")' in station
+    assert station.index("if (!WiFi.mode(mode))") < station.index("WiFi.begin(")
+    assert "WiFi.disconnect(true, false)" in station
+
+
 def test_recovery_waits_for_ip_fresh_sntp_and_dns():
     source = read(UPDATE)
     recovery = function_body(source, "bool recoverOtaNetwork(")

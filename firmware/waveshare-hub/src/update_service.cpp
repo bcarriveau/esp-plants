@@ -549,10 +549,21 @@ void beginStationConnection(bool restartRadio = false) {
     Serial.println("[wifi] startup hard station-radio bring-up");
     WiFi.disconnect(true, false);
     delay(250);
-    WiFi.mode(WIFI_STA);
+    if (!WiFi.mode(WIFI_STA)) {
+      lastReconnectAttemptMs = millis();
+      setStatus("Could not enable Wi-Fi station mode");
+      Serial.println("[wifi] station mode enable failed; connection not attempted");
+      return;
+    }
     WiFi.setSleep(false);
   } else {
-    WiFi.mode(setupPortalRunning ? WIFI_AP_STA : WIFI_STA);
+    const wifi_mode_t mode = setupPortalRunning ? WIFI_AP_STA : WIFI_STA;
+    if (!WiFi.mode(mode)) {
+      lastReconnectAttemptMs = millis();
+      setStatus("Could not enable Wi-Fi station mode");
+      Serial.println("[wifi] station mode enable failed; connection not attempted");
+      return;
+    }
     WiFi.disconnect(false, false);
     delay(100);
     if (!setupPortalRunning) WiFi.setSleep(false);
@@ -1799,7 +1810,9 @@ void disconnectWifi() {
   reconnectSuppressed = true;
   manualCheckRequested = false;
   waitingForClockNotice = false;
-  WiFi.disconnect(true, false);
+  // Keep the STA/netif allocated. reconnectSuppressed is what intentionally
+  // keeps ESP PLANTS offline until the user reconnects or the device reboots.
+  WiFi.disconnect(false, false);
   sawWifiConnected = false;
   strncpy(connectedSsid, "--", sizeof(connectedSsid) - 1);
   connectedSsid[sizeof(connectedSsid) - 1] = '\0';
