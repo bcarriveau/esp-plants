@@ -15,6 +15,7 @@
 #include "update_service.h"
 #include "runtime_flash_guard.h"
 #include "sensor_route_view.h"
+#include "sensor_liveness.h"
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #include "ui_7b/screens.h"
 #else
@@ -77,6 +78,16 @@ constexpr lv_coord_t uiY(int32_t value) {
   return scaleUiCoord(value, kUiScaleYNumerator);
 }
 
+#ifdef ESP_PLANTS_WAVESHARE_7B
+#define ESP_PLANTS_RUNTIME_FONT_14 lv_font_montserrat_18
+#define ESP_PLANTS_RUNTIME_FONT_16 lv_font_montserrat_20
+#define ESP_PLANTS_RUNTIME_FONT_18 lv_font_montserrat_22
+#else
+#define ESP_PLANTS_RUNTIME_FONT_14 lv_font_montserrat_14
+#define ESP_PLANTS_RUNTIME_FONT_16 lv_font_montserrat_16
+#define ESP_PLANTS_RUNTIME_FONT_18 lv_font_montserrat_18
+#endif
+
 enum class Page : uint8_t { Home = 0, All = 1, Plant = 2, Settings = 3, Advanced = 4 };
 enum class RenameTarget : uint8_t { Plant = 0, Device = 1, Infrastructure = 2 };
 enum class PairDialogState : uint8_t {
@@ -105,6 +116,7 @@ struct PlantSensor {
   sensor_route_view::Route route{};  // RAM only; never part of PersistedPlant.
   bool used = false;
   bool seenThisBoot = false;
+  espplants_sensor_liveness::Tracker liveness{};  // RAM-only; never persisted.
   uint8_t ieee[8]{};
   uint16_t shortAddress = 0xffff;
   uint16_t fieldFlags = 0;  // merged values known in RAM
@@ -338,6 +350,7 @@ lv_obj_t *homeTemp = nullptr;
 lv_obj_t *homeHumidity = nullptr;
 lv_obj_t *homeBar = nullptr;
 lv_obj_t *homeWarning = nullptr;
+lv_obj_t *homeAttentionHint = nullptr;
 lv_obj_t *homeSummary = nullptr;
 lv_obj_t *homeList = nullptr;
 lv_obj_t *homeVirtualContent = nullptr;
@@ -902,21 +915,86 @@ size_t registeredCount() {
   return count;
 }
 
+bool isSensorReporting(const PlantSensor &sensor) {
+  return sensor.used && sensor.seenThisBoot && !sensor.liveness.stale;
+}
+
+bool isSensorStale(const PlantSensor &sensor) {
+  return sensor.used && sensor.seenThisBoot && sensor.liveness.stale;
+}
+
 size_t reportedCount() {
   size_t count = 0;
-  for (const auto &sensor : sensors) if (sensor.used && sensor.seenThisBoot) ++count;
+  for (const auto &sensor : sensors) if (isSensorReporting(sensor)) ++count;
   return count;
 }
 
-bool hasFreshMoisture(const PlantSensor &sensor) {
+size_t waitingCount() {
+  size_t count = 0;
+  for (const auto &sensor : sensors)
+    if (sensor.used && !sensor.seenThisBoot) ++count;
+  return count;
+}
+
+size_t staleCount() {
+  size_t count = 0;
+  for (const auto &sensor : sensors) if (isSensorStale(sensor)) ++count;
+  return count;
+}
+
+bool hasReportedMoistureThisBoot(const PlantSensor &sensor) {
   return sensor.used && sensor.seenThisBoot &&
          (sensor.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture);
 }
 
+bool hasFreshMoisture(const PlantSensor &sensor) {
+  return isSensorReporting(sensor) && hasReportedMoistureThisBoot(sensor);
+}
+
+bool staleNeedsWater(const PlantSensor &sensor) {
+  return isSensorStale(sensor) && hasReportedMoistureThisBoot(sensor) &&
+         espplants_moisture::needsWater(espplants_moisture::careState(
+             sensor.soilMoisturePct, sensor.moisturePreference));
+}
+
+int mostConcerningStaleSensor() {
+  int best = -1;
+  for (size_t slot = 0; slot < kMaxSensors; ++slot) {
+    const PlantSensor &candidate = sensors[slot];
+    if (!isSensorStale(candidate)) continue;
+    if (best < 0) {
+      best = static_cast<int>(slot);
+      continue;
+    }
+
+    const PlantSensor &currentBest = sensors[best];
+    const bool candidateDry = staleNeedsWater(candidate);
+    const bool bestDry = staleNeedsWater(currentBest);
+    if (candidateDry != bestDry) {
+      if (candidateDry) best = static_cast<int>(slot);
+      continue;
+    }
+
+    if (candidateDry && bestDry) {
+      const auto candidateKey = espplants_moisture::rankingKey(
+          candidate.soilMoisturePct, candidate.moisturePreference);
+      const auto bestKey = espplants_moisture::rankingKey(
+          currentBest.soilMoisturePct, currentBest.moisturePreference);
+      if (candidateKey.band < bestKey.band ||
+          (candidateKey.band == bestKey.band &&
+           candidateKey.positionPermille < bestKey.positionPermille)) {
+        best = static_cast<int>(slot);
+      }
+    }
+  }
+  return best;
+}
+
 int sensorSortRank(const PlantSensor &sensor) {
   if (hasFreshMoisture(sensor)) return 0;
-  if (sensor.used && sensor.seenThisBoot) return 1;
-  return 2;
+  if (isSensorReporting(sensor)) return 1;
+  if (isSensorStale(sensor)) return 2;
+  return 3;
 }
 
 size_t buildSortedSlots(size_t out[kMaxSensors]) {
@@ -974,11 +1052,23 @@ int driestReportedSensor() {
 int featuredHomeSensor() {
   if (manualHomeSensor >= 0 &&
       manualHomeSensor < static_cast<int>(kMaxSensors) &&
-      sensors[manualHomeSensor].used &&
+      isSensorReporting(sensors[manualHomeSensor]) &&
       static_cast<int32_t>(manualHomeUntilMs - millis()) > 0) {
     return manualHomeSensor;
   }
   return driestReportedSensor();
+}
+
+void formatAgeShort(uint32_t lastSeenMs, char *out, size_t size) {
+  if (!lastSeenMs) {
+    snprintf(out, size, "--");
+    return;
+  }
+  const uint32_t age = (millis() - lastSeenMs) / 1000u;
+  if (age < 2) snprintf(out, size, "NOW");
+  else if (age < 60) snprintf(out, size, "%lus", static_cast<unsigned long>(age));
+  else if (age < 3600) snprintf(out, size, "%lum", static_cast<unsigned long>(age / 60u));
+  else snprintf(out, size, "%luh", static_cast<unsigned long>(age / 3600u));
 }
 
 void formatLastReport(const PlantSensor &sensor, char *out, size_t size) {
@@ -986,10 +1076,10 @@ void formatLastReport(const PlantSensor &sensor, char *out, size_t size) {
     snprintf(out, size, "WAITING");
     return;
   }
-  const uint32_t age = (millis() - sensor.lastSeenMs) / 1000u;
-  if (age < 2) snprintf(out, size, "NOW");
-  else if (age < 60) snprintf(out, size, "%lus", static_cast<unsigned long>(age));
-  else snprintf(out, size, "%lum", static_cast<unsigned long>(age / 60u));
+  char age[16]{};
+  formatAgeShort(sensor.lastSeenMs, age, sizeof(age));
+  if (isSensorStale(sensor)) snprintf(out, size, "ATTN %s", age);
+  else snprintf(out, size, "%s", age);
 }
 
 void saveSlot(size_t slot) {
@@ -1145,6 +1235,7 @@ const char *currentPhrase(PlantSensor &s) {
 
 const char *mood(PlantSensor &s) {
   if (!s.seenThisBoot) return "Waiting for this plant to check in";
+  if (isSensorStale(s)) return "Needs attention - sensor not reporting";
   if (!(s.reportedFieldFlagsThisBoot & plantlink::SensorHasSoilMoisture))
     return "Waiting for a moisture reading";
 
@@ -1174,6 +1265,34 @@ void servicePhraseDisplaySettle() {
   if (committedAny) {
     dirty.home = true;
     dirty.plant = true;
+  }
+}
+
+void serviceSensorLiveness() {
+  const uint32_t now = millis();
+  for (size_t slot = 0; slot < kMaxSensors; ++slot) {
+    PlantSensor &sensor = sensors[slot];
+    if (!sensor.used || !sensor.seenThisBoot || sensor.liveness.stale) continue;
+    if (!espplants_sensor_liveness::shouldBeStale(
+            sensor.liveness, sensor.seenThisBoot, sensor.lastSeenMs, now)) {
+      continue;
+    }
+
+    sensor.liveness.stale = true;
+    if (manualHomeSensor == static_cast<int>(slot)) {
+      manualHomeSensor = -1;
+      manualHomeUntilMs = 0;
+    }
+    markSensorValuesDirty(true);
+
+    char ieee[24]{};
+    plantlink::formatIeee(sensor.ieee, ieee, sizeof(ieee));
+    Serial.printf(
+        "[sensor] slot=%u name=\"%s\" %s NOT REPORTING after %lus (timeout=%lus)\n",
+        static_cast<unsigned>(slot + 1), sensor.name, ieee,
+        static_cast<unsigned long>((now - sensor.lastSeenMs) / 1000u),
+        static_cast<unsigned long>(
+            espplants_sensor_liveness::timeoutMs(sensor.liveness) / 1000u));
   }
 }
 
@@ -1287,7 +1406,7 @@ void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **valu
             const lv_font_t *font = &lv_font_montserrat_28) {
   lv_obj_t *c = lv_label_create(parent);
   lv_label_set_text(c, caption);
-  lv_obj_set_style_text_font(c, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(c, &ESP_PLANTS_RUNTIME_FONT_14, 0);
   lv_obj_set_style_text_color(c, lv_color_hex(0xB7C8BC), 0);
   lv_obj_set_pos(c, x, y);
   *value = lv_label_create(parent);
@@ -1343,9 +1462,10 @@ void refreshHomeVirtualList(bool forceValues = false) {
 
   refreshSortedSensorSlots();
   size_t logicalSlots[kMaxSensors]{};
-  const size_t logicalCount = sortedSensorCount;
-  if (logicalCount > 0) {
-    memcpy(logicalSlots, sortedSensorSlots, logicalCount * sizeof(size_t));
+  size_t logicalCount = 0;
+  for (size_t i = 0; i < sortedSensorCount; ++i) {
+    const size_t slot = sortedSensorSlots[i];
+    if (!isSensorStale(sensors[slot])) logicalSlots[logicalCount++] = slot;
   }
   const bool logicalChanged =
       logicalCount != homeLogicalCount ||
@@ -1498,7 +1618,7 @@ void refreshAllVirtualList(bool forceValues = false) {
     if (rebound || windowChanged || forceValues) {
       label(row.name, sensors[slot].name);
 
-      if (hasFreshMoisture(sensors[slot]))
+      if (hasReportedMoistureThisBoot(sensors[slot]))
         snprintf(text, sizeof(text), "%u%%", sensors[slot].soilMoisturePct);
       else
         snprintf(text, sizeof(text), "--%%");
@@ -1514,12 +1634,16 @@ void refreshAllVirtualList(bool forceValues = false) {
       formatLastReport(sensors[slot], text, sizeof(text));
       label(row.updated, text);
 
-      const bool thirsty =
-          hasFreshMoisture(sensors[slot]) &&
+      const bool stale = isSensorStale(sensors[slot]);
+      const bool lastKnownThirsty =
+          hasReportedMoistureThisBoot(sensors[slot]) &&
           espplants_moisture::needsWater(espplants_moisture::careState(
               sensors[slot].soilMoisturePct, sensors[slot].moisturePreference));
-      lv_obj_set_style_bg_color(row.box,
-                                lv_color_hex(thirsty ? 0x3A2723 : 0x1D2922), 0);
+      const bool thirsty = hasFreshMoisture(sensors[slot]) && lastKnownThirsty;
+      const uint32_t rowColor = stale
+          ? (lastKnownThirsty ? 0x4A2924 : 0x3A3023)
+          : (thirsty ? 0x3A2723 : 0x1D2922);
+      lv_obj_set_style_bg_color(row.box, lv_color_hex(rowColor), 0);
     }
   }
 
@@ -2403,6 +2527,7 @@ void buildHome(lv_obj_t *screen) {
   homeHumidity = objects.home_humidity;
   homeBar = objects.home_bar;
   homeWarning = objects.home_warning;
+  homeAttentionHint = objects.sensor_details_hint;
   homeList = objects.home_list;
 
   lv_obj_add_flag(objects.home_featured_card, LV_OBJ_FLAG_CLICKABLE);
@@ -2438,7 +2563,7 @@ void buildHome(lv_obj_t *screen) {
     row.name = lv_label_create(row.box);
     row.nameText[0] = '\0';
     lv_label_set_text_static(row.name, row.nameText);
-    lv_obj_set_style_text_font(row.name, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(row.name, &ESP_PLANTS_RUNTIME_FONT_14, 0);
     lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_width(row.name, uiX(145));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
@@ -2446,7 +2571,7 @@ void buildHome(lv_obj_t *screen) {
     row.moisture = lv_label_create(row.box);
     row.moistureText[0] = '\0';
     lv_label_set_text_static(row.moisture, row.moistureText);
-    lv_obj_set_style_text_font(row.moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(row.moisture, &ESP_PLANTS_RUNTIME_FONT_18, 0);
     lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
     lv_obj_align(row.moisture, LV_ALIGN_TOP_RIGHT, uiX(-2), uiY(-2));
 
@@ -2496,28 +2621,28 @@ void buildAll(lv_obj_t *screen) {
     lv_obj_add_event_cb(row.box, allRowEvent, LV_EVENT_CLICKED, &row);
 
     row.name = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(row.name, &ESP_PLANTS_RUNTIME_FONT_16, 0);
     lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(row.name, uiX(4), uiY(9));
     lv_obj_set_width(row.name, uiX(285));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
     row.moisture = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.moisture, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(row.moisture, &ESP_PLANTS_RUNTIME_FONT_18, 0);
     lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(row.moisture, uiX(305), uiY(8));
     lv_obj_set_width(row.moisture, uiX(110));
     lv_obj_set_style_text_align(row.moisture, LV_TEXT_ALIGN_CENTER, 0);
 
     row.battery = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.battery, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(row.battery, &ESP_PLANTS_RUNTIME_FONT_16, 0);
     lv_obj_set_style_text_color(row.battery, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(row.battery, uiX(435), uiY(9));
     lv_obj_set_width(row.battery, uiX(115));
     lv_obj_set_style_text_align(row.battery, LV_TEXT_ALIGN_CENTER, 0);
 
     row.updated = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.updated, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(row.updated, &ESP_PLANTS_RUNTIME_FONT_14, 0);
     lv_obj_set_style_text_color(row.updated, lv_color_hex(0xD1DED5), 0);
     lv_obj_set_pos(row.updated, uiX(565), uiY(10));
     lv_obj_set_width(row.updated, uiX(155));
@@ -2729,7 +2854,7 @@ void buildAdvanced(lv_obj_t *screen) {
     lv_obj_add_event_cb(row.box, infrastructureRowEvent, LV_EVENT_CLICKED, &row);
 
     row.name = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(row.name, &ESP_PLANTS_RUNTIME_FONT_16, 0);
     lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
     lv_obj_set_pos(row.name, uiX(2), uiY(6));
     lv_obj_set_width(row.name, uiX(390));
@@ -2737,14 +2862,14 @@ void buildAdvanced(lv_obj_t *screen) {
     lv_label_set_text_static(row.name, row.nameText);
 
     row.status = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(row.status, &ESP_PLANTS_RUNTIME_FONT_14, 0);
     lv_obj_set_style_text_color(row.status, lv_color_hex(0xD1DED5), 0);
     lv_obj_set_pos(row.status, uiX(430), uiY(7));
     lv_obj_set_width(row.status, uiX(110));
     lv_label_set_text_static(row.status, row.statusText);
 
     row.signal = lv_label_create(row.box);
-    lv_obj_set_style_text_font(row.signal, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(row.signal, &ESP_PLANTS_RUNTIME_FONT_14, 0);
     lv_obj_set_style_text_color(row.signal, lv_color_hex(0xD1DED5), 0);
     lv_obj_set_pos(row.signal, uiX(570), uiY(7));
     lv_obj_set_width(row.signal, uiX(145));
@@ -2980,7 +3105,8 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
   char text[200]{};
   const size_t count = registeredCount();
   const size_t reporting = reportedCount();
-  const size_t waiting = count >= reporting ? count - reporting : 0;
+  const size_t waiting = waitingCount();
+  const size_t attention = staleCount();
 
   if (force || dirty.header) {
     snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count),
@@ -2999,21 +3125,55 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
     case Page::Home: {
       if (!force && !dirty.home) break;
       const int homeSensor = featuredHomeSensor();
-      snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
-               static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
+      const int attentionSensor = mostConcerningStaleSensor();
+      snprintf(text, sizeof(text), "%u REPORTING | %u WAITING | %u ATTENTION",
+               static_cast<unsigned>(reporting), static_cast<unsigned>(waiting),
+               static_cast<unsigned>(attention));
       label(homeSummary, text);
+
+      if (homeAttentionHint) {
+        if (attentionSensor >= 0) {
+          const PlantSensor &stale = sensors[attentionSensor];
+          char age[16]{};
+          formatAgeShort(stale.lastSeenMs, age, sizeof(age));
+          const bool dryAttention = staleNeedsWater(stale);
+          if (hasReportedMoistureThisBoot(stale)) {
+            snprintf(text, sizeof(text), "ATTN: %.14s | LAST %u%%%s | %s AGO",
+                     stale.name, static_cast<unsigned>(stale.soilMoisturePct),
+                     dryAttention ? " DRY" : "", age);
+          } else {
+            snprintf(text, sizeof(text), "ATTN: %.14s | NOT REPORTING | %s AGO",
+                     stale.name, age);
+          }
+          label(homeAttentionHint, text);
+          lv_obj_set_style_text_color(
+              homeAttentionHint,
+              lv_color_hex(dryAttention ? 0xF2C66D : 0xE2B276), 0);
+        } else {
+          label(homeAttentionHint, "TAP CARD FOR SENSOR DETAILS");
+          lv_obj_set_style_text_color(homeAttentionHint, lv_color_hex(0x93A69A), 0);
+        }
+      }
 
       refreshHomeVirtualList(true);
 
       if (homeSensor < 0 || homeSensor >= static_cast<int>(kMaxSensors) ||
           !sensors[homeSensor].used) {
-        label(homeName, count ? "WAITING FOR REPORTS" : "WAITING FOR SENSOR");
-        if (count) {
+        if (!count) {
+          label(homeName, "WAITING FOR SENSOR");
+          label(homeMood, "Pair a sensor and I'll keep an eye on it");
+        } else if (attention > 0) {
+          label(homeName, "NO CURRENT REPORTS");
+          snprintf(text, sizeof(text), "%u %s need%s attention",
+                   static_cast<unsigned>(attention),
+                   attention == 1 ? "sensor" : "sensors",
+                   attention == 1 ? "s" : "");
+          label(homeMood, text);
+        } else {
+          label(homeName, "WAITING FOR REPORTS");
           snprintf(text, sizeof(text), "%u %s waiting to report",
                    static_cast<unsigned>(waiting), waiting == 1 ? "sensor" : "sensors");
           label(homeMood, text);
-        } else {
-          label(homeMood, "Pair a sensor and I'll keep an eye on it");
         }
         label(homeSoil, "--%");
         label(homeTemp, useFahrenheit ? "--.- F" : "--.- C");
@@ -3045,8 +3205,9 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
 
     case Page::All: {
       if (!force && !dirty.all && !intervalElapsed) break;
-      snprintf(text, sizeof(text), "%u REPORTING | %u WAITING",
-               static_cast<unsigned>(reporting), static_cast<unsigned>(waiting));
+      snprintf(text, sizeof(text), "%u REPORTING | %u WAITING | %u ATTENTION",
+               static_cast<unsigned>(reporting), static_cast<unsigned>(waiting),
+               static_cast<unsigned>(attention));
       label(allSummary, text);
       refreshAllVirtualList(true);
       dirty.all = false;
@@ -3091,7 +3252,9 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
 
         char ieee[24]{};
         plantlink::formatIeee(s.ieee, ieee, sizeof(ieee));
-        if (s.seenThisBoot)
+        if (isSensorStale(s))
+          snprintf(text, sizeof(text), "%s   NOT REPORTING", ieee);
+        else if (s.seenThisBoot)
           snprintf(text, sizeof(text), "%s   short 0x%04X", ieee, s.shortAddress);
         else
           snprintf(text, sizeof(text), "%s   waiting for check-in", ieee);
@@ -3124,15 +3287,15 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
         if (!s.seenThisBoot || !s.lastSeenMs) {
           snprintf(updatedText, sizeof(updatedText), "Waiting for this plant to check in");
         } else {
-          const uint32_t age = (millis() - s.lastSeenMs) / 1000u;
-          if (age < 2)
+          char ageText[16]{};
+          formatAgeShort(s.lastSeenMs, ageText, sizeof(ageText));
+          if (isSensorStale(s))
+            snprintf(updatedText, sizeof(updatedText), "NOT REPORTING | last update %s ago",
+                     ageText);
+          else if (!strcmp(ageText, "NOW"))
             snprintf(updatedText, sizeof(updatedText), "Updated now");
-          else if (age < 60)
-            snprintf(updatedText, sizeof(updatedText), "Updated %lus ago",
-                     static_cast<unsigned long>(age));
           else
-            snprintf(updatedText, sizeof(updatedText), "Updated %lum ago",
-                     static_cast<unsigned long>(age / 60u));
+            snprintf(updatedText, sizeof(updatedText), "Updated %s ago", ageText);
         }
 
         char routeText[64]{};
@@ -3545,6 +3708,7 @@ void handleDeviceLeft(const plantlink::Frame &frame) {
   }
 
   s->seenThisBoot = false;
+  s->liveness = {};
   s->route = {};
   s->lastSeenMs = 0;
   s->shortAddress = 0xffff;
@@ -3575,8 +3739,11 @@ void handleSensorReport(const plantlink::Frame &frame) {
   }
 
   const bool wasSeenThisBoot = s->seenThisBoot;
+  const bool wasReporting = isSensorReporting(*s);
   const bool hadFreshMoisture = hasFreshMoisture(*s);
   const uint8_t previousSoilMoisture = s->soilMoisturePct;
+  const uint32_t reportNowMs = millis();
+  espplants_sensor_liveness::noteReport(s->liveness, s->lastSeenMs, reportNowMs);
 
   s->seenThisBoot = true;
   s->route.update(report);
@@ -3607,10 +3774,10 @@ void handleSensorReport(const plantlink::Frame &frame) {
   if (report.fieldFlags & plantlink::SensorHasWaterWarning) s->waterWarning=report.waterWarning;
   s->lqi = report.lqi;
   s->rssi = report.rssiDbm;
-  s->lastSeenMs = millis();
+  s->lastSeenMs = reportNowMs;
 
   const bool orderMayChange =
-      !wasSeenThisBoot ||
+      !wasSeenThisBoot || !wasReporting ||
       (moistureReported &&
        (!hadFreshMoisture || previousSoilMoisture != report.soilMoisturePct));
   markSensorValuesDirty(orderMayChange);
@@ -3747,6 +3914,7 @@ void setup() {
 
 void loop() {
   servicePlantLink();
+  serviceSensorLiveness();
   servicePhraseDisplaySettle();
   serviceDeferredPersistence();
   espplants_runtime_flash::serviceDisplayRecovery();

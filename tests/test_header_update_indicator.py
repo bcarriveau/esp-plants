@@ -58,7 +58,7 @@ def test_radar_style_header_update_indicator_7b():
     icon = button["children"][0]
     assert icon["text"] == "\uf019"
     icon_style = icon["localStyles"]["definition"]["MAIN"]["DEFAULT"]
-    assert icon_style["text_font"] == "MONTSERRAT_20"
+    assert icon_style["text_font"] == "MONTSERRAT_24"
     assert icon_style["text_color"] == "#B4FFCD"
 
 
@@ -67,7 +67,7 @@ def test_generated_ui_matches_eez_indicator():
     seven_b = (HUB / "src" / "ui_7b" / "screens.c").read_text(encoding="utf-8")
     for source, geometry, font, radius in (
         (seven, "lv_obj_set_pos(obj, 649, 7);", "lv_font_montserrat_16", "lv_obj_set_style_radius(obj, 6"),
-        (seven_b, "lv_obj_set_pos(obj, 831, 9);", "lv_font_montserrat_20", "lv_obj_set_style_radius(obj, 8"),
+        (seven_b, "lv_obj_set_pos(obj, 831, 9);", "lv_font_montserrat_24", "lv_obj_set_style_radius(obj, 8"),
     ):
         anchor = source.index("// header_update_button")
         end = source.index("// header_count", anchor)

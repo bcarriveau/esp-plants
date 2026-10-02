@@ -186,7 +186,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#8DA695"
                             }
                           }
@@ -233,7 +233,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#AABBAF",
                               "align": "TOP_RIGHT"
                             }
@@ -281,7 +281,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_32",
+                              "text_font": "MONTSERRAT_40",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -329,7 +329,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_18",
+                              "text_font": "MONTSERRAT_22",
                               "text_color": "#85D892"
                             }
                           }
@@ -376,7 +376,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -423,7 +423,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_32",
+                              "text_font": "MONTSERRAT_40",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -470,7 +470,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -517,7 +517,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -564,7 +564,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -611,7 +611,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -714,7 +714,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_40",
+                              "text_font": "MONTSERRAT_48",
                               "text_color": "#FFF4EE",
                               "bg_color": "#8E493E",
                               "radius": 12,
@@ -768,7 +768,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#93A69A"
                             }
                           }
@@ -860,7 +860,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_18",
+                              "text_font": "MONTSERRAT_22",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -1047,7 +1047,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -1094,7 +1094,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#C1D0C6",
                               "align": "TOP_RIGHT"
                             }
@@ -1142,7 +1142,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -1189,7 +1189,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC",
                               "text_align": "CENTER"
                             }
@@ -1237,7 +1237,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC",
                               "text_align": "CENTER"
                             }
@@ -1285,7 +1285,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC",
                               "text_align": "CENTER"
                             }
@@ -1473,7 +1473,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#8DA695"
                             }
                           }
@@ -1520,7 +1520,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_32",
+                              "text_font": "MONTSERRAT_40",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -1567,7 +1567,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_18",
+                              "text_font": "MONTSERRAT_22",
                               "text_color": "#CBE6D2"
                             }
                           }
@@ -1614,7 +1614,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#AABBAF"
                             }
                           }
@@ -1684,7 +1684,7 @@
                               "MAIN": {
                                 "DEFAULT": {
                                   "align": "CENTER",
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7"
                                 }
                               }
@@ -1776,7 +1776,7 @@
                               "MAIN": {
                                 "DEFAULT": {
                                   "align": "CENTER",
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7"
                                 }
                               }
@@ -1868,7 +1868,7 @@
                               "MAIN": {
                                 "DEFAULT": {
                                   "align": "CENTER",
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#F7EDE9"
                                 }
                               }
@@ -1936,7 +1936,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -1983,7 +1983,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_32",
+                              "text_font": "MONTSERRAT_40",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -2029,7 +2029,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2076,7 +2076,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -2122,7 +2122,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2169,7 +2169,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -2215,7 +2215,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2262,7 +2262,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -2308,7 +2308,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2355,7 +2355,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -2458,7 +2458,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2505,7 +2505,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2621,7 +2621,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#CBE6D2",
                               "text_align": "CENTER"
                             }
@@ -2693,7 +2693,7 @@
                               "MAIN": {
                                 "DEFAULT": {
                                   "align": "CENTER",
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7"
                                 }
                               }
@@ -2854,7 +2854,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -2901,7 +2901,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -2971,7 +2971,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -3041,7 +3041,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -3088,7 +3088,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_20",
+                              "text_font": "MONTSERRAT_24",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -3135,7 +3135,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -3182,7 +3182,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_20",
+                              "text_font": "MONTSERRAT_24",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -3229,7 +3229,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -3276,7 +3276,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_16",
+                              "text_font": "MONTSERRAT_20",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -3323,7 +3323,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#8DA695"
                             }
                           }
@@ -3393,7 +3393,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_12",
+                                  "text_font": "MONTSERRAT_16",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -3762,7 +3762,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7"
                                 }
                               }
@@ -3879,7 +3879,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -3926,7 +3926,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -3973,7 +3973,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -4043,7 +4043,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -4136,7 +4136,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER",
                                   "text_align": "CENTER"
@@ -4207,7 +4207,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -4254,7 +4254,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#8DA695"
                             }
                           }
@@ -4324,7 +4324,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -4394,7 +4394,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -4441,7 +4441,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#8DA695"
                             }
                           }
@@ -4511,7 +4511,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -4674,7 +4674,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -4721,7 +4721,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#C1D0C6"
                             }
                           }
@@ -4791,7 +4791,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -4884,7 +4884,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_12",
+                                  "text_font": "MONTSERRAT_16",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -4954,7 +4954,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -5001,7 +5001,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -5048,7 +5048,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -5142,7 +5142,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -5212,7 +5212,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -5305,7 +5305,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#F7EDE9",
                                   "align": "CENTER"
                                 }
@@ -5449,7 +5449,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "text_font": "MONTSERRAT_32",
+                          "text_font": "MONTSERRAT_40",
                           "text_color": "#E5ECE7"
                         }
                       }
@@ -5495,7 +5495,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "text_font": "MONTSERRAT_14",
+                          "text_font": "MONTSERRAT_18",
                           "text_color": "#9DB5A5"
                         }
                       }
@@ -5564,7 +5564,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_20",
+                              "text_font": "MONTSERRAT_24",
                               "text_color": "#B4FFCD",
                               "align": "CENTER"
                             }
@@ -5641,7 +5641,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "text_font": "MONTSERRAT_18",
+                          "text_font": "MONTSERRAT_22",
                           "text_color": "#D1DED5",
                           "align": "RIGHT_MID"
                         }
@@ -5759,7 +5759,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_16",
+                              "text_font": "MONTSERRAT_20",
                               "text_color": "#E5ECE7",
                               "align": "CENTER"
                             }
@@ -5853,7 +5853,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_16",
+                              "text_font": "MONTSERRAT_20",
                               "text_color": "#E5ECE7",
                               "align": "CENTER"
                             }
@@ -5947,7 +5947,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_16",
+                              "text_font": "MONTSERRAT_20",
                               "text_color": "#E5ECE7",
                               "align": "CENTER"
                             }
@@ -6041,7 +6041,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_16",
+                              "text_font": "MONTSERRAT_20",
                               "text_color": "#E5ECE7",
                               "align": "CENTER"
                             }
@@ -6183,7 +6183,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -6230,7 +6230,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#9DB5A5"
                             }
                           }
@@ -6303,7 +6303,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "text_font": "MONTSERRAT_28",
+                          "text_font": "MONTSERRAT_36",
                           "radius": 12,
                           "border_width": 2,
                           "border_color": "#3F7A4E",
@@ -6655,7 +6655,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -6749,7 +6749,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_20",
+                              "text_font": "MONTSERRAT_24",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -6796,7 +6796,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#A5C3AD"
                             }
                           }
@@ -6866,7 +6866,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -6960,7 +6960,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -7128,7 +7128,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_28",
+                              "text_font": "MONTSERRAT_36",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -7197,7 +7197,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -7314,7 +7314,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -7360,7 +7360,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -7407,7 +7407,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_20",
+                              "text_font": "MONTSERRAT_24",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -7454,7 +7454,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#C1D0C6"
                             }
                           }
@@ -7524,7 +7524,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -7617,7 +7617,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_12",
+                                  "text_font": "MONTSERRAT_16",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -7709,7 +7709,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_12",
+                                  "text_font": "MONTSERRAT_16",
                                   "text_color": "#F7EDE9",
                                   "align": "CENTER"
                                 }
@@ -7780,7 +7780,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#A5C3AD"
                             }
                           }
@@ -7875,7 +7875,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#9DB5A5"
                             }
                           }
@@ -7969,7 +7969,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -8015,7 +8015,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -8062,7 +8062,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_18",
+                              "text_font": "MONTSERRAT_22",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -8108,7 +8108,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#B7C8BC"
                             }
                           }
@@ -8155,7 +8155,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_18",
+                              "text_font": "MONTSERRAT_22",
                               "text_color": "#E5ECE7"
                             }
                           }
@@ -8202,7 +8202,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#9DB5A5"
                             }
                           }
@@ -8249,7 +8249,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#A5C3AD"
                             }
                           }
@@ -8319,7 +8319,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -8412,7 +8412,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_16",
+                                  "text_font": "MONTSERRAT_20",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -8481,7 +8481,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_12",
+                              "text_font": "MONTSERRAT_16",
                               "text_color": "#8DA695"
                             }
                           }
@@ -8597,7 +8597,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_28",
+                                  "text_font": "MONTSERRAT_36",
                                   "text_color": "#E5ECE7"
                                 }
                               }
@@ -8666,7 +8666,7 @@
                                 "definition": {
                                   "MAIN": {
                                     "DEFAULT": {
-                                      "text_font": "MONTSERRAT_14",
+                                      "text_font": "MONTSERRAT_18",
                                       "text_color": "#E5ECE7",
                                       "align": "CENTER"
                                     }
@@ -8784,7 +8784,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#D1DED5"
                                 }
                               }
@@ -8878,7 +8878,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -9047,7 +9047,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_24",
+                              "text_font": "MONTSERRAT_30",
                               "text_color": "#F7EDE9"
                             }
                           }
@@ -9093,7 +9093,7 @@
                         "definition": {
                           "MAIN": {
                             "DEFAULT": {
-                              "text_font": "MONTSERRAT_14",
+                              "text_font": "MONTSERRAT_18",
                               "text_color": "#C1D0C6"
                             }
                           }
@@ -9162,7 +9162,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#E5ECE7",
                                   "align": "CENTER"
                                 }
@@ -9254,7 +9254,7 @@
                             "definition": {
                               "MAIN": {
                                 "DEFAULT": {
-                                  "text_font": "MONTSERRAT_14",
+                                  "text_font": "MONTSERRAT_18",
                                   "text_color": "#F7EDE9",
                                   "align": "CENTER"
                                 }

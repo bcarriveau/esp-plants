@@ -72,7 +72,8 @@ def test_home_virtual_content_height_and_scroll_binding_are_explicit():
     assert "clampScrollY" in helper
     refresh = function_block(source, "void refreshHomeVirtualList", "void homeListScrollEvent")
     assert "refreshSortedSensorSlots();" in refresh
-    assert "const size_t logicalCount = sortedSensorCount;" in refresh
+    assert "size_t logicalCount = 0;" in refresh
+    assert "if (!isSensorStale(sensors[slot])) logicalSlots[logicalCount++] = slot;" in refresh
     assert "lv_obj_set_height(homeVirtualContent" in refresh
     assert "lv_obj_get_scroll_y(homeList)" in refresh
     assert "lv_obj_scroll_to_y(homeList, clamped, LV_ANIM_OFF)" in refresh
