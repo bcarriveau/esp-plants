@@ -14,8 +14,10 @@ ARDUINO_CORE_COMMIT="3bfa3e0a56c80305eec90f10e8318af8d8091bab"
 IDF_BRANCH="release/v5.1"
 IDF_COMMIT_EXPECTED="632e0c2a9fc7c754db4135dabb67f7fc6aa9fb87"
 STOCK_SDK_SHA256="41f67e1c11f68b57d651955c93b63d6a8d35808ce6aff6ba3d1e1476178758f2"
+TINYUSB_REPO="https://github.com/hathach/tinyusb.git"
+TINYUSB_COMMIT="5217cee5de4cd555018da90f9f1bcc87fb1c1d3a"
 
-required_commands=(git python3 cmake ninja jq flex bison gperf)
+required_commands=(git wget curl python3 cmake ninja jq flex bison gperf patch)
 missing=()
 for command_name in "${required_commands[@]}"; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -30,8 +32,30 @@ Install the ESP-IDF/lib-builder prerequisites in WSL, then rerun the task:
   sudo apt-get install -y git wget curl libssl-dev libncurses-dev flex bison gperf \
     python3 python3-pip python3-setuptools python3-serial python3-click \
     python3-cryptography python3-future python3-pyparsing python3-pyelftools \
-    cmake ninja-build ccache jq
+    cmake ninja-build ccache jq patch python3-venv libusb-1.0-0
 DEPS
+    exit 2
+fi
+
+# ESP-IDF's bundled OpenOCD binary links against libusb on Linux. Catch the
+# missing runtime before IDF spends time validating/reinstalling its toolchain.
+if ! ldconfig -p 2>/dev/null | grep -Fq 'libusb-1.0.so.0'; then
+    cat >&2 <<'LIBUSB'
+ERROR: OpenOCD runtime dependency libusb is missing in WSL.
+Install it, then rerun the task:
+  sudo apt-get install -y libusb-1.0-0
+LIBUSB
+    exit 2
+fi
+
+# ESP-IDF 5.1 creates its own Python virtual environment. Ubuntu can provide
+# python3 without ensurepip, so catch that before the expensive IDF setup.
+if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+    cat >&2 <<'VENV'
+ERROR: Python venv support is missing in WSL.
+Install it, then rerun the task:
+  sudo apt-get install -y python3-venv
+VENV
     exit 2
 fi
 
@@ -88,12 +112,32 @@ PY
 
 pushd "$BUILDER_DIR" >/dev/null
 
+# The pinned builder's tools/update-components.sh follows TinyUSB master. That
+# was acceptable in 2024, but current TinyUSB has merged usbd_control.c into
+# usbd.c and no longer matches this builder's CMakeLists. Pin the stable TinyUSB
+# 0.17.0 release that was current when this builder revision was made.
+TINYUSB_DIR="$BUILDER_DIR/components/arduino_tinyusb/tinyusb"
+if [[ ! -d "$TINYUSB_DIR/.git" ]]; then
+    git clone "$TINYUSB_REPO" "$TINYUSB_DIR"
+else
+    git -C "$TINYUSB_DIR" fetch --all --tags --prune
+fi
+git -C "$TINYUSB_DIR" reset --hard
+git -C "$TINYUSB_DIR" clean -xfd
+git -C "$TINYUSB_DIR" checkout --detach "$TINYUSB_COMMIT"
+if [[ "$(git -C "$TINYUSB_DIR" rev-parse HEAD)" != "$TINYUSB_COMMIT" ]]; then
+    echo "ERROR: TinyUSB did not pin to $TINYUSB_COMMIT" >&2
+    exit 3
+fi
+if [[ ! -f "$TINYUSB_DIR/src/device/usbd_control.c" ]]; then
+    echo "ERROR: pinned TinyUSB is missing src/device/usbd_control.c required by this builder." >&2
+    exit 3
+fi
+
 # The pinned builder's tools/install-arduino.sh performs a `git pull` after
 # checking out AR_BRANCH. When AR_BRANCH is the 3.0.7 tag, Git is detached and
-# that pull fails. Reproduce the builder setup explicitly so both Arduino and
-# IDF stay pinned to the exact commits, then use build.sh -s to skip its updater.
-./tools/update-components.sh
-
+# that pull fails. Reproduce the builder setup explicitly so Arduino, TinyUSB,
+# and IDF stay pinned to exact commits, then use build.sh -s to skip its updater.
 ARDUINO_DIR="$BUILDER_DIR/components/arduino"
 if [[ ! -d "$ARDUINO_DIR/.git" ]]; then
     git clone https://github.com/espressif/arduino-esp32.git "$ARDUINO_DIR"
@@ -111,12 +155,62 @@ fi
 export IDF_PATH="$BUILDER_DIR/esp-idf"
 export IDF_BRANCH
 export IDF_COMMIT="$IDF_COMMIT_EXPECTED"
-# shellcheck disable=SC1091
-source "$BUILDER_DIR/tools/install-esp-idf.sh"
+
+# Set up the exact IDF revision directly instead of sourcing the pinned
+# builder's install-esp-idf.sh. That old helper applies an ESP32-C6-only
+# provisioning patch which no longer matches this exact IDF commit and is not
+# relevant to the ESP32-S3 library build. Resetting both the IDF tree and its
+# submodules makes reruns deterministic after any interrupted patch attempt.
+if [[ ! -d "$IDF_PATH/.git" ]]; then
+    git clone https://github.com/espressif/esp-idf.git -b "$IDF_BRANCH" "$IDF_PATH"
+else
+    git -C "$IDF_PATH" fetch --all --tags --prune
+fi
+git -C "$IDF_PATH" reset --hard
+git -C "$IDF_PATH" clean -xfd
+git -C "$IDF_PATH" checkout --detach "$IDF_COMMIT_EXPECTED"
+git -C "$IDF_PATH" submodule sync --recursive
+git -C "$IDF_PATH" submodule update --init --recursive --force
 if [[ "$(git -C "$IDF_PATH" rev-parse HEAD)" != "$IDF_COMMIT_EXPECTED" ]]; then
     echo "ERROR: ESP-IDF did not pin to $IDF_COMMIT_EXPECTED" >&2
     exit 3
 fi
+
+# Match the pinned builder's supported IDF setup and its still-applicable
+# compatibility patches. Tool and Python-environment installs are cached by
+# ESP-IDF, so reruns do not redownload successful installations.
+"$IDF_PATH/install.sh"
+
+apply_builder_patch() {
+    local patch_name="$1"
+    local patch_path="$BUILDER_DIR/patches/$patch_name"
+    echo "Applying lib-builder compatibility patch: $patch_name"
+    (cd "$IDF_PATH" && patch -p1 -N -i "$patch_path")
+}
+
+apply_builder_patch "esp32s2_i2c_ll_master_init.diff"
+apply_builder_patch "mmu_map.diff"
+apply_builder_patch "lwip_max_tcp_pcb.diff"
+
+# The builder's esp32c6_provisioning_bluedroid.diff expects an older conditional.
+# At IDF 632e0c2a..., simple_ble already uses BLE mode for every non-BR/EDR/BTDM
+# target, which includes ESP32-C6. Verify that semantic replacement before
+# deliberately skipping the obsolete C6-only patch.
+SIMPLE_BLE="$IDF_PATH/components/protocomm/src/simple_ble/simple_ble.c"
+if ! grep -Fq '#else  //For all other chips supporting BLE Only' "$SIMPLE_BLE" || \
+   ! grep -Fq 'ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);' "$SIMPLE_BLE"; then
+    echo "ERROR: pinned IDF simple_ble fallback changed; refusing to skip the obsolete ESP32-C6 patch." >&2
+    exit 3
+fi
+echo "Skipping obsolete ESP32-C6 provisioning patch; pinned IDF already has the BLE-only fallback."
+
+# The pinned 2024 IDF export scripts assume ordinary Bash unset-variable
+# semantics. Relax nounset only while sourcing that external environment, then
+# restore strict mode for our wrapper.
+# shellcheck disable=SC1091
+set +u
+source "$IDF_PATH/export.sh"
+set -u
 
 # Build the common ESP32-S3 IDF libraries first. This produces libesp_lcd.a.
 # -s is intentional: the exact Arduino + IDF revisions were installed above,

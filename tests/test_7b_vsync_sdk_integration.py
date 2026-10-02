@@ -68,17 +68,49 @@ def test_builder_is_pinned_to_3_0_7_h_identity_and_exact_idf_commit():
     assert 'IDF_BRANCH="release/v5.1"' in BUILDER
     assert 'IDF_COMMIT_EXPECTED="632e0c2a9fc7c754db4135dabb67f7fc6aa9fb87"' in BUILDER
     assert "41f67e1c11f68b57d651955c93b63d6a8d35808ce6aff6ba3d1e1476178758f2" in BUILDER
+    assert 'TINYUSB_COMMIT="5217cee5de4cd555018da90f9f1bcc87fb1c1d3a"' in BUILDER
 
+
+
+def test_builder_pins_tinyusb_instead_of_following_master():
+    assert './tools/update-components.sh' not in BUILDER
+    assert 'TINYUSB_REPO="https://github.com/hathach/tinyusb.git"' in BUILDER
+    assert 'checkout --detach "$TINYUSB_COMMIT"' in BUILDER
+    assert 'src/device/usbd_control.c' in BUILDER
+    assert 'rev-parse HEAD' in BUILDER
+
+
+def test_builder_checks_openocd_libusb_runtime_early():
+    assert "ldconfig -p" in BUILDER
+    assert "libusb-1.0.so.0" in BUILDER
+    assert "libusb-1.0-0" in BUILDER
 
 
 def test_builder_bypasses_detached_arduino_tag_pull_bug():
     assert 'checkout --detach "$ARDUINO_CORE_COMMIT"' in BUILDER
-    assert 'source "$BUILDER_DIR/tools/install-esp-idf.sh"' in BUILDER
     assert BUILDER.count("./build.sh \\\n    -s") >= 2
     assert '-A "$ARDUINO_CORE"' not in BUILDER
     assert 'IDF_COMMIT_EXPECTED' in BUILDER
     assert '-e components/arduino/' in BUILDER
     assert '-e components/arduino_tinyusb/tinyusb/' in BUILDER
+
+
+def test_builder_sets_up_pinned_idf_without_obsolete_c6_patch():
+    assert 'source "$BUILDER_DIR/tools/install-esp-idf.sh"' not in BUILDER
+    assert 'checkout --detach "$IDF_COMMIT_EXPECTED"' in BUILDER
+    assert 'submodule update --init --recursive --force' in BUILDER
+    assert 'apply_builder_patch "esp32s2_i2c_ll_master_init.diff"' in BUILDER
+    assert 'apply_builder_patch "mmu_map.diff"' in BUILDER
+    assert 'apply_builder_patch "lwip_max_tcp_pcb.diff"' in BUILDER
+    assert 'apply_builder_patch "esp32c6_provisioning_bluedroid.diff"' not in BUILDER
+    assert 'For all other chips supporting BLE Only' in BUILDER
+    assert 'Skipping obsolete ESP32-C6 provisioning patch' in BUILDER
+    assert 'set +u\nsource "$IDF_PATH/export.sh"\nset -u' in BUILDER
+
+
+def test_builder_checks_python_venv_before_expensive_setup():
+    assert "python3 -c 'import ensurepip'" in BUILDER
+    assert 'python3-venv' in BUILDER
 
 def test_builder_preserves_high_perf_settings_and_adds_only_lcd_kconfig():
     assert 'unset_config(common, "COMPILER_OPTIMIZATION_SIZE")' in BUILDER
