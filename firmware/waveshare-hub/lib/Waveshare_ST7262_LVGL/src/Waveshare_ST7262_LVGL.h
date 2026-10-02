@@ -95,7 +95,9 @@
  *
  */
 #ifdef ESP_PLANTS_WAVESHARE_7B
-#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)
+// Diagnostic-only: test whether materially more internal refill margin stops
+// the 7B's permanent vertical roll. The original 7 remains at 10 lines.
+#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 20)
 #else
 #define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)
 #endif

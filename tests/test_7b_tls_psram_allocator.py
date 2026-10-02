@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HUB = ROOT / "firmware/waveshare-hub"
+HUB = ROOT / "firmware" / "waveshare-hub"
 PIO = (HUB / "platformio.ini").read_text(encoding="utf-8")
 TLS = (HUB / "src" / "tls_memory_7b.cpp").read_text(encoding="utf-8")
 BOARD_7B = (HUB / "include" / "waveshare_panel_board_7b.h").read_text(
@@ -40,7 +40,7 @@ def test_existing_ports_and_7b_display_tuning_stay_locked():
     assert "#define ESP_PANEL_LCD_RGB_CLK_HZ (26 * 1000 * 1000)" in BOARD_7B
     assert (
         "#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE "
-        "(ESP_PANEL_LCD_WIDTH * 10)"
+        "(ESP_PANEL_LCD_WIDTH * 20)"
     ) in BOARD_7B
 
 
