@@ -75,9 +75,9 @@ def test_ports_and_runtime_nvs_guard_are_preserved():
     assert "#ifdef ESP_PLANTS_WAVESHARE_7B" in FLASH_CPP
 
 
-def test_7b_only_uses_double_buffer_direct_mode():
-    expected = """#ifdef ESP_PLANTS_WAVESHARE_7B\n#define LVGL_PORT_AVOID_TEARING_MODE (3)\n#else\n#define LVGL_PORT_AVOID_TEARING_MODE (2)\n#endif"""
-    assert expected in DRIVER_H
+def test_both_waveshare_variants_use_proven_triple_buffer_full_refresh_mode():
+    assert "#define LVGL_PORT_AVOID_TEARING_MODE (2)" in DRIVER_H
+    assert "#define LVGL_PORT_AVOID_TEARING_MODE (3)" not in DRIVER_H
     assert "#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)" in DRIVER_H
     assert "CONFIG_SPIRAM_FETCH_INSTRUCTIONS" in DRIVER_CPP
     assert "CONFIG_SPIRAM_RODATA" in DRIVER_CPP

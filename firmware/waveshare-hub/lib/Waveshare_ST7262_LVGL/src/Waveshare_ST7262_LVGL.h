@@ -80,11 +80,11 @@
  *      - 3: LCD double-buffer & LVGL direct-mode (recommended)
  *
  */
-#ifdef ESP_PLANTS_WAVESHARE_7B
-#define LVGL_PORT_AVOID_TEARING_MODE (3)
-#else
+// Hardware testing on the 1024x600 7B showed repeated vertical RGB drift in
+// double-buffer/direct mode during ordinary page redraws and HTTPS load. Keep
+// both Waveshare variants on the proven triple-buffer/full-refresh path; the
+// runtime flash guard separately resynchronizes the 7B after flash activity.
 #define LVGL_PORT_AVOID_TEARING_MODE (2)
-#endif
 
 #if LVGL_PORT_AVOID_TEARING_MODE != 0
 /**
