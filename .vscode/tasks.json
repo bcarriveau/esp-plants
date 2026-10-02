@@ -64,6 +64,26 @@
       ]
     },
     {
+      "label": "ESP PLANTS: Upload Waveshare DIAG",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
+        "-e",
+        "waveshare_s3_touch_lcd_7_diag",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
       "label": "ESP PLANTS: Monitor Waveshare",
       "type": "process",
       "command": "pio",
@@ -128,6 +148,26 @@
         "${workspaceFolder}\\firmware\\waveshare-hub",
         "-e",
         "waveshare_s3_touch_lcd_7b",
+        "-t",
+        "upload"
+      ],
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP PLANTS: Upload Waveshare 7B DIAG",
+      "type": "process",
+      "command": "pio",
+      "windows": {
+        "command": "${env:USERPROFILE}\\.platformio\\penv\\Scripts\\platformio.exe"
+      },
+      "args": [
+        "run",
+        "-d",
+        "${workspaceFolder}\\firmware\\waveshare-hub",
+        "-e",
+        "waveshare_s3_touch_lcd_7b_diag",
         "-t",
         "upload"
       ],
