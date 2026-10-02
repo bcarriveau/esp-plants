@@ -36,6 +36,11 @@ static constexpr int kSdkconfigDataCacheLine64B = 1;
 #else
 static constexpr int kSdkconfigDataCacheLine64B = 0;
 #endif
+#if defined(CONFIG_LCD_RGB_RESTART_IN_VSYNC) && CONFIG_LCD_RGB_RESTART_IN_VSYNC
+static constexpr int kSdkconfigLcdRestartInVsync = 1;
+#else
+static constexpr int kSdkconfigLcdRestartInVsync = 0;
+#endif
 static SemaphoreHandle_t lvgl_mux = nullptr; // LVGL mutex
 static TaskHandle_t lvgl_task_handle = nullptr;
 
@@ -854,9 +859,9 @@ bool lvgl_port_unlock(void)
 void lcd_init(void)
 {
     pinMode(GPIO_INPUT_IO_4, OUTPUT);
-    Serial.printf("[display] sdkconfig xip_fetch=%d xip_rodata=%d data_cache_line_64b=%d\n",
+    Serial.printf("[display] sdkconfig xip_fetch=%d xip_rodata=%d data_cache_line_64b=%d lcd_restart_in_vsync=%d\n",
                   kSdkconfigXipFetch, kSdkconfigXipRodata,
-                  kSdkconfigDataCacheLine64B);
+                  kSdkconfigDataCacheLine64B, kSdkconfigLcdRestartInVsync);
 #ifdef ESP_PLANTS_WAVESHARE_7B
     Serial.println("Initialize 7B IO extension");
     seven_b_io_init();

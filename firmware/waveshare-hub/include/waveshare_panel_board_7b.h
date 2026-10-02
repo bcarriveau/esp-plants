@@ -40,7 +40,7 @@
 // Conservative first bring-up: one PSRAM framebuffer. Waveshare's demo uses
 // two; ESP PLANTS will only increase this after memory/TLS/OTA stress testing.
 #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM (1)
-#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 10)
+#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)
 
 #define ESP_PANEL_LCD_RGB_IO_HSYNC (46)
 #define ESP_PANEL_LCD_RGB_IO_VSYNC (3)

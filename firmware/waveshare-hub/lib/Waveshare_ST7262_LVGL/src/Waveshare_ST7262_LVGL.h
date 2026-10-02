@@ -94,7 +94,11 @@
  * This feature will occupy `LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE * 2 * bytes_per_pixel` of SRAM memory.
  *
  */
+#ifdef ESP_PLANTS_WAVESHARE_7B
+#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)
+#else
 #define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)
+#endif
 /**
  * When avoid tearing is enabled, the LVGL software rotation `lv_disp_set_rotation()` is not supported.
  * But users can set the rotation degree(0/90/180/270) here, but this funciton will extremely reduce FPS.

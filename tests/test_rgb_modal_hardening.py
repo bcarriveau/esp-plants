@@ -7,6 +7,7 @@ HUB = ROOT / "firmware" / "waveshare-hub"
 MAIN = (HUB / "src" / "main.cpp").read_text()
 DRIVER_H = (HUB / "lib" / "Waveshare_ST7262_LVGL" / "src" / "Waveshare_ST7262_LVGL.h").read_text()
 DRIVER_CPP = (HUB / "lib" / "Waveshare_ST7262_LVGL" / "src" / "Waveshare_ST7262_LVGL.cpp").read_text()
+BOARD_7B = (HUB / "include" / "waveshare_panel_board_7b.h").read_text()
 FLASH_CPP = (HUB / "src" / "runtime_flash_guard.cpp").read_text()
 PLATFORMIO = (HUB / "platformio.ini").read_text()
 
@@ -78,10 +79,22 @@ def test_ports_and_runtime_nvs_guard_are_preserved():
 def test_both_waveshare_variants_use_proven_triple_buffer_full_refresh_mode():
     assert "#define LVGL_PORT_AVOID_TEARING_MODE (2)" in DRIVER_H
     assert "#define LVGL_PORT_AVOID_TEARING_MODE (3)" not in DRIVER_H
-    assert "#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)" in DRIVER_H
+    bounce = """#ifdef ESP_PLANTS_WAVESHARE_7B
+#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)
+#else
+#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)
+#endif"""
+    assert bounce in DRIVER_H
+    # IDF 5.1 requires fb_size % (2 * bounce_size) == 0. 15 lines is legal
+    # for 1024x600 while keeping the original 800x480 board at 10 lines.
+    assert 600 % (2 * 15) == 0
+    assert 480 % (2 * 10) == 0
+    assert "#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)" in BOARD_7B
     assert "CONFIG_SPIRAM_FETCH_INSTRUCTIONS" in DRIVER_CPP
     assert "CONFIG_SPIRAM_RODATA" in DRIVER_CPP
     assert "CONFIG_ESP32S3_DATA_CACHE_LINE_64B" in DRIVER_CPP
+    assert "CONFIG_LCD_RGB_RESTART_IN_VSYNC" in DRIVER_CPP
+    assert "lcd_restart_in_vsync=%d" in DRIVER_CPP
 
 
 def test_ui_callbacks_defer_preferences_writes():
