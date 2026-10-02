@@ -214,10 +214,13 @@ set -u
 
 # The lib-builder's idf-libs and mem-variant convenience targets both depend
 # on the complete application ELF. That needlessly compiles thousands of
-# unrelated managed components (TensorFlow Lite, Matter, speech, etc.) and
-# makes this two-library experiment vulnerable to upstream component drift.
-# Configure the exact same S3 SDK variants, then ask CMake/Ninja only for the
-# two component archives required by the VSYNC experiment.
+# unrelated managed components. Configure the exact same S3 SDK variants, then
+# build only esp_lcd and generate the matching qio_opi sections.ld.
+#
+# IMPORTANT: CONFIG_GDMA_CTRL_FUNC_IN_IRAM changes linker placement, not the
+# gdma.c implementation. Keep Arduino's stock libesp_hw_support.a so all of its
+# early-boot PSRAM/MSPI code remains bit-for-bit stock, and replace only the
+# generated sections.ld that tells the linker to place gdma start/reset in IRAM.
 export IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS=1
 STAGE_DIR="$WORK_ROOT/vsync-stage"
 rm -rf "$STAGE_DIR"
@@ -234,27 +237,30 @@ if [[ ! -f "$COMMON_LCD_BUILD" ]]; then
 fi
 cp "$COMMON_LCD_BUILD" "$STAGE_DIR/common/libesp_lcd_vsync.a"
 
-# Reconfigure only for the stock qio + 80 MHz flash + OPI-PSRAM memory
-# variant, then compile esp_hw_support. CONFIG_LCD_RGB_RESTART_IN_VSYNC selects
-# GDMA_CTRL_FUNC_IN_IRAM in this generated config, so this archive contains the
-# matching GDMA ISR-safe implementation without building unrelated components.
+# Reconfigure for the stock qio + 80 MHz flash + OPI-PSRAM memory variant.
+# Kconfig selects GDMA_CTRL_FUNC_IN_IRAM from LCD_RGB_RESTART_IN_VSYNC. Generate
+# the linker script for that exact config, but do NOT rebuild esp_hw_support:
+# the stock archive is already compatible and its linker fragment is what moves
+# gdma_start/gdma_reset into IRAM while preserving stock MSPI/PSRAM boot code.
 MEM_CONFIGS="configs/defconfig.common;configs/defconfig.esp32s3;configs/defconfig.debug_default;configs/defconfig.esp_sr;configs/defconfig.qio;configs/defconfig.80m;configs/defconfig.opi_ram"
 rm -rf build sdkconfig
 idf.py -DIDF_TARGET=esp32s3 -DSDKCONFIG_DEFAULTS="$MEM_CONFIGS" reconfigure
-cmake --build build --target __idf_esp_hw_support
-HW_LIB_BUILD="$BUILDER_DIR/build/esp-idf/esp_hw_support/libesp_hw_support.a"
+SECTIONS_BUILD="$BUILDER_DIR/build/esp-idf/esp_system/ld/sections.ld"
+if [[ ! -f "$SECTIONS_BUILD" ]]; then
+    cmake --build build --target __ldgen_output_sections.ld
+fi
 SDKCONFIG_BUILD="$BUILDER_DIR/build/config/sdkconfig.h"
-for required in "$HW_LIB_BUILD" "$SDKCONFIG_BUILD"; do
+for required in "$SECTIONS_BUILD" "$SDKCONFIG_BUILD"; do
     if [[ ! -f "$required" ]]; then
-        echo "ERROR: targeted qio_opi build output missing: $required" >&2
+        echo "ERROR: targeted qio_opi linker/config output missing: $required" >&2
         exit 3
     fi
 done
-cp "$HW_LIB_BUILD" "$STAGE_DIR/qio_opi/libesp_hw_support_vsync.a"
+cp "$SECTIONS_BUILD" "$STAGE_DIR/qio_opi/sections.ld"
 cp "$SDKCONFIG_BUILD" "$STAGE_DIR/qio_opi/include/sdkconfig.h"
 
 COMMON_LCD="$STAGE_DIR/common/libesp_lcd_vsync.a"
-HW_LIB="$STAGE_DIR/qio_opi/libesp_hw_support_vsync.a"
+SECTIONS_LD="$STAGE_DIR/qio_opi/sections.ld"
 SDKCONFIG="$STAGE_DIR/qio_opi/include/sdkconfig.h"
 
 required_config_lines=(
@@ -281,15 +287,18 @@ if ! "$AR_TOOL" t "$COMMON_LCD" | grep -q 'esp_lcd_panel_rgb'; then
     echo "ERROR: rebuilt libesp_lcd.a does not contain the RGB panel driver object" >&2
     exit 4
 fi
-if ! "$AR_TOOL" t "$HW_LIB" | grep -qi 'gdma'; then
-    echo "ERROR: rebuilt qio_opi libesp_hw_support.a does not contain GDMA object(s)" >&2
-    exit 4
-fi
+
+for token in "libesp_hw_support.a" "gdma_start" "gdma_reset" "mspi_timing_tuning"; do
+    if ! grep -Fq "$token" "$SECTIONS_LD"; then
+        echo "ERROR: generated sections.ld is missing required placement token: $token" >&2
+        exit 4
+    fi
+done
 
 rm -rf "$OUTPUT_DIR/common" "$OUTPUT_DIR/qio_opi"
 mkdir -p "$OUTPUT_DIR/common" "$OUTPUT_DIR/qio_opi/include"
 cp "$COMMON_LCD" "$OUTPUT_DIR/common/libesp_lcd_vsync.a"
-cp "$HW_LIB" "$OUTPUT_DIR/qio_opi/libesp_hw_support_vsync.a"
+cp "$SECTIONS_LD" "$OUTPUT_DIR/qio_opi/sections.ld"
 cp "$SDKCONFIG" "$OUTPUT_DIR/qio_opi/include/sdkconfig.h"
 
 python3 - "$OUTPUT_DIR" "$BUILDER_COMMIT" "$ARDUINO_CORE" "$ARDUINO_CORE_COMMIT" "$IDF_COMMIT_EXPECTED" "$STOCK_SDK_SHA256" <<'PY'
@@ -302,7 +311,7 @@ root = Path(sys.argv[1])
 builder_commit, arduino_core, arduino_commit, idf_commit, stock_sha = sys.argv[2:]
 paths = [
     Path("common/libesp_lcd_vsync.a"),
-    Path("qio_opi/libesp_hw_support_vsync.a"),
+    Path("qio_opi/sections.ld"),
     Path("qio_opi/include/sdkconfig.h"),
 ]
 

@@ -123,10 +123,10 @@ def test_builder_preserves_high_perf_settings_and_adds_only_lcd_kconfig():
     assert "#define CONFIG_GDMA_CTRL_FUNC_IN_IRAM 1" in BUILDER
 
 
-def test_builder_targets_only_lcd_and_hw_support_archives():
+def test_builder_outputs_custom_lcd_and_matching_linker_script_only():
     for token in (
         "common/libesp_lcd_vsync.a",
-        "qio_opi/libesp_hw_support_vsync.a",
+        "qio_opi/sections.ld",
         "qio_opi/include/sdkconfig.h",
         "manifest.json",
     ):
@@ -134,14 +134,24 @@ def test_builder_targets_only_lcd_and_hw_support_archives():
     assert "-b idf-libs" not in BUILDER
     assert "-b mem-variant" not in BUILDER
     assert "cmake --build build --target __idf_esp_lcd" in BUILDER
-    assert "cmake --build build --target __idf_esp_hw_support" in BUILDER
+    assert "__idf_esp_hw_support" not in BUILDER
+    assert "libesp_hw_support_vsync.a" not in BUILDER
     assert "configs/defconfig.qio_ram" in BUILDER
     assert "configs/defconfig.opi_ram" in BUILDER
     assert "build/esp-idf/esp_lcd/libesp_lcd.a" in BUILDER
-    assert "build/esp-idf/esp_hw_support/libesp_hw_support.a" in BUILDER
+    assert "build/esp-idf/esp_system/ld/sections.ld" in BUILDER
+    assert "cmake --build build --target __ldgen_output_sections.ld" in BUILDER
     assert "build/config/sdkconfig.h" in BUILDER
     assert "esp_lcd_panel_rgb" in BUILDER
-    assert "grep -qi 'gdma'" in BUILDER
+    assert 'for token in "libesp_hw_support.a" "gdma_start" "gdma_reset" "mspi_timing_tuning"' in BUILDER
+
+
+def test_builder_preserves_stock_hw_support_and_generates_sections_ld():
+    assert "Keep Arduino's stock libesp_hw_support.a" in BUILDER
+    assert "do NOT rebuild esp_hw_support" in BUILDER
+    assert 'cp "$SECTIONS_BUILD" "$STAGE_DIR/qio_opi/sections.ld"' in BUILDER
+    assert 'Path("qio_opi/sections.ld")' in BUILDER
+    assert 'Path("qio_opi/libesp_hw_support_vsync.a")' not in BUILDER
 
 
 def test_builder_avoids_full_elf_and_unrelated_managed_component_compilation():
@@ -152,15 +162,38 @@ def test_builder_avoids_full_elf_and_unrelated_managed_component_compilation():
     assert "IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS=1" in BUILDER
 
 
-def test_platformio_hook_verifies_hashes_config_and_actual_link_map_members():
+def test_platformio_hook_uses_custom_lcd_stock_hw_support_and_generated_sections():
     assert "sha256_file" in HOOK
     assert "CONFIG_LCD_RGB_RESTART_IN_VSYNC 1" in HOOK
     assert "CONFIG_GDMA_CTRL_FUNC_IN_IRAM 1" in HOOK
-    assert 'env.Prepend(LIBS=["esp_lcd_vsync", "esp_hw_support_vsync"])' in HOOK
+    assert 'SECTIONS_LD = MEM_DIR / "sections.ld"' in HOOK
+    assert 'env.Prepend(LIBS=["esp_lcd_vsync"])' in HOOK
+    assert 'env.Prepend(LIBS=["esp_lcd_vsync", "esp_hw_support_vsync"])' not in HOOK
+    assert 'HW_LIB = MEM_DIR / "libesp_hw_support_vsync.a"' not in HOOK
+    assert "replace_sections_linker_script(env)" in HOOK
+    assert "expected to replace exactly one framework sections.ld linker flag" in HOOK
     assert "libesp_lcd_vsync.a(" in HOOK
-    assert "libesp_hw_support_vsync.a(" in HOOK
+    assert "libesp_hw_support.a(" in HOOK
     assert "AddPostAction" in HOOK
 
+
+def test_post_link_guard_rejects_flash_placed_gdma_or_mspi_symbols():
+    for symbol in (
+        "gdma_start",
+        "gdma_reset",
+        "mspi_timing_enter_low_speed_mode",
+        "mspi_timing_config_set_psram_clock",
+    ):
+        assert symbol in HOOK
+    assert "0x40300000 <= address < 0x40400000" in HOOK
+    assert "linked outside S3 IRAM/noflash" in HOOK
+    assert 'build_env.subst("$NM")' in HOOK
+
+
+def test_platformio_post_action_accepts_scons_keyword_env():
+    assert "def verify_link_map(target, source, env):" in HOOK
+    assert 'Path(env.subst("$BUILD_DIR"))' in HOOK
+    assert "def verify_link_map(target, source, build_env):" not in HOOK
 
 def test_overlay_validation_does_not_replace_application_sdkconfig():
     assert "CPPPATH" not in HOOK

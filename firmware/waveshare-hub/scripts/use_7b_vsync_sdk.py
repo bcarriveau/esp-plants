@@ -5,6 +5,7 @@ if env.IsIntegrationDump():
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 from SCons.Script import Exit
@@ -16,7 +17,7 @@ MEM_DIR = SDK_DIR / "qio_opi"
 CONFIG_DIR = MEM_DIR / "include"
 MANIFEST = SDK_DIR / "manifest.json"
 LCD_LIB = COMMON_DIR / "libesp_lcd_vsync.a"
-HW_LIB = MEM_DIR / "libesp_hw_support_vsync.a"
+SECTIONS_LD = MEM_DIR / "sections.ld"
 SDKCONFIG = CONFIG_DIR / "sdkconfig.h"
 
 REQUIRED_CONFIGS = (
@@ -43,7 +44,7 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-for path in (MANIFEST, LCD_LIB, HW_LIB, SDKCONFIG):
+for path in (MANIFEST, LCD_LIB, SECTIONS_LD, SDKCONFIG):
     if not path.is_file():
         fail("missing generated file: %s" % path.relative_to(PROJECT_DIR))
 
@@ -64,7 +65,7 @@ if not manifest.get("gdma_ctrl_func_in_iram"):
     fail("manifest does not assert GDMA control functions in IRAM")
 
 files = manifest.get("files", {})
-for path in (LCD_LIB, HW_LIB, SDKCONFIG):
+for path in (LCD_LIB, SECTIONS_LD, SDKCONFIG):
     rel = path.relative_to(SDK_DIR).as_posix()
     expected = files.get(rel)
     if not expected:
@@ -78,29 +79,110 @@ for token in REQUIRED_CONFIGS:
     if token not in config_text:
         fail("generated sdkconfig.h is missing: %s" % token)
 
-# Keep application/framework compilation on the stock 3.0.7-h sdkconfig.
-# The generated sdkconfig above is validation input for the rebuilt archives,
-# not a global header override. The actual custom code path is proved again
-# after link by checking that members were extracted from both custom archives.
-env.Prepend(LIBPATH=[str(COMMON_DIR), str(MEM_DIR)])
-env.Prepend(LIBS=["esp_lcd_vsync", "esp_hw_support_vsync"])
+sections_text = SECTIONS_LD.read_text(encoding="utf-8", errors="replace")
+for token in ("libesp_hw_support.a", "gdma_start", "gdma_reset", "mspi_timing_tuning"):
+    if token not in sections_text:
+        fail("generated sections.ld is missing required placement token: %s" % token)
 
 
-def verify_link_map(source, target, build_env):
-    build_dir = Path(build_env.subst("$BUILD_DIR"))
+def _is_sections_ld_reference(value):
+    text = str(value).strip().replace("\\", "/").replace('"', "")
+    if text.startswith("-Wl,-T,"):
+        text = text[len("-Wl,-T,"):]
+    elif text.startswith("-T"):
+        text = text[2:]
+    return text == "sections.ld" or text.endswith("/sections.ld")
+
+
+def replace_sections_linker_script(build_env):
+    flags = list(build_env.get("LINKFLAGS", []))
+    replaced = 0
+    updated = []
+    for flag in flags:
+        raw = str(flag).strip()
+        if not _is_sections_ld_reference(raw):
+            updated.append(flag)
+            continue
+        if raw.startswith("-Wl,-T,"):
+            updated.append("-Wl,-T,%s" % SECTIONS_LD)
+        elif raw.startswith("-T"):
+            # Keep -T and the path as separate arguments so Windows paths with
+            # spaces are quoted correctly by SCons.
+            updated.extend(["-T", str(SECTIONS_LD)])
+        else:
+            updated.append(str(SECTIONS_LD))
+        replaced += 1
+    if replaced != 1:
+        fail("expected to replace exactly one framework sections.ld linker flag; found %d" % replaced)
+    build_env.Replace(LINKFLAGS=updated)
+    print("[7b-vsync-sdk] using generated qio_opi sections.ld with GDMA IRAM placement")
+
+
+# Keep application/framework compilation and all stock SDK archives on the
+# shipped 3.0.7-h package. Only the rebuilt esp_lcd archive is overlaid. The
+# generated qio_opi sections.ld adds the Kconfig-selected GDMA IRAM placement
+# while preserving the stock esp_hw_support archive (including early PSRAM/MSPI
+# initialization code).
+replace_sections_linker_script(env)
+env.Prepend(LIBPATH=[str(COMMON_DIR)])
+env.Prepend(LIBS=["esp_lcd_vsync"])
+
+
+def _read_symbol_addresses(elf_path, build_env):
+    nm = build_env.subst("$NM")
+    try:
+        output = subprocess.check_output(
+            [nm, "-n", str(elf_path)], stderr=subprocess.STDOUT,
+            text=True, errors="replace"
+        )
+    except Exception as exc:
+        fail("could not inspect ELF symbols with %s: %s" % (nm, exc))
+    symbols = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 3:
+            try:
+                address = int(parts[0], 16)
+            except ValueError:
+                continue
+            symbols[parts[-1]] = address
+    return symbols
+
+
+def verify_link_map(target, source, env):
+    build_dir = Path(env.subst("$BUILD_DIR"))
     map_files = sorted(build_dir.glob("*.map"))
     if not map_files:
-        fail("link map was not generated; cannot prove custom SDK archives were linked")
+        fail("link map was not generated; cannot prove custom SDK linkage")
     map_text = map_files[0].read_text(encoding="utf-8", errors="replace")
-    required_members = (
-        "libesp_lcd_vsync.a(",
-        "libesp_hw_support_vsync.a(",
+    if "libesp_lcd_vsync.a(" not in map_text:
+        fail("link map does not show extracted members from libesp_lcd_vsync.a")
+    if "libesp_hw_support_vsync.a(" in map_text:
+        fail("obsolete custom esp_hw_support archive is still linked")
+    if "libesp_hw_support.a(" not in map_text:
+        fail("link map does not show stock libesp_hw_support.a")
+
+    elf_path = Path(str(target[0]))
+    symbols = _read_symbol_addresses(elf_path, env)
+    iram_symbols = (
+        "gdma_start",
+        "gdma_reset",
+        "mspi_timing_enter_low_speed_mode",
+        "mspi_timing_config_set_psram_clock",
     )
-    for token in required_members:
-        if token not in map_text:
-            fail("link map does not show extracted members from %s" % token[:-1])
-    print("[7b-vsync-sdk] verified custom esp_lcd + esp_hw_support members in %s" % map_files[0].name)
+    for name in iram_symbols:
+        address = symbols.get(name)
+        if address is None:
+            fail("ELF is missing required symbol: %s" % name)
+        if not (0x40300000 <= address < 0x40400000):
+            fail("%s linked outside S3 IRAM/noflash at 0x%08x" % (name, address))
+
+    print("[7b-vsync-sdk] verified custom esp_lcd + stock esp_hw_support with IRAM GDMA/MSPI placement")
+    print("[7b-vsync-sdk] gdma_start=0x%08x gdma_reset=0x%08x mspi_low_speed=0x%08x" % (
+        symbols["gdma_start"], symbols["gdma_reset"],
+        symbols["mspi_timing_enter_low_speed_mode"],
+    ))
 
 
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.elf", verify_link_map)
-print("[7b-vsync-sdk] custom VSYNC/GDMA SDK overlay verified and enabled")
+print("[7b-vsync-sdk] custom VSYNC LCD + generated linker placement verified and enabled")
