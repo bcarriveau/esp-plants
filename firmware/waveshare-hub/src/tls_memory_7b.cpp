@@ -18,13 +18,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "tls_memory_7b_policy.h"
+
 #if defined(ESP_PLANTS_WAVESHARE_7B)
-
-namespace {
-
-constexpr size_t kTlsPsramThresholdBytes = 4U * 1024U;
-
-}  // namespace
 
 extern "C" void *__real_esp_mbedtls_mem_calloc(size_t n, size_t size);
 
@@ -36,7 +32,7 @@ extern "C" IRAM_ATTR void *__wrap_esp_mbedtls_mem_calloc(size_t n,
   if (size > SIZE_MAX / n) return nullptr;
 
   const size_t bytes = n * size;
-  if (bytes >= kTlsPsramThresholdBytes) {
+  if (bytes >= espplants_tls_memory::kPsramThresholdBytes) {
     void *external = heap_caps_calloc(
         n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (external) return external;

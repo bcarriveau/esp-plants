@@ -26,6 +26,7 @@
 #include "plantlink.h"
 #include "plants_ota_installer.h"
 #include "update_policy.h"
+#include "tls_memory_7b_policy.h"
 
 namespace espplants_update {
 namespace {
@@ -66,15 +67,27 @@ constexpr char kH2HardwareId[] = "m5stack-unit-gateway-h2";
 constexpr char kH2BuildPrefix[] = "ESPPLANTS-H2-";
 constexpr uint32_t kH2MinFirmwareBytes = 64U * 1024U;
 constexpr uint32_t kH2MaxFirmwareBytes = 0xE0000U;
-// Hardware logs show the healthy Waveshare baseline near 82 KB free / 69 KB
-// largest internal block, while the failing TLS/install path collapsed to about
-// 2.5 KB / 1 KB. Keep substantial measured headroom before starting TLS.
+// The 7-inch keeps the original measured fixed gate. The 7B uses a live
+// allocation probe instead: its mbedTLS wrapper routes allocations >= 4 KB to
+// PSRAM, so requiring a 32 KB contiguous internal block is unrelated to the
+// memory pattern TLS actually needs and made the gate brittle across harmless
+// UI changes. Probe multiple simultaneous sub-threshold allocations while
+// preserving an explicit emergency reserve for Wi-Fi/LVGL/RTOS work.
 #if defined(ESP_PLANTS_WAVESHARE_7B)
-constexpr size_t kOtaMinInternalFreeBytes = 47U * 1024U;
+constexpr size_t kOta7bInternalReserveBytes = 16U * 1024U;
+constexpr size_t kOta7bProbeChunkBytes =
+    espplants_tls_memory::kPsramThresholdBytes - 1024U;
+constexpr size_t kOta7bProbeChunkCount = 8U;
+constexpr size_t kOta7bProbeBytes = kOta7bProbeChunkBytes * kOta7bProbeChunkCount;
+constexpr size_t kOtaMinInternalFreeBytes =
+    kOta7bInternalReserveBytes + kOta7bProbeBytes;
+constexpr size_t kOtaMinLargestInternalBlockBytes = 12U * 1024U;
+static_assert(kOta7bProbeChunkBytes < espplants_tls_memory::kPsramThresholdBytes,
+              "7B OTA probe must exercise the internal mbedTLS allocation path");
 #else
 constexpr size_t kOtaMinInternalFreeBytes = 48U * 1024U;
-#endif
 constexpr size_t kOtaMinLargestInternalBlockBytes = 32U * 1024U;
+#endif
 constexpr uint32_t kOtaNetworkWorkerStackBytes = 16U * 1024U;
 constexpr uint32_t kOtaRecoveryWifiTimeoutMs = 20U * 1000U;
 constexpr uint32_t kOtaRecoveryTimeTimeoutMs = 20U * 1000U;
@@ -604,9 +617,41 @@ OtaMemorySnapshot otaMemorySnapshot(const char *stage) {
   return snapshot;
 }
 
+#if defined(ESP_PLANTS_WAVESHARE_7B)
+bool ota7bInternalAllocationProbe() {
+  void *blocks[kOta7bProbeChunkCount]{};
+  size_t allocated = 0;
+  for (; allocated < kOta7bProbeChunkCount; ++allocated) {
+    blocks[allocated] = heap_caps_malloc(
+        kOta7bProbeChunkBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!blocks[allocated]) break;
+  }
+
+  for (size_t i = allocated; i > 0; --i) {
+    heap_caps_free(blocks[i - 1U]);
+  }
+
+  const bool ok = allocated == kOta7bProbeChunkCount;
+  Serial.printf(
+      "[update] OTA 7B internal probe: %u/%u x %u bytes %s; reserve=%u\n",
+      static_cast<unsigned>(allocated),
+      static_cast<unsigned>(kOta7bProbeChunkCount),
+      static_cast<unsigned>(kOta7bProbeChunkBytes), ok ? "PASS" : "FAIL",
+      static_cast<unsigned>(kOta7bInternalReserveBytes));
+  return ok;
+}
+#endif
+
 bool otaMemorySafe(const OtaMemorySnapshot &snapshot) {
-  return snapshot.internalFree >= kOtaMinInternalFreeBytes &&
-         snapshot.largestInternalBlock >= kOtaMinLargestInternalBlockBytes;
+  if (snapshot.internalFree < kOtaMinInternalFreeBytes ||
+      snapshot.largestInternalBlock < kOtaMinLargestInternalBlockBytes) {
+    return false;
+  }
+#if defined(ESP_PLANTS_WAVESHARE_7B)
+  return ota7bInternalAllocationProbe();
+#else
+  return true;
+#endif
 }
 
 bool validStationAddress() {

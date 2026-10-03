@@ -98,11 +98,26 @@ def test_preflight_logs_and_gates_current_internal_heap_and_largest_block():
     assert "heap_caps_get_largest_free_block" in snapshot
     assert "ESP.getFreePsram()" in snapshot
     assert "#if defined(ESP_PLANTS_WAVESHARE_7B)" in source
-    assert "kOtaMinInternalFreeBytes = 47U * 1024U" in source
-    assert "#else\nconstexpr size_t kOtaMinInternalFreeBytes = 48U * 1024U;\n#endif" in source
-    assert "kOtaMinLargestInternalBlockBytes = 32U * 1024U" in source
-    assert "snapshot.internalFree >= kOtaMinInternalFreeBytes" in gate
-    assert "snapshot.largestInternalBlock >= kOtaMinLargestInternalBlockBytes" in gate
+    assert "kOta7bInternalReserveBytes = 16U * 1024U" in source
+    assert "kOta7bProbeChunkCount = 8U" in source
+    assert "kOta7bProbeChunkBytes" in source
+    assert "kOtaMinLargestInternalBlockBytes = 12U * 1024U" in source
+    assert "#else\nconstexpr size_t kOtaMinInternalFreeBytes = 48U * 1024U;\nconstexpr size_t kOtaMinLargestInternalBlockBytes = 32U * 1024U;\n#endif" in source
+    assert "snapshot.internalFree < kOtaMinInternalFreeBytes" in gate
+    assert "snapshot.largestInternalBlock < kOtaMinLargestInternalBlockBytes" in gate
+    assert "ota7bInternalAllocationProbe()" in gate
+
+
+def test_7b_preflight_probes_real_sub_threshold_tls_allocation_shape():
+    source = read(UPDATE)
+    probe = function_body(source, "bool ota7bInternalAllocationProbe(")
+    assert "heap_caps_malloc" in probe
+    assert "MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT" in probe
+    assert "kOta7bProbeChunkBytes" in probe
+    assert "kOta7bProbeChunkCount" in probe
+    assert "heap_caps_free" in probe
+    assert "OTA 7B internal probe" in probe
+    assert "kOta7bProbeChunkBytes < espplants_tls_memory::kPsramThresholdBytes" in source
 
 
 def test_transport_recovery_is_bounded_to_one_retry():

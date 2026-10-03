@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HUB = ROOT / "firmware" / "waveshare-hub"
 PIO = (HUB / "platformio.ini").read_text(encoding="utf-8")
 TLS = (HUB / "src" / "tls_memory_7b.cpp").read_text(encoding="utf-8")
+POLICY = (HUB / "include" / "tls_memory_7b_policy.h").read_text(encoding="utf-8")
 BOARD_7B = (HUB / "include" / "waveshare_panel_board_7b.h").read_text(
     encoding="utf-8"
 )
@@ -27,7 +28,8 @@ def test_tls_large_allocations_move_to_psram_on_7b_only():
     assert "-DESP_PLANTS_WAVESHARE_7B=1" in seven_b
 
     assert "#if defined(ESP_PLANTS_WAVESHARE_7B)" in TLS
-    assert "kTlsPsramThresholdBytes = 4U * 1024U" in TLS
+    assert "kPsramThresholdBytes = 4U * 1024U" in POLICY
+    assert "espplants_tls_memory::kPsramThresholdBytes" in TLS
     assert "MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT" in TLS
     assert "__real_esp_mbedtls_mem_calloc" in TLS
     assert "size > SIZE_MAX / n" in TLS
