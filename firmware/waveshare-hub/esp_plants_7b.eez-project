@@ -794,7 +794,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0
                         }
@@ -932,7 +932,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0
                         }
@@ -1358,7 +1358,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0
                         }
@@ -2740,7 +2740,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0
                         }
@@ -3813,7 +3813,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0
                         }
@@ -4559,7 +4559,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0
                         }
@@ -5353,7 +5353,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0,
                           "pad_left": 0,
@@ -7900,7 +7900,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0,
                           "pad_left": 0,
@@ -8506,7 +8506,7 @@
                     "definition": {
                       "MAIN": {
                         "DEFAULT": {
-                          "bg_color": "#FAFCFB",
+                          "bg_color": "#F3F8F4",
                           "radius": 20,
                           "border_width": 0,
                           "pad_left": 0,

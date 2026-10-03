@@ -69,6 +69,16 @@ static uint8_t seven_b_brightness_level = ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL
 static bool seven_b_display_ready = false;
 static esp_lcd_panel_handle_t seven_b_rgb_panel_handle = nullptr;
 
+// Diagnostic-only counters for the 7B shimmer investigation. The bounce-frame
+// callback runs in ISR context, so only increment plain 32-bit counters there;
+// reporting happens later from the normal LVGL task.
+static volatile uint32_t seven_b_diag_flush_count = 0;
+static volatile uint32_t seven_b_diag_present_count = 0;
+static volatile uint32_t seven_b_diag_present_pointer_change_count = 0;
+static volatile uint32_t seven_b_diag_bounce_frame_finish_count = 0;
+static volatile uint32_t seven_b_diag_framebuffer_commit_count = 0;
+static void *seven_b_diag_last_presented_buffer = nullptr;
+
 static bool seven_b_set_backlight_duty(uint8_t duty_percent)
 {
     // Waveshare 7B brightness is controlled by the IO-extension MCU's
@@ -476,6 +486,9 @@ static void *lvgl_port_flush_next_buf = NULL;
 
 void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    ++seven_b_diag_flush_count;
+#endif
     ESP_PanelLcd *lcd = (ESP_PanelLcd *)drv->user_data;
     const int offsetx1 = area->x1;
     const int offsetx2 = area->x2;
@@ -497,6 +510,14 @@ void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color
     lvgl_port_flush_next_buf = color_map;
 
     /* Switch the current RGB frame buffer to `color_map` */
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    ++seven_b_diag_present_count;
+    if (seven_b_diag_last_presented_buffer != color_map)
+    {
+        ++seven_b_diag_present_pointer_change_count;
+        seven_b_diag_last_presented_buffer = color_map;
+    }
+#endif
     lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)color_map);
 
     lvgl_port_rgb_next_buf = color_map;
@@ -509,9 +530,17 @@ void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color
 IRAM_ATTR bool onRgbVsyncCallback(void *user_data)
 {
     BaseType_t need_yield = pdFALSE;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    // With a non-zero RGB bounce buffer ESP32_Display_Panel attaches this
+    // callback to on_bounce_frame_finish, not raw VSYNC.
+    ++seven_b_diag_bounce_frame_finish_count;
+#endif
 #if LVGL_PORT_FULL_REFRESH && (LVGL_PORT_DISP_BUFFER_NUM == 3) && (LVGL_PORT_ROTATION_DEGREE == 0)
     if (lvgl_port_rgb_next_buf != lvgl_port_rgb_last_buf)
     {
+#ifdef ESP_PLANTS_WAVESHARE_7B
+        ++seven_b_diag_framebuffer_commit_count;
+#endif
         lvgl_port_flush_next_buf = lvgl_port_rgb_last_buf;
         lvgl_port_rgb_last_buf = lvgl_port_rgb_next_buf;
     }
@@ -761,6 +790,53 @@ static void lvgl_port_task(void *arg)
         {
             task_delay_ms = LVGL_PORT_TASK_MIN_DELAY_MS;
         }
+#ifdef ESP_PLANTS_WAVESHARE_7B
+        static uint32_t diag_last_ms = 0;
+        static uint32_t diag_last_flush = 0;
+        static uint32_t diag_last_present = 0;
+        static uint32_t diag_last_pointer_change = 0;
+        static uint32_t diag_last_bounce_finish = 0;
+        static uint32_t diag_last_commit = 0;
+        const uint32_t diag_now_ms = millis();
+        if (diag_last_ms == 0)
+        {
+            diag_last_ms = diag_now_ms;
+        }
+        else if (diag_now_ms - diag_last_ms >= 5000U)
+        {
+            const uint32_t dt_ms = diag_now_ms - diag_last_ms;
+            const uint32_t flush_now = seven_b_diag_flush_count;
+            const uint32_t present_now = seven_b_diag_present_count;
+            const uint32_t pointer_change_now = seven_b_diag_present_pointer_change_count;
+            const uint32_t bounce_finish_now = seven_b_diag_bounce_frame_finish_count;
+            const uint32_t commit_now = seven_b_diag_framebuffer_commit_count;
+            const uint32_t flush_delta = flush_now - diag_last_flush;
+            const uint32_t present_delta = present_now - diag_last_present;
+            const uint32_t pointer_change_delta = pointer_change_now - diag_last_pointer_change;
+            const uint32_t bounce_finish_delta = bounce_finish_now - diag_last_bounce_finish;
+            const uint32_t commit_delta = commit_now - diag_last_commit;
+            const uint32_t flush_hz100 = static_cast<uint32_t>((static_cast<uint64_t>(flush_delta) * 100000ULL) / dt_ms);
+            const uint32_t bounce_hz100 = static_cast<uint32_t>((static_cast<uint64_t>(bounce_finish_delta) * 100000ULL) / dt_ms);
+            Serial.printf(
+                "[display-diag] dt=%lums flush=%lu (%lu.%02lu/s) present=%lu ptr_change=%lu commit=%lu bounce_frame_finish=%lu (%lu.%02lu/s)\n",
+                static_cast<unsigned long>(dt_ms),
+                static_cast<unsigned long>(flush_delta),
+                static_cast<unsigned long>(flush_hz100 / 100U),
+                static_cast<unsigned long>(flush_hz100 % 100U),
+                static_cast<unsigned long>(present_delta),
+                static_cast<unsigned long>(pointer_change_delta),
+                static_cast<unsigned long>(commit_delta),
+                static_cast<unsigned long>(bounce_finish_delta),
+                static_cast<unsigned long>(bounce_hz100 / 100U),
+                static_cast<unsigned long>(bounce_hz100 % 100U));
+            diag_last_ms = diag_now_ms;
+            diag_last_flush = flush_now;
+            diag_last_present = present_now;
+            diag_last_pointer_change = pointer_change_now;
+            diag_last_bounce_finish = bounce_finish_now;
+            diag_last_commit = commit_now;
+        }
+#endif
         vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
     }
 }
