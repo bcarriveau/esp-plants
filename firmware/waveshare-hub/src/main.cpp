@@ -16,6 +16,7 @@
 #include "runtime_flash_guard.h"
 #include "sensor_route_view.h"
 #include "sensor_liveness.h"
+#include "ui_appearance.h"
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #include "ui_7b/screens.h"
 #else
@@ -59,9 +60,11 @@ static_assert(kSetupQrEncodeBufferBytes == 173U,
 #ifdef ESP_PLANTS_WAVESHARE_7B
 constexpr int32_t kUiScaleXNumerator = 128;
 constexpr int32_t kUiScaleYNumerator = 125;
+constexpr bool kDefaultLightAppearance = true;
 #else
 constexpr int32_t kUiScaleXNumerator = 100;
 constexpr int32_t kUiScaleYNumerator = 100;
+constexpr bool kDefaultLightAppearance = false;
 #endif
 constexpr int32_t kUiScaleDenominator = 100;
 
@@ -210,6 +213,7 @@ enum UiPersistenceBits : uint32_t {
   kPersistTemperatureUnit = 1U << 1,
   kPersistPhraseTheme = 1U << 2,
   kPersistDeviceName = 1U << 3,
+  kPersistAppearance = 1U << 4,
 };
 portMUX_TYPE uiPersistenceMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t pendingUiPersistenceBits = 0;
@@ -395,6 +399,8 @@ lv_obj_t *settingsZigbee = nullptr;
 lv_obj_t *settingsPlants = nullptr;
 lv_obj_t *settingsUnit = nullptr;
 lv_obj_t *settingsTheme = nullptr;
+lv_obj_t *settingsAppearance = nullptr;
+bool appearanceRebuildPending = false;
 // Personality selection reuses the existing rename modal/button matrix so
 // it does not add another LVGL object tree.
 espplants_phrases::Theme pendingTheme = espplants_phrases::Theme::MIXED;
@@ -1137,6 +1143,10 @@ void serviceDeferredPersistence() {
     const size_t written = preferences.putString("device_name", deviceName);
     logRuntimePreferenceWrite("device name", written == strlen(deviceName));
   }
+  if (settings & kPersistAppearance) {
+    const size_t written = preferences.putBool("ui_light", espplants_ui_is_light());
+    logRuntimePreferenceWrite("display appearance", written == sizeof(uint8_t));
+  }
 
   for (size_t slot = 0; slot < kMaxSensors; ++slot) {
     if (plants & (1UL << slot)) saveSlot(slot);
@@ -1388,58 +1398,8 @@ PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t s
   return &sensors[slot];
 }
 
-uint32_t uiThemeHex(uint32_t color) {
-#ifdef ESP_PLANTS_WAVESHARE_7B
-  switch (color) {
-    case 0x101814: return 0xFFFFFF;
-    case 0x18231D: return 0xFAFCFB;
-    case 0x0C2518: return 0xF3F8F4;
-    case 0x111A16: return 0xF6F9F7;
-    case 0x151F1A: return 0xF9FBFA;
-    case 0x1E3529: return 0xE1F0E5;
-    case 0x1D2922: return 0xF7FAF8;
-    case 0x233029: return 0xEEF3F0;
-    case 0x244F39: return 0xE1EFE5;
-    case 0x3F7A4E: return 0xCFE7D5;
-    case 0x12583A: return 0xDAF0DF;
-    case 0x131C17: return 0xFFFFFF;
-    case 0x304138: return 0xD7E0DA;
-    case 0x405348: return 0xC4D0C8;
-    case 0x2A352E: return 0xE9EEEB;
-    case 0x3A536F: return 0xE6EFF7;
-    case 0x7A4037: return 0xF3DCD7;
-    case 0x8E493E: return 0xF3DAD5;
-    case 0xFFF4EE: return 0x7A3028;
-    case 0xF7EDE9: return 0x7A3028;
-    case 0xE5ECE7: return 0x16221B;
-    case 0xB7C8BC: return 0x4A5C51;
-    case 0xC1D0C6: return 0x3D5044;
-    case 0x8DA695: return 0x617268;
-    case 0xAABBAF: return 0x526459;
-    case 0xCBE6D2: return 0x2F6F45;
-    case 0xD1DED5: return 0x405248;
-    case 0x9DB5A5: return 0x596D60;
-    case 0xA5C3AD: return 0x4F6D59;
-    case 0x85D892: return 0x2F7B48;
-    case 0xB4FFCD: return 0x1F6B39;
-    case 0x93A69A: return 0x64766B;
-    case 0xF2C66D: return 0x986300;
-    case 0xE2B276: return 0x875900;
-    case 0x3FFF9B: return 0x5FA979;
-    case 0x8DD39C: return 0x7EB68C;
-    case 0x3A2723: return 0xFBEAE6;
-    case 0x3A3023: return 0xFAF3E5;
-    case 0x4A2924: return 0xF5DDD8;
-    case 0x3E7A50: return 0xCFE7D5;
-    case 0x26342D: return 0xEDF2EF;
-    default: break;
-  }
-#endif
-  return color;
-}
-
 lv_color_t uiColorHex(uint32_t color) {
-  return lv_color_hex(uiThemeHex(color));
+  return espplants_ui_color(color);
 }
 
 lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
@@ -1455,6 +1415,7 @@ lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
 }
 
 void refreshUi(bool force = false, bool alreadyInLvglContext = false);
+void buildUi(Page initialPage = Page::Home);
 
 void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **value,
             const lv_font_t *font = &lv_font_montserrat_28) {
@@ -1756,6 +1717,42 @@ void unitEvent(lv_event_t *event) {
   dirty.home = true;
   dirty.plant = true;
   dirty.settings = true;
+}
+
+void applyAppearanceAsync(void *userData) {
+  (void)userData;
+  const Page restorePage = currentPage;
+  homeFirstLogicalIndex = kMaxSensors;
+  allFirstLogicalIndex = kMaxSensors;
+  advancedFirstLogicalIndex = kMaxInfrastructure;
+  homeVirtualBinding = false;
+  allVirtualBinding = false;
+  advancedVirtualBinding = false;
+
+  // Do not keep two complete LVGL trees alive while changing appearance. The
+  // 7B has deliberately tight internal-RAM headroom, so load a tiny transition
+  // screen, delete the old tree, then rebuild the existing UI in the new palette.
+  lv_obj_t *oldScreen = lv_scr_act();
+  lv_obj_t *transition = lv_obj_create(nullptr);
+  lv_obj_clear_flag(transition, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_color(transition, uiColorHex(0x101814), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(transition, LV_OPA_COVER, LV_PART_MAIN);
+  lv_scr_load(transition);
+  if (oldScreen && oldScreen != transition) lv_obj_del(oldScreen);
+
+  buildUi(restorePage);
+  appearanceRebuildPending = false;
+}
+
+void appearanceEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || appearanceRebuildPending) return;
+  const bool light = !espplants_ui_is_light();
+  espplants_ui_set_light(light);
+  queueUiPersistence(kPersistAppearance);
+  appearanceRebuildPending = true;
+  Serial.printf("[settings] display appearance=%s; save deferred\n",
+                light ? "LIGHT" : "DARK");
+  lv_async_call(applyAppearanceAsync, nullptr);
 }
 
 static const char *kPersonalityMap[] = {
@@ -2835,6 +2832,7 @@ void buildSettings(lv_obj_t *screen) {
   settingsZigbee = objects.settings_zigbee;
   settingsUnit = objects.settings_unit;
   settingsTheme = objects.settings_theme;
+  settingsAppearance = objects.settings_appearance;
   settingsPair = objects.settings_pair;
 
   lv_obj_add_event_cb(objects.settings_device_button, deviceNameEvent,
@@ -2851,6 +2849,8 @@ void buildSettings(lv_obj_t *screen) {
   lv_obj_add_event_cb(objects.settings_unit_button, unitEvent,
                       LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(objects.settings_theme_button, themeEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.settings_appearance_button, appearanceEvent,
                       LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(objects.settings_pair_button, pairEvent,
                       LV_EVENT_CLICKED, nullptr);
@@ -3063,7 +3063,7 @@ void buildPairDialog(lv_obj_t *screen) {
   lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
 }
 
-void buildUi() {
+void buildUi(Page initialPage) {
   lv_obj_t *oldScreen = lv_scr_act();
   create_screen_home();
   lv_obj_t *screen = objects.home;
@@ -3080,7 +3080,7 @@ void buildUi() {
   buildRename(screen);
   buildPairDialog(screen);
   buildUpdateDialog(screen);
-  showPage(Page::Home);
+  showPage(initialPage);
   lv_scr_load(screen);
   if (oldScreen && oldScreen != screen) lv_obj_del(oldScreen);
   logLvglMemory("build-ui");
@@ -3403,6 +3403,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
       label(settingsUnit, useFahrenheit ? "°F" : "°C");
       snprintf(text, sizeof(text), "%s  >", espplants_phrases::themeName(phraseTheme));
       label(settingsTheme, text);
+      label(settingsAppearance, espplants_ui_is_light() ? "LIGHT" : "DARK");
       if (permitJoinRemaining)
         snprintf(text, sizeof(text), "PAIR %us", permitJoinRemaining);
       else
@@ -3924,6 +3925,7 @@ void setup() {
     preferences.begin("espplants", false);
   }
   useFahrenheit = preferences.getBool("fahrenheit", true);
+  espplants_ui_set_light(preferences.getBool("ui_light", kDefaultLightAppearance));
   brightnessLevel = preferences.getUChar("bright_lvl", 5);
   if (brightnessLevel < 1 || brightnessLevel > 5) brightnessLevel = 5;
   {
@@ -3936,6 +3938,8 @@ void setup() {
   String savedDeviceName = preferences.getString("device_name", "ESP PLANTS");
   savedDeviceName.toCharArray(deviceName, sizeof(deviceName));
   Serial.printf("[settings] temperature units=%s\n", useFahrenheit ? "F" : "C");
+  Serial.printf("[settings] display appearance=%s\n",
+                espplants_ui_is_light() ? "LIGHT" : "DARK");
   Serial.printf("[settings] device name=\"%s\"\n", deviceName);
   loadRegistry();
   loadInfrastructureRegistry();

@@ -4,6 +4,25 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../ui_appearance.h"
+
+#define ESP_PLANTS_UI_EEZ_SOURCE_LIGHT 0
+
+#if defined(EEZ_LVGL_SIMULATOR)
+static bool simLightAppearance = ESP_PLANTS_UI_EEZ_SOURCE_LIGHT != 0;
+
+void espplants_ui_set_light(bool light) { simLightAppearance = light; }
+bool espplants_ui_is_light(void) { return simLightAppearance; }
+lv_color_t espplants_ui_color(uint32_t color) {
+    return lv_color_hex(espplants_ui_resolve_canonical_hex(color, simLightAppearance));
+}
+lv_color_t espplants_ui_source_color(uint32_t color, bool sourceIsLight) {
+    return lv_color_hex(espplants_ui_resolve_source_hex(color, sourceIsLight, simLightAppearance));
+}
+#endif
+
+#define lv_color_hex(value) espplants_ui_source_color((value), ESP_PLANTS_UI_EEZ_SOURCE_LIGHT)
+
 static int16_t currentScreen = -1;
 
 static lv_obj_t *getLvglObjectFromIndex(int32_t index) {
@@ -210,6 +229,38 @@ static void simBrightnessEvent(lv_event_t *event) {
     if (objects.settings_brightness_label) {
         lv_label_set_text_fmt(objects.settings_brightness_label, "%u", (unsigned)level);
     }
+}
+
+static void simInitNavigation(void);
+
+static void simRebuildAppearance(void *userData) {
+    (void)userData;
+    const SimPage restorePage = simCurrentPage;
+    SimSensor savedSensors[SIM_SENSOR_CAPACITY];
+    memcpy(savedSensors, simSensors, sizeof(savedSensors));
+    const uint8_t savedSelectedSensor = simSelectedSensor;
+    lv_obj_t *oldScreen = lv_scr_act();
+    lv_obj_t *transition = lv_obj_create(0);
+    lv_obj_clear_flag(transition, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(transition, espplants_ui_color(0x101814), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(transition, LV_OPA_COVER, LV_PART_MAIN);
+    lv_scr_load(transition);
+    if (oldScreen && oldScreen != transition) lv_obj_del(oldScreen);
+
+    create_screen_home();
+    simInitNavigation();
+    memcpy(simSensors, savedSensors, sizeof(savedSensors));
+    simSelectedSensor = savedSelectedSensor;
+    simUpdateViews();
+    simShowPage(restorePage);
+    loadScreen(SCREEN_ID_HOME);
+    lv_obj_del(transition);
+}
+
+static void simAppearanceEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    simLightAppearance = !simLightAppearance;
+    lv_async_call(simRebuildAppearance, 0);
 }
 
 static void simOpenUpdateEvent(lv_event_t *event) {
@@ -623,6 +674,7 @@ static void simUpdateSettings(void) {
     snprintf(text, sizeof(text), "READY CH 15 | P %u | R 0", (unsigned)enabled);
     simSetText(objects.settings_zigbee, text);
     simSetText(objects.settings_pair, "ADD SENSOR");
+    simSetText(objects.settings_appearance, simLightAppearance ? "LIGHT" : "DARK");
 }
 
 static void simUpdateHeader(void) {
@@ -902,6 +954,8 @@ static void simInitNavigation(void) {
                         LV_EVENT_CLICKED, 0);
     lv_obj_add_event_cb(objects.settings_brightness_button, simBrightnessEvent,
                         LV_EVENT_CLICKED, 0);
+    lv_obj_add_event_cb(objects.settings_appearance_button, simAppearanceEvent,
+                        LV_EVENT_CLICKED, 0);
     lv_obj_add_event_cb(objects.header_update_button, simOpenUpdateEvent,
                         LV_EVENT_CLICKED, 0);
     lv_obj_add_event_cb(objects.update_close_button, simCloseUpdateEvent,
@@ -963,3 +1017,5 @@ void ui_tick(void) {
         tick_screen(currentScreen);
     }
 }
+
+#undef lv_color_hex
