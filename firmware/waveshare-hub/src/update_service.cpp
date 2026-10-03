@@ -69,7 +69,11 @@ constexpr uint32_t kH2MaxFirmwareBytes = 0xE0000U;
 // Hardware logs show the healthy Waveshare baseline near 82 KB free / 69 KB
 // largest internal block, while the failing TLS/install path collapsed to about
 // 2.5 KB / 1 KB. Keep substantial measured headroom before starting TLS.
+#if defined(ESP_PLANTS_WAVESHARE_7B)
+constexpr size_t kOtaMinInternalFreeBytes = 47U * 1024U;
+#else
 constexpr size_t kOtaMinInternalFreeBytes = 48U * 1024U;
+#endif
 constexpr size_t kOtaMinLargestInternalBlockBytes = 32U * 1024U;
 constexpr uint32_t kOtaNetworkWorkerStackBytes = 16U * 1024U;
 constexpr uint32_t kOtaRecoveryWifiTimeoutMs = 20U * 1000U;

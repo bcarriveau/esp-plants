@@ -97,7 +97,9 @@ def test_preflight_logs_and_gates_current_internal_heap_and_largest_block():
     assert "heap_caps_get_minimum_free_size" in snapshot
     assert "heap_caps_get_largest_free_block" in snapshot
     assert "ESP.getFreePsram()" in snapshot
-    assert "kOtaMinInternalFreeBytes = 48U * 1024U" in source
+    assert "#if defined(ESP_PLANTS_WAVESHARE_7B)" in source
+    assert "kOtaMinInternalFreeBytes = 47U * 1024U" in source
+    assert "#else\nconstexpr size_t kOtaMinInternalFreeBytes = 48U * 1024U;\n#endif" in source
     assert "kOtaMinLargestInternalBlockBytes = 32U * 1024U" in source
     assert "snapshot.internalFree >= kOtaMinInternalFreeBytes" in gate
     assert "snapshot.largestInternalBlock >= kOtaMinLargestInternalBlockBytes" in gate
@@ -245,8 +247,10 @@ def test_boot_partition_switch_only_occurs_after_complete_validation():
     assert "esp_ota_set_boot_partition" not in finish
 
 
-def test_com11_is_preserved():
-    assert "upload_port = COM11" in read(PIO)
+def test_waveshare_upload_ports_are_preserved():
+    pio = read(PIO)
+    assert "upload_port = COM11" in pio
+    assert "upload_port = COM13" in pio
 
 
 def test_repeated_attempts_do_not_recreate_network_worker_or_leak_http_clients():
