@@ -1388,14 +1388,68 @@ PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t s
   return &sensors[slot];
 }
 
+uint32_t uiThemeHex(uint32_t color) {
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  switch (color) {
+    case 0x101814: return 0xFFFFFF;
+    case 0x18231D: return 0xFAFCFB;
+    case 0x0C2518: return 0xF3F8F4;
+    case 0x111A16: return 0xF6F9F7;
+    case 0x151F1A: return 0xF9FBFA;
+    case 0x1E3529: return 0xE1F0E5;
+    case 0x1D2922: return 0xF7FAF8;
+    case 0x233029: return 0xEEF3F0;
+    case 0x244F39: return 0xE1EFE5;
+    case 0x3F7A4E: return 0xCFE7D5;
+    case 0x12583A: return 0xDAF0DF;
+    case 0x131C17: return 0xFFFFFF;
+    case 0x304138: return 0xD7E0DA;
+    case 0x405348: return 0xC4D0C8;
+    case 0x2A352E: return 0xE9EEEB;
+    case 0x3A536F: return 0xE6EFF7;
+    case 0x7A4037: return 0xF3DCD7;
+    case 0x8E493E: return 0xF3DAD5;
+    case 0xFFF4EE: return 0x7A3028;
+    case 0xF7EDE9: return 0x7A3028;
+    case 0xE5ECE7: return 0x16221B;
+    case 0xB7C8BC: return 0x4A5C51;
+    case 0xC1D0C6: return 0x3D5044;
+    case 0x8DA695: return 0x617268;
+    case 0xAABBAF: return 0x526459;
+    case 0xCBE6D2: return 0x2F6F45;
+    case 0xD1DED5: return 0x405248;
+    case 0x9DB5A5: return 0x596D60;
+    case 0xA5C3AD: return 0x4F6D59;
+    case 0x85D892: return 0x2F7B48;
+    case 0xB4FFCD: return 0x1F6B39;
+    case 0x93A69A: return 0x64766B;
+    case 0xF2C66D: return 0x986300;
+    case 0xE2B276: return 0x875900;
+    case 0x3FFF9B: return 0x5FA979;
+    case 0x8DD39C: return 0x7EB68C;
+    case 0x3A2723: return 0xFBEAE6;
+    case 0x3A3023: return 0xFAF3E5;
+    case 0x4A2924: return 0xF5DDD8;
+    case 0x3E7A50: return 0xCFE7D5;
+    case 0x26342D: return 0xEDF2EF;
+    default: break;
+  }
+#endif
+  return color;
+}
+
+lv_color_t uiColorHex(uint32_t color) {
+  return lv_color_hex(uiThemeHex(color));
+}
+
 lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
   lv_obj_t *obj = lv_obj_create(parent);
   lv_obj_set_pos(obj, x, y);
   lv_obj_set_size(obj, w, h);
   lv_obj_set_style_radius(obj, 20, 0);
   lv_obj_set_style_border_width(obj, 0, 0);
-  lv_obj_set_style_bg_color(obj, lv_color_hex(0x18231D), 0);
-  lv_obj_set_style_text_color(obj, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_style_bg_color(obj, uiColorHex(0x18231D), 0);
+  lv_obj_set_style_text_color(obj, uiColorHex(0xE5ECE7), 0);
   lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
   return obj;
 }
@@ -1407,12 +1461,12 @@ void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **valu
   lv_obj_t *c = lv_label_create(parent);
   lv_label_set_text(c, caption);
   lv_obj_set_style_text_font(c, &ESP_PLANTS_RUNTIME_FONT_14, 0);
-  lv_obj_set_style_text_color(c, lv_color_hex(0xB7C8BC), 0);
+  lv_obj_set_style_text_color(c, uiColorHex(0xB7C8BC), 0);
   lv_obj_set_pos(c, x, y);
   *value = lv_label_create(parent);
   lv_label_set_text(*value, "--");
   lv_obj_set_style_text_font(*value, font, 0);
-  lv_obj_set_style_text_color(*value, lv_color_hex(0xE5ECE7), 0);
+  lv_obj_set_style_text_color(*value, uiColorHex(0xE5ECE7), 0);
   lv_obj_set_pos(*value, x, y + 19);
 }
 
@@ -1434,8 +1488,8 @@ void showPage(Page page) {
   if (advancedPage) (page == Page::Advanced) ? lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_HIDDEN)
                                              : lv_obj_add_flag(advancedPage, LV_OBJ_FLAG_HIDDEN);
 
-  const lv_color_t active = lv_color_hex(0x1E3529);
-  const lv_color_t idle = lv_color_hex(0x151F1A);
+  const lv_color_t active = uiColorHex(0x1E3529);
+  const lv_color_t idle = uiColorHex(0x151F1A);
   if (navHome) lv_obj_set_style_bg_color(navHome, page == Page::Home ? active : idle, 0);
   if (navAll) lv_obj_set_style_bg_color(navAll, page == Page::All ? active : idle, 0);
   if (navPlant) lv_obj_set_style_bg_color(navPlant, page == Page::Plant ? active : idle, 0);
@@ -1530,7 +1584,7 @@ void refreshHomeVirtualList(bool forceValues = false) {
       staticRowLabel(row.moisture, row.moistureText, sizeof(row.moistureText), moisture);
       lv_obj_set_style_bg_color(
           row.box,
-          lv_color_hex(homeSensor == static_cast<int>(slot) ? 0x1E3529 : 0x1D2922), 0);
+          uiColorHex(homeSensor == static_cast<int>(slot) ? 0x1E3529 : 0x1D2922), 0);
     }
   }
 
@@ -1643,7 +1697,7 @@ void refreshAllVirtualList(bool forceValues = false) {
       const uint32_t rowColor = stale
           ? (lastKnownThirsty ? 0x4A2924 : 0x3A3023)
           : (thirsty ? 0x3A2723 : 0x1D2922);
-      lv_obj_set_style_bg_color(row.box, lv_color_hex(rowColor), 0);
+      lv_obj_set_style_bg_color(row.box, uiColorHex(rowColor), 0);
     }
   }
 
@@ -1750,11 +1804,11 @@ void themeEvent(lv_event_t *event) {
   lv_obj_set_pos(renameKeyboard, uiX(50), uiY(104));
   lv_obj_set_size(renameKeyboard, uiX(700), uiY(320));
   lv_btnmatrix_set_map(renameKeyboard,kPersonalityMap);
-  lv_obj_set_style_bg_color(renameKeyboard,lv_color_hex(0x3F7A4E),
+  lv_obj_set_style_bg_color(renameKeyboard,uiColorHex(0x3F7A4E),
                             LV_PART_ITEMS | LV_STATE_CHECKED);
   lv_obj_set_style_border_width(renameKeyboard,2,
                                 LV_PART_ITEMS | LV_STATE_CHECKED);
-  lv_obj_set_style_border_color(renameKeyboard,lv_color_hex(0x8DD39C),
+  lv_obj_set_style_border_color(renameKeyboard,uiColorHex(0x8DD39C),
                                 LV_PART_ITEMS | LV_STATE_CHECKED);
   refreshPersonalitySelection();
   lv_obj_clear_flag(renameModal,LV_OBJ_FLAG_HIDDEN);
@@ -1956,7 +2010,7 @@ void refreshAdvancedVirtualList(bool forceValues = false) {
       staticRowLabel(row.signal, row.signalText, sizeof(row.signalText), signal);
       lv_obj_set_style_bg_color(
           row.box,
-          lv_color_hex(selectedInfrastructure == static_cast<int>(slot) ? 0x1E3529
+          uiColorHex(selectedInfrastructure == static_cast<int>(slot) ? 0x1E3529
                                                                         : 0x1D2922),
           0);
     }
@@ -2385,7 +2439,7 @@ void refreshPairDialog() {
   lv_obj_move_foreground(pairModal);
 
   char text[180]{};
-  lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x3F7A4E), 0);
+  lv_obj_set_style_bg_color(pairPrimary, uiColorHex(0x3F7A4E), 0);
 
   if (pairDialogState == PairDialogState::Pairing) {
     if (pairInfrastructure) {
@@ -2491,7 +2545,7 @@ void refreshPairDialog() {
       label(pairStatus, "This deletes the plant slot and asks the sensor to leave the Zigbee network.");
     }
     lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(pairPrimary, lv_color_hex(0x8E493E), 0);
+    lv_obj_set_style_bg_color(pairPrimary, uiColorHex(0x8E493E), 0);
     label(pairPrimaryLabel, "REMOVE");
     label(pairSecondaryLabel, "CANCEL");
   }
@@ -2554,7 +2608,7 @@ void buildHome(lv_obj_t *screen) {
     lv_obj_set_size(row.box, uiX(228), espplants_home_virtual_list::kRowHeight);
     lv_obj_set_style_radius(row.box, 12, 0);
     lv_obj_set_style_border_width(row.box, 0, 0);
-    lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_bg_color(row.box, uiColorHex(0x1D2922), 0);
     lv_obj_set_style_pad_all(row.box, 8, 0);
     lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
@@ -2564,7 +2618,7 @@ void buildHome(lv_obj_t *screen) {
     row.nameText[0] = '\0';
     lv_label_set_text_static(row.name, row.nameText);
     lv_obj_set_style_text_font(row.name, &ESP_PLANTS_RUNTIME_FONT_14, 0);
-    lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(row.name, uiColorHex(0xE5ECE7), 0);
     lv_obj_set_width(row.name, uiX(145));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
@@ -2572,16 +2626,16 @@ void buildHome(lv_obj_t *screen) {
     row.moistureText[0] = '\0';
     lv_label_set_text_static(row.moisture, row.moistureText);
     lv_obj_set_style_text_font(row.moisture, &ESP_PLANTS_RUNTIME_FONT_18, 0);
-    lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(row.moisture, uiColorHex(0xE5ECE7), 0);
     lv_obj_align(row.moisture, LV_ALIGN_TOP_RIGHT, uiX(-2), uiY(-2));
 
     row.bar = lv_bar_create(row.box);
     lv_obj_set_pos(row.bar, uiX(2), uiY(30));
     lv_obj_set_size(row.bar, uiX(208), uiY(9));
     lv_bar_set_range(row.bar, 0, 100);
-    lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(row.bar, uiColorHex(0x2A352E), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(row.bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(row.bar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(row.bar, uiColorHex(0x5E9B68), LV_PART_INDICATOR);
   }
 }
 
@@ -2614,7 +2668,7 @@ void buildAll(lv_obj_t *screen) {
     lv_obj_set_size(row.box, uiX(742), espplants_all_virtual_list::kRowHeight);
     lv_obj_set_style_radius(row.box, 10, 0);
     lv_obj_set_style_border_width(row.box, 0, 0);
-    lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_bg_color(row.box, uiColorHex(0x1D2922), 0);
     lv_obj_set_style_pad_all(row.box, 8, 0);
     lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
@@ -2622,28 +2676,28 @@ void buildAll(lv_obj_t *screen) {
 
     row.name = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.name, &ESP_PLANTS_RUNTIME_FONT_16, 0);
-    lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(row.name, uiColorHex(0xE5ECE7), 0);
     lv_obj_set_pos(row.name, uiX(4), uiY(9));
     lv_obj_set_width(row.name, uiX(285));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
 
     row.moisture = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.moisture, &ESP_PLANTS_RUNTIME_FONT_18, 0);
-    lv_obj_set_style_text_color(row.moisture, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(row.moisture, uiColorHex(0xE5ECE7), 0);
     lv_obj_set_pos(row.moisture, uiX(305), uiY(8));
     lv_obj_set_width(row.moisture, uiX(110));
     lv_obj_set_style_text_align(row.moisture, LV_TEXT_ALIGN_CENTER, 0);
 
     row.battery = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.battery, &ESP_PLANTS_RUNTIME_FONT_16, 0);
-    lv_obj_set_style_text_color(row.battery, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(row.battery, uiColorHex(0xE5ECE7), 0);
     lv_obj_set_pos(row.battery, uiX(435), uiY(9));
     lv_obj_set_width(row.battery, uiX(115));
     lv_obj_set_style_text_align(row.battery, LV_TEXT_ALIGN_CENTER, 0);
 
     row.updated = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.updated, &ESP_PLANTS_RUNTIME_FONT_14, 0);
-    lv_obj_set_style_text_color(row.updated, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_style_text_color(row.updated, uiColorHex(0xD1DED5), 0);
     lv_obj_set_pos(row.updated, uiX(565), uiY(10));
     lv_obj_set_width(row.updated, uiX(155));
     lv_obj_set_style_text_align(row.updated, LV_TEXT_ALIGN_CENTER, 0);
@@ -2657,13 +2711,13 @@ void updateMoisturePreferenceSaveState(bool pending) {
 
   if (pending) {
     lv_obj_clear_state(detailPreferenceSaveButton, LV_STATE_DISABLED);
-    lv_obj_set_style_bg_color(detailPreferenceSaveButton, lv_color_hex(0x3E7A50),
+    lv_obj_set_style_bg_color(detailPreferenceSaveButton, uiColorHex(0x3E7A50),
                               LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_opa(detailPreferenceSaveButton, LV_OPA_COVER,
                          LV_PART_MAIN | LV_STATE_DEFAULT);
   } else {
     lv_obj_add_state(detailPreferenceSaveButton, LV_STATE_DISABLED);
-    lv_obj_set_style_bg_color(detailPreferenceSaveButton, lv_color_hex(0x26342D),
+    lv_obj_set_style_bg_color(detailPreferenceSaveButton, uiColorHex(0x26342D),
                               LV_PART_MAIN | LV_STATE_DISABLED);
     lv_obj_set_style_opa(detailPreferenceSaveButton, LV_OPA_50,
                          LV_PART_MAIN | LV_STATE_DISABLED);
@@ -2847,7 +2901,7 @@ void buildAdvanced(lv_obj_t *screen) {
     lv_obj_set_size(row.box, uiX(742), espplants_advanced_virtual_list::kRowHeight);
     lv_obj_set_style_radius(row.box, 10, 0);
     lv_obj_set_style_border_width(row.box, 0, 0);
-    lv_obj_set_style_bg_color(row.box, lv_color_hex(0x1D2922), 0);
+    lv_obj_set_style_bg_color(row.box, uiColorHex(0x1D2922), 0);
     lv_obj_set_style_pad_all(row.box, 8, 0);
     lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
@@ -2855,7 +2909,7 @@ void buildAdvanced(lv_obj_t *screen) {
 
     row.name = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.name, &ESP_PLANTS_RUNTIME_FONT_16, 0);
-    lv_obj_set_style_text_color(row.name, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_color(row.name, uiColorHex(0xE5ECE7), 0);
     lv_obj_set_pos(row.name, uiX(2), uiY(6));
     lv_obj_set_width(row.name, uiX(390));
     lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
@@ -2863,14 +2917,14 @@ void buildAdvanced(lv_obj_t *screen) {
 
     row.status = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.status, &ESP_PLANTS_RUNTIME_FONT_14, 0);
-    lv_obj_set_style_text_color(row.status, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_style_text_color(row.status, uiColorHex(0xD1DED5), 0);
     lv_obj_set_pos(row.status, uiX(430), uiY(7));
     lv_obj_set_width(row.status, uiX(110));
     lv_label_set_text_static(row.status, row.statusText);
 
     row.signal = lv_label_create(row.box);
     lv_obj_set_style_text_font(row.signal, &ESP_PLANTS_RUNTIME_FONT_14, 0);
-    lv_obj_set_style_text_color(row.signal, lv_color_hex(0xD1DED5), 0);
+    lv_obj_set_style_text_color(row.signal, uiColorHex(0xD1DED5), 0);
     lv_obj_set_pos(row.signal, uiX(570), uiY(7));
     lv_obj_set_width(row.signal, uiX(145));
     lv_label_set_text_static(row.signal, row.signalText);
@@ -3013,8 +3067,8 @@ void buildUi() {
   lv_obj_t *oldScreen = lv_scr_act();
   create_screen_home();
   lv_obj_t *screen = objects.home;
-  lv_obj_set_style_bg_color(screen, lv_color_hex(0x101814), LV_PART_MAIN);
-  lv_obj_set_style_text_color(screen, lv_color_hex(0xE5ECE7), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(screen, uiColorHex(0x101814), LV_PART_MAIN);
+  lv_obj_set_style_text_color(screen, uiColorHex(0xE5ECE7), LV_PART_MAIN);
   lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
   buildHeader(screen);
   buildHome(screen);
@@ -3148,10 +3202,10 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
           label(homeAttentionHint, text);
           lv_obj_set_style_text_color(
               homeAttentionHint,
-              lv_color_hex(dryAttention ? 0xF2C66D : 0xE2B276), 0);
+              uiColorHex(dryAttention ? 0xF2C66D : 0xE2B276), 0);
         } else {
           label(homeAttentionHint, "TAP CARD FOR SENSOR DETAILS");
-          lv_obj_set_style_text_color(homeAttentionHint, lv_color_hex(0x93A69A), 0);
+          lv_obj_set_style_text_color(homeAttentionHint, uiColorHex(0x93A69A), 0);
         }
       }
 
@@ -3444,11 +3498,11 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
           strncpy(updateQrPayload, qr, sizeof(updateQrPayload) - 1);
           updateQrPayload[sizeof(updateQrPayload) - 1] = '\0';
           label(updateQrHint, "SCAN QR");
-          lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xA5C3AD), 0);
+          lv_obj_set_style_text_color(updateQrHint, uiColorHex(0xA5C3AD), 0);
         } else {
           updateQrPayload[0] = '\0';
           label(updateQrHint, "QR ERROR - JOIN MANUALLY");
-          lv_obj_set_style_text_color(updateQrHint, lv_color_hex(0xE2B276), 0);
+          lv_obj_set_style_text_color(updateQrHint, uiColorHex(0xE2B276), 0);
         }
       }
       lv_obj_clear_flag(updateQrHint, LV_OBJ_FLAG_HIDDEN);
@@ -3498,11 +3552,11 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
     const bool h2OnlyVisual = actionableUpdate &&
         strstr(espplants_update::statusText(), "H2 update available") != nullptr;
     lv_obj_set_style_text_color(updateStatus,
-        actionableUpdate ? lv_color_hex(0xF2C66D) : lv_color_hex(0xA5C3AD), 0);
+        actionableUpdate ? uiColorHex(0xF2C66D) : uiColorHex(0xA5C3AD), 0);
     lv_obj_set_style_text_color(updateLatestVersion,
-        actionableUpdate && !h2OnlyVisual ? lv_color_hex(0xF2C66D) : lv_color_hex(0xE5ECE7), 0);
+        actionableUpdate && !h2OnlyVisual ? uiColorHex(0xF2C66D) : uiColorHex(0xE5ECE7), 0);
     lv_obj_set_style_text_color(updateH2Version,
-        h2OnlyVisual ? lv_color_hex(0xF2C66D) : lv_color_hex(0x9DB5A5), 0);
+        h2OnlyVisual ? uiColorHex(0xF2C66D) : uiColorHex(0x9DB5A5), 0);
 
     const bool updateBusy =
         espplants_update::checking() || espplants_update::installing();

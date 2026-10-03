@@ -66,7 +66,6 @@ static bool seven_b_set_output(uint8_t pin, bool high)
 }
 
 static uint8_t seven_b_brightness_level = ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL;
-static bool seven_b_pwm_programmed_since_boot = false;
 static bool seven_b_display_ready = false;
 static esp_lcd_panel_handle_t seven_b_rgb_panel_handle = nullptr;
 
@@ -77,20 +76,11 @@ static bool seven_b_set_backlight_duty(uint8_t duty_percent)
     // values dim the backlight. GPIO6 is unrelated to the LCD backlight.
     if (duty_percent > 97) duty_percent = 97;
     const uint8_t pwm = static_cast<uint8_t>((static_cast<uint16_t>(duty_percent) * 255U) / 100U);
-    const bool ok = seven_b_write_register(ESP_PLANTS_7B_IO_PWM_REG, pwm);
-    if (ok) seven_b_pwm_programmed_since_boot = true;
-    return ok;
+    return seven_b_write_register(ESP_PLANTS_7B_IO_PWM_REG, pwm);
 }
 
 static bool seven_b_write_brightness_level(uint8_t level)
 {
-    // At full brightness, match Waveshare's stock 06_LCD demo: on a fresh boot
-    // leave the IO-extension PWM register untouched and use only EXIO2 as the
-    // backlight enable. If PWM was already used this boot, write duty 0 so a
-    // live 1-4 -> 5 change still restores full brightness; the next cold boot
-    // at level 5 returns to the factory no-PWM path.
-    if (level >= 5 && !seven_b_pwm_programmed_since_boot) return true;
-
     const uint8_t brightness_percent = static_cast<uint8_t>(level * 20U);
     const uint8_t duty_percent = static_cast<uint8_t>(100U - brightness_percent);
     return seven_b_set_backlight_duty(duty_percent);
@@ -102,12 +92,13 @@ static bool seven_b_apply_brightness_level(uint8_t level)
     if (level > 5) level = 5;
     seven_b_brightness_level = level;
 
-    // Before panel startup this is only a queued preference. lcd_init() applies
-    // dimmed levels before RGB streaming begins; level 5 leaves EXIO_PWM untouched.
+    // Before panel startup this is only a queued preference. lcd_init() writes
+    // the PWM value before RGB streaming begins, so boot cannot disturb sync.
     if (!seven_b_display_ready) return true;
 
-    // Live dimming is a two-byte IO-extension PWM write only. Do not touch LCD
-    // reset, backlight enable, or GPIO6 here. A fresh level-5 boot bypasses PWM.
+    // Live brightness is a two-byte IO-extension PWM write only. Do not touch
+    // LCD reset, backlight enable, or GPIO6 here; Waveshare's own slider changes
+    // EXIO_PWM live while the RGB panel continues scanning.
     return seven_b_write_brightness_level(level);
 }
 
@@ -918,12 +909,10 @@ void lcd_init(void)
     rgb_bus->configRgbBounceBufferSize(LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE);
 #endif
 #ifdef ESP_PLANTS_WAVESHARE_7B
-    // Apply dimming before RGB streaming starts. At level 5 deliberately do not
-    // touch EXIO_PWM, matching Waveshare's stock LCD demo backlight path.
+    // Program the saved PWM level before RGB streaming starts. Writing EXIO_PWM
+    // after panel->begin() can make this hardware lose vertical lock.
     if (!seven_b_write_brightness_level(seven_b_brightness_level)) {
         Serial.println("[display] 7B initial brightness write failed");
-    } else if (seven_b_brightness_level >= 5 && !seven_b_pwm_programmed_since_boot) {
-        Serial.println("[display] 7B full brightness: factory backlight path, PWM untouched");
     }
 #endif
     panel->begin();
