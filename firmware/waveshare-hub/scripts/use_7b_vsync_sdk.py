@@ -166,6 +166,8 @@ def verify_link_map(target, source, env):
     symbols = _read_symbol_addresses(elf_path, env)
     iram_symbols = (
         "gdma_start",
+        "gdma_stop",
+        "gdma_append",
         "gdma_reset",
         "mspi_timing_enter_low_speed_mode",
         "mspi_timing_config_set_psram_clock",
@@ -178,9 +180,9 @@ def verify_link_map(target, source, env):
             fail("%s linked outside S3 IRAM/noflash at 0x%08x" % (name, address))
 
     print("[7b-vsync-sdk] verified custom esp_lcd + stock esp_hw_support with IRAM GDMA/MSPI placement")
-    print("[7b-vsync-sdk] gdma_start=0x%08x gdma_reset=0x%08x mspi_low_speed=0x%08x" % (
-        symbols["gdma_start"], symbols["gdma_reset"],
-        symbols["mspi_timing_enter_low_speed_mode"],
+    print("[7b-vsync-sdk] gdma_start=0x%08x gdma_stop=0x%08x gdma_append=0x%08x gdma_reset=0x%08x mspi_low_speed=0x%08x" % (
+        symbols["gdma_start"], symbols["gdma_stop"], symbols["gdma_append"],
+        symbols["gdma_reset"], symbols["mspi_timing_enter_low_speed_mode"],
     ))
 
 

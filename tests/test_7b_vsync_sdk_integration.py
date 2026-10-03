@@ -139,19 +139,29 @@ def test_builder_outputs_custom_lcd_and_matching_linker_script_only():
     assert "configs/defconfig.qio_ram" in BUILDER
     assert "configs/defconfig.opi_ram" in BUILDER
     assert "build/esp-idf/esp_lcd/libesp_lcd.a" in BUILDER
-    assert "build/esp-idf/esp_system/ld/sections.ld" in BUILDER
-    assert "cmake --build build --target __ldgen_output_sections.ld" in BUILDER
+    assert "build/esp-idf/esp_system/ld/sections.ld" not in BUILDER
+    assert "cmake --build build --target __ldgen_output_sections.ld" not in BUILDER
     assert "build/config/sdkconfig.h" in BUILDER
     assert "esp_lcd_panel_rgb" in BUILDER
-    assert 'for token in "libesp_hw_support.a" "gdma_start" "gdma_reset" "mspi_timing_tuning"' in BUILDER
+    assert "STOCK_SECTIONS_CANDIDATES" in BUILDER
+    assert "esp32s3/qio_opi/sections.ld" in BUILDER
+    assert "ESP PLANTS 7B VSYNC: CONFIG_GDMA_CTRL_FUNC_IN_IRAM" in BUILDER
+    for symbol in ("gdma_start", "gdma_stop", "gdma_append", "gdma_reset"):
+        assert symbol in BUILDER
 
 
-def test_builder_preserves_stock_hw_support_and_generates_sections_ld():
+def test_builder_preserves_stock_hw_support_and_patches_stock_sections_ld_only():
     assert "Keep Arduino's stock libesp_hw_support.a" in BUILDER
     assert "do NOT rebuild esp_hw_support" in BUILDER
-    assert 'cp "$SECTIONS_BUILD" "$STAGE_DIR/qio_opi/sections.ld"' in BUILDER
+    assert 'PIO_PACKAGES_DIR="$HUB_DIR/.pio-packages"' in BUILDER
+    assert "STOCK_MEM_SDKCONFIG" in BUILDER
+    assert "installed stock qio_opi sdkconfig.h is not the expected 3.0.7-h" in BUILDER
+    assert 'insert_into_output_section(lines, ".iram0.text :", iram_rule)' in BUILDER
+    assert 'insert_into_output_section(lines, ".dram0.data :", dram_rule)' in BUILDER
+    assert "GNU ld consumes an input section at its first matching output rule" in BUILDER
     assert 'Path("qio_opi/sections.ld")' in BUILDER
     assert 'Path("qio_opi/libesp_hw_support_vsync.a")' not in BUILDER
+    assert '"stock_qio_opi_sections_sha256": stock_sections_sha' in BUILDER
 
 
 def test_builder_avoids_full_elf_and_unrelated_managed_component_compilation():
@@ -160,6 +170,7 @@ def test_builder_avoids_full_elf_and_unrelated_managed_component_compilation():
     assert "__idf_espressif__esp-tflite-micro" not in BUILDER
     assert "complete application ELF" in BUILDER
     assert "IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS=1" in BUILDER
+    assert "__ldgen_output_sections.ld" not in BUILDER
 
 
 def test_platformio_hook_uses_custom_lcd_stock_hw_support_and_generated_sections():
@@ -180,6 +191,8 @@ def test_platformio_hook_uses_custom_lcd_stock_hw_support_and_generated_sections
 def test_post_link_guard_rejects_flash_placed_gdma_or_mspi_symbols():
     for symbol in (
         "gdma_start",
+        "gdma_stop",
+        "gdma_append",
         "gdma_reset",
         "mspi_timing_enter_low_speed_mode",
         "mspi_timing_config_set_psram_clock",
