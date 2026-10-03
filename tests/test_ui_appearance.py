@@ -43,8 +43,11 @@ def test_runtime_appearance_is_persisted_with_hardware_specific_defaults():
     assert 'light ? "LIGHT" : "DARK"' in main
     assert "lv_async_call(applyAppearanceAsync, nullptr);" in main
     assert "lv_obj_t *transition = lv_obj_create(nullptr);" in main
-    assert "if (oldScreen && oldScreen != transition) lv_obj_del(oldScreen);" in main
-    assert main.index("lv_obj_del(oldScreen)") < main.index("buildUi(restorePage);")
+    assert "deleteGeneratedUiTree();" in main
+    appearance = main[main.index("void applyAppearanceAsync"): main.index("void appearanceEvent")]
+    assert appearance.index("deleteGeneratedUiTree();") < appearance.index("buildUi(restorePage);")
+    for root in ["home", "all_sensors", "plant_detail", "settings", "advanced_zigbee"]:
+        assert f"if (objects.{root}) lv_obj_del(objects.{root});" in main
     assert "buildUi(restorePage);" in main
 
 

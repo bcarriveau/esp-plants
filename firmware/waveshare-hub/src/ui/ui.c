@@ -42,13 +42,40 @@ void loadScreen(enum ScreensEnum screenId) {
 
 #if defined(EEZ_LVGL_SIMULATOR)
 
-#define SIM_SENSOR_CAPACITY 10
-#define SIM_HOME_ROW_HEIGHT 56
-#define SIM_HOME_ROW_GAP 7
+#if ESP_PLANTS_UI_EEZ_SOURCE_LIGHT
+#define SIM_SCREEN_WIDTH 1024
+#define SIM_SCREEN_HEIGHT 600
+#define SIM_X(value) (((value) * 128 + 50) / 100)
+#define SIM_Y(value) (((value) * 125 + 50) / 100)
+#define SIM_FONT_12 (&lv_font_montserrat_16)
+#define SIM_FONT_14 (&lv_font_montserrat_18)
+#define SIM_FONT_16 (&lv_font_montserrat_20)
+#define SIM_FONT_18 (&lv_font_montserrat_22)
+#define SIM_FONT_24 (&lv_font_montserrat_30)
+#else
+#define SIM_SCREEN_WIDTH 800
+#define SIM_SCREEN_HEIGHT 480
+#define SIM_X(value) (value)
+#define SIM_Y(value) (value)
+#define SIM_FONT_12 (&lv_font_montserrat_12)
+#define SIM_FONT_14 (&lv_font_montserrat_14)
+#define SIM_FONT_16 (&lv_font_montserrat_16)
+#define SIM_FONT_18 (&lv_font_montserrat_18)
+#define SIM_FONT_24 (&lv_font_montserrat_24)
+#endif
+#define SIM_COLOR(value) espplants_ui_color((value))
+
+#define SIM_SENSOR_CAPACITY 12
+#define SIM_INFRASTRUCTURE_CAPACITY 6
+#define SIM_HOME_ROW_HEIGHT SIM_Y(56)
+#define SIM_HOME_ROW_GAP SIM_Y(7)
 #define SIM_HOME_ROW_STRIDE (SIM_HOME_ROW_HEIGHT + SIM_HOME_ROW_GAP)
-#define SIM_ALL_ROW_HEIGHT 56
-#define SIM_ALL_ROW_GAP 6
+#define SIM_ALL_ROW_HEIGHT SIM_Y(56)
+#define SIM_ALL_ROW_GAP SIM_Y(6)
 #define SIM_ALL_ROW_STRIDE (SIM_ALL_ROW_HEIGHT + SIM_ALL_ROW_GAP)
+#define SIM_INFRA_ROW_HEIGHT SIM_Y(50)
+#define SIM_INFRA_ROW_GAP SIM_Y(6)
+#define SIM_INFRA_ROW_STRIDE (SIM_INFRA_ROW_HEIGHT + SIM_INFRA_ROW_GAP)
 
 typedef enum {
     SIM_PAGE_HOME = 0,
@@ -85,6 +112,13 @@ typedef struct {
     lv_obj_t *updated;
 } SimAllRow;
 
+typedef struct {
+    lv_obj_t *box;
+    lv_obj_t *name;
+    lv_obj_t *status;
+    lv_obj_t *signal;
+} SimInfrastructureRow;
+
 typedef enum {
     SIM_ADJUST_MOISTURE = 0,
     SIM_ADJUST_TEMP,
@@ -96,7 +130,9 @@ typedef enum {
 static SimSensor simSensors[SIM_SENSOR_CAPACITY];
 static SimHomeRow simHomeRows[SIM_SENSOR_CAPACITY];
 static SimAllRow simAllRows[SIM_SENSOR_CAPACITY];
+static SimInfrastructureRow simInfrastructureRows[SIM_INFRASTRUCTURE_CAPACITY];
 static uint8_t simSelectedSensor = 0;
+static uint8_t simSelectedInfrastructure = 0;
 static SimPage simCurrentPage = SIM_PAGE_HOME;
 
 static lv_obj_t *simButton = 0;
@@ -181,16 +217,32 @@ static const char *simMood(const SimSensor *sensor) {
     return "Very wet";
 }
 
+static enum ScreensEnum simScreenId(SimPage page) {
+    switch (page) {
+        case SIM_PAGE_ALL: return SCREEN_ID_ALL_SENSORS;
+        case SIM_PAGE_PLANT: return SCREEN_ID_PLANT_DETAIL;
+        case SIM_PAGE_SETTINGS: return SCREEN_ID_SETTINGS;
+        case SIM_PAGE_ADVANCED: return SCREEN_ID_ADVANCED_ZIGBEE;
+        case SIM_PAGE_HOME:
+        default: return SCREEN_ID_HOME;
+    }
+}
+
+static void simAttachSharedLayer(void) {
+    lv_obj_t *top = lv_layer_top();
+    if (objects.header) lv_obj_set_parent(objects.header, top);
+    if (objects.nav_bar) lv_obj_set_parent(objects.nav_bar, top);
+    if (objects.rename_modal) lv_obj_set_parent(objects.rename_modal, top);
+    if (objects.pair_modal) lv_obj_set_parent(objects.pair_modal, top);
+    if (objects.update_modal) lv_obj_set_parent(objects.update_modal, top);
+}
+
 static void simShowPage(SimPage page) {
     simCurrentPage = page;
-    simSetHidden(objects.home_page, page != SIM_PAGE_HOME);
-    simSetHidden(objects.all_page, page != SIM_PAGE_ALL);
-    simSetHidden(objects.plant_page, page != SIM_PAGE_PLANT);
-    simSetHidden(objects.settings_page, page != SIM_PAGE_SETTINGS);
-    simSetHidden(objects.advanced_page, page != SIM_PAGE_ADVANCED);
+    loadScreen(simScreenId(page));
 
-    const lv_color_t active = lv_color_hex(0x1E3529);
-    const lv_color_t idle = lv_color_hex(0x151F1A);
+    const lv_color_t active = SIM_COLOR(0x1E3529);
+    const lv_color_t idle = SIM_COLOR(0x151F1A);
     lv_obj_set_style_bg_color(objects.nav_home, page == SIM_PAGE_HOME ? active : idle,
                               LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(objects.nav_all, page == SIM_PAGE_ALL ? active : idle,
@@ -233,27 +285,49 @@ static void simBrightnessEvent(lv_event_t *event) {
 
 static void simInitNavigation(void);
 
+static void simDeleteUiTree(void) {
+    if (simControls) { lv_obj_del(simControls); simControls = 0; }
+    if (simButton) { lv_obj_del(simButton); simButton = 0; }
+
+    // Shared chrome/modals have been reparented to the top layer, so delete
+    // those roots explicitly before deleting the five EEZ screens.
+    if (objects.header) lv_obj_del(objects.header);
+    if (objects.nav_bar) lv_obj_del(objects.nav_bar);
+    if (objects.rename_modal) lv_obj_del(objects.rename_modal);
+    if (objects.pair_modal) lv_obj_del(objects.pair_modal);
+    if (objects.update_modal) lv_obj_del(objects.update_modal);
+
+    if (objects.home) lv_obj_del(objects.home);
+    if (objects.all_sensors) lv_obj_del(objects.all_sensors);
+    if (objects.plant_detail) lv_obj_del(objects.plant_detail);
+    if (objects.settings) lv_obj_del(objects.settings);
+    if (objects.advanced_zigbee) lv_obj_del(objects.advanced_zigbee);
+    memset(&objects, 0, sizeof(objects));
+}
+
 static void simRebuildAppearance(void *userData) {
     (void)userData;
     const SimPage restorePage = simCurrentPage;
     SimSensor savedSensors[SIM_SENSOR_CAPACITY];
     memcpy(savedSensors, simSensors, sizeof(savedSensors));
     const uint8_t savedSelectedSensor = simSelectedSensor;
-    lv_obj_t *oldScreen = lv_scr_act();
+    const uint8_t savedSelectedInfrastructure = simSelectedInfrastructure;
+
     lv_obj_t *transition = lv_obj_create(0);
     lv_obj_clear_flag(transition, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(transition, espplants_ui_color(0x101814), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(transition, LV_OPA_COVER, LV_PART_MAIN);
     lv_scr_load(transition);
-    if (oldScreen && oldScreen != transition) lv_obj_del(oldScreen);
+    simDeleteUiTree();
 
-    create_screen_home();
+    create_screens();
+    simAttachSharedLayer();
     simInitNavigation();
     memcpy(simSensors, savedSensors, sizeof(savedSensors));
     simSelectedSensor = savedSelectedSensor;
+    simSelectedInfrastructure = savedSelectedInfrastructure;
     simUpdateViews();
     simShowPage(restorePage);
-    loadScreen(SCREEN_ID_HOME);
     lv_obj_del(transition);
 }
 
@@ -359,18 +433,18 @@ static lv_obj_t *simMakeButton(lv_obj_t *parent, int x, int y, int w, int h,
                                const char *text, lv_event_cb_t cb, void *userData,
                                lv_obj_t **labelOut) {
     lv_obj_t *button = lv_btn_create(parent);
-    lv_obj_set_pos(button, x, y);
-    lv_obj_set_size(button, w, h);
-    lv_obj_set_style_radius(button, 10, 0);
-    lv_obj_set_style_border_width(button, 1, 0);
-    lv_obj_set_style_border_color(button, lv_color_hex(0x405348), 0);
-    lv_obj_set_style_bg_color(button, lv_color_hex(0x233029), 0);
+    lv_obj_set_pos(button, SIM_X(x), SIM_Y(y));
+    lv_obj_set_size(button, SIM_X(w), SIM_Y(h));
+    lv_obj_set_style_radius(button, SIM_X(10), 0);
+    lv_obj_set_style_border_width(button, SIM_X(1), 0);
+    lv_obj_set_style_border_color(button, SIM_COLOR(0x405348), 0);
+    lv_obj_set_style_bg_color(button, SIM_COLOR(0x233029), 0);
     lv_obj_set_style_shadow_width(button, 0, 0);
     if (cb) lv_obj_add_event_cb(button, cb, LV_EVENT_CLICKED, userData);
     lv_obj_t *label = lv_label_create(button);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(label, SIM_FONT_14, 0);
+    lv_obj_set_style_text_color(label, SIM_COLOR(0xE5ECE7), 0);
     lv_obj_center(label);
     if (labelOut) *labelOut = label;
     return button;
@@ -379,9 +453,9 @@ static lv_obj_t *simMakeButton(lv_obj_t *parent, int x, int y, int w, int h,
 static lv_obj_t *simMakeCaption(lv_obj_t *parent, int x, int y, const char *text) {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
-    lv_obj_set_pos(label, x, y);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xB7C8BC), 0);
+    lv_obj_set_pos(label, SIM_X(x), SIM_Y(y));
+    lv_obj_set_style_text_font(label, SIM_FONT_14, 0);
+    lv_obj_set_style_text_color(label, SIM_COLOR(0xB7C8BC), 0);
     return label;
 }
 
@@ -409,91 +483,97 @@ static void simCreateRows(void) {
         SimHomeRow *home = &simHomeRows[i];
         home->box = lv_obj_create(objects.home_list);
         lv_obj_set_pos(home->box, 0, i * SIM_HOME_ROW_STRIDE);
-        lv_obj_set_size(home->box, 228, SIM_HOME_ROW_HEIGHT);
-        lv_obj_set_style_radius(home->box, 12, 0);
+        lv_obj_set_size(home->box, SIM_X(228), SIM_HOME_ROW_HEIGHT);
+        lv_obj_set_style_radius(home->box, SIM_X(12), 0);
         lv_obj_set_style_border_width(home->box, 0, 0);
-        lv_obj_set_style_bg_color(home->box, lv_color_hex(0x1D2922), 0);
-        lv_obj_set_style_pad_all(home->box, 8, 0);
+        lv_obj_set_style_bg_color(home->box, SIM_COLOR(0x1D2922), 0);
+        lv_obj_set_style_pad_all(home->box, SIM_X(8), 0);
         lv_obj_clear_flag(home->box, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(home->box, simSensorRowEvent, LV_EVENT_CLICKED,
                             (void *)(uintptr_t)(i + 1));
 
         home->name = lv_label_create(home->box);
-        lv_obj_set_width(home->name, 145);
+        lv_obj_set_width(home->name, SIM_X(145));
         lv_label_set_long_mode(home->name, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_font(home->name, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(home->name, lv_color_hex(0xE5ECE7), 0);
+        lv_obj_set_style_text_font(home->name, SIM_FONT_14, 0);
+        lv_obj_set_style_text_color(home->name, SIM_COLOR(0xE5ECE7), 0);
 
         home->moisture = lv_label_create(home->box);
-        lv_obj_set_style_text_font(home->moisture, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(home->moisture, lv_color_hex(0xE5ECE7), 0);
-        lv_obj_align(home->moisture, LV_ALIGN_TOP_RIGHT, -2, -2);
+        lv_obj_set_style_text_font(home->moisture, SIM_FONT_18, 0);
+        lv_obj_set_style_text_color(home->moisture, SIM_COLOR(0xE5ECE7), 0);
+        lv_obj_align(home->moisture, LV_ALIGN_TOP_RIGHT, -SIM_X(2), -SIM_Y(2));
 
         home->bar = lv_bar_create(home->box);
-        lv_obj_set_pos(home->bar, 2, 30);
-        lv_obj_set_size(home->bar, 208, 9);
+        lv_obj_set_pos(home->bar, SIM_X(2), SIM_Y(30));
+        lv_obj_set_size(home->bar, SIM_X(208), SIM_Y(9));
         lv_bar_set_range(home->bar, 0, 100);
-        lv_obj_set_style_bg_color(home->bar, lv_color_hex(0x2A352E), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(home->bar, SIM_COLOR(0x2A352E), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(home->bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(home->bar, lv_color_hex(0x5E9B68), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(home->bar, SIM_COLOR(0x5E9B68), LV_PART_INDICATOR);
 
         SimAllRow *all = &simAllRows[i];
         all->box = lv_obj_create(objects.all_list);
         lv_obj_set_pos(all->box, 0, i * SIM_ALL_ROW_STRIDE);
-        lv_obj_set_size(all->box, 742, SIM_ALL_ROW_HEIGHT);
-        lv_obj_set_style_radius(all->box, 10, 0);
+        lv_obj_set_size(all->box, SIM_X(742), SIM_ALL_ROW_HEIGHT);
+        lv_obj_set_style_radius(all->box, SIM_X(10), 0);
         lv_obj_set_style_border_width(all->box, 0, 0);
-        lv_obj_set_style_bg_color(all->box, lv_color_hex(0x1D2922), 0);
-        lv_obj_set_style_pad_all(all->box, 8, 0);
+        lv_obj_set_style_bg_color(all->box, SIM_COLOR(0x1D2922), 0);
+        lv_obj_set_style_pad_all(all->box, SIM_X(8), 0);
         lv_obj_clear_flag(all->box, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(all->box, simSensorRowEvent, LV_EVENT_CLICKED,
                             (void *)(uintptr_t)(i + 1));
 
         all->name = lv_label_create(all->box);
-        lv_obj_set_pos(all->name, 4, 9);
-        lv_obj_set_width(all->name, 285);
+        lv_obj_set_pos(all->name, SIM_X(4), SIM_Y(9));
+        lv_obj_set_width(all->name, SIM_X(285));
         lv_label_set_long_mode(all->name, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_font(all->name, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(all->name, lv_color_hex(0xE5ECE7), 0);
+        lv_obj_set_style_text_font(all->name, SIM_FONT_16, 0);
+        lv_obj_set_style_text_color(all->name, SIM_COLOR(0xE5ECE7), 0);
 
         all->moisture = lv_label_create(all->box);
-        lv_obj_set_pos(all->moisture, 305, 8);
-        lv_obj_set_width(all->moisture, 110);
+        lv_obj_set_pos(all->moisture, SIM_X(305), SIM_Y(8));
+        lv_obj_set_width(all->moisture, SIM_X(110));
         lv_obj_set_style_text_align(all->moisture, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_font(all->moisture, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(all->moisture, lv_color_hex(0xE5ECE7), 0);
+        lv_obj_set_style_text_font(all->moisture, SIM_FONT_18, 0);
+        lv_obj_set_style_text_color(all->moisture, SIM_COLOR(0xE5ECE7), 0);
 
         all->battery = lv_label_create(all->box);
-        lv_obj_set_pos(all->battery, 435, 9);
-        lv_obj_set_width(all->battery, 115);
+        lv_obj_set_pos(all->battery, SIM_X(435), SIM_Y(9));
+        lv_obj_set_width(all->battery, SIM_X(115));
         lv_obj_set_style_text_align(all->battery, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_style_text_font(all->battery, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(all->battery, lv_color_hex(0xE5ECE7), 0);
+        lv_obj_set_style_text_font(all->battery, SIM_FONT_16, 0);
+        lv_obj_set_style_text_color(all->battery, SIM_COLOR(0xE5ECE7), 0);
 
         all->updated = lv_label_create(all->box);
-        lv_obj_set_pos(all->updated, 565, 10);
-        lv_obj_set_width(all->updated, 155);
+        lv_obj_set_pos(all->updated, SIM_X(565), SIM_Y(10));
+        lv_obj_set_width(all->updated, SIM_X(155));
         lv_obj_set_style_text_align(all->updated, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(all->updated, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_font(all->updated, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(all->updated, lv_color_hex(0xD1DED5), 0);
+        lv_obj_set_style_text_font(all->updated, SIM_FONT_14, 0);
+        lv_obj_set_style_text_color(all->updated, SIM_COLOR(0xD1DED5), 0);
     }
 }
 
 static void simInitSensors(void) {
-    static const uint8_t moistureDefaults[SIM_SENSOR_CAPACITY] = {18, 34, 52, 76, 83, 44, 29, 67, 58, 91};
+    static const char *names[SIM_SENSOR_CAPACITY] = {
+        "MONSTERA", "SNAKE PLANT", "POTHOS", "BASIL", "FERN", "ALOE",
+        "PEACE LILY", "ZZ PLANT", "HERBS", "PALM", "ORCHID", "SUCCULENT"
+    };
+    static const uint8_t moistureDefaults[SIM_SENSOR_CAPACITY] = {
+        12, 34, 52, 76, 83, 44, 29, 67, 58, 91, 23, 71
+    };
     for (int i = 0; i < SIM_SENSOR_CAPACITY; ++i) {
         SimSensor *sensor = &simSensors[i];
         memset(sensor, 0, sizeof(*sensor));
-        sensor->enabled = false;
-        sensor->reporting = true;
-        sensor->waterWarning = false;
+        sensor->enabled = true;
+        sensor->reporting = i != 3 && i != 9;
+        sensor->waterWarning = i == 0 || i == 7;
         sensor->moisture = moistureDefaults[i];
         sensor->tempF = (int16_t)(70 + (i % 5));
         sensor->humidity = (uint8_t)(44 + (i * 3) % 28);
         sensor->battery = (uint8_t)(95 - i * 4);
         sensor->lqi = (uint8_t)(205 - i * 7);
-        snprintf(sensor->name, sizeof(sensor->name), "PLANT %d", i + 1);
+        snprintf(sensor->name, sizeof(sensor->name), "%s", names[i]);
     }
     simSelectedSensor = 0;
 }
@@ -528,8 +608,8 @@ static void simUpdateHome(void) {
             lv_bar_set_value(row->bar, 0, LV_ANIM_OFF);
         }
         lv_obj_set_style_bg_color(row->box,
-                                  i == simDetailSensor() ? lv_color_hex(0x1E3529)
-                                                         : lv_color_hex(0x1D2922),
+                                  i == simDetailSensor() ? SIM_COLOR(0x1E3529)
+                                                         : SIM_COLOR(0x1D2922),
                                   0);
     }
 
@@ -600,8 +680,8 @@ static void simUpdateAll(void) {
             simSetText(row->updated, "WAITING");
         }
         lv_obj_set_style_bg_color(row->box,
-                                  i == simDetailSensor() ? lv_color_hex(0x1E3529)
-                                                         : lv_color_hex(0x1D2922),
+                                  i == simDetailSensor() ? SIM_COLOR(0x1E3529)
+                                                         : SIM_COLOR(0x1D2922),
                                   0);
     }
 }
@@ -665,16 +745,131 @@ static void simUpdatePlant(void) {
     lv_obj_clear_state(objects.remove_button, LV_STATE_DISABLED);
 }
 
+static void simInfrastructureRowEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    const uintptr_t encoded = (uintptr_t)lv_event_get_user_data(event);
+    if (encoded == 0 || encoded > SIM_INFRASTRUCTURE_CAPACITY) return;
+    simSelectedInfrastructure = (uint8_t)(encoded - 1U);
+    simUpdateViews();
+}
+
+static void simCreateInfrastructureRows(void) {
+    lv_obj_add_flag(objects.advanced_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(objects.advanced_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(objects.advanced_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_pad_all(objects.advanced_list, 0, 0);
+
+    for (int i = 0; i < SIM_INFRASTRUCTURE_CAPACITY; ++i) {
+        SimInfrastructureRow *row = &simInfrastructureRows[i];
+        row->box = lv_obj_create(objects.advanced_list);
+        lv_obj_set_pos(row->box, 0, i * SIM_INFRA_ROW_STRIDE);
+        lv_obj_set_size(row->box, SIM_X(742), SIM_INFRA_ROW_HEIGHT);
+        lv_obj_set_style_radius(row->box, SIM_X(10), 0);
+        lv_obj_set_style_border_width(row->box, 0, 0);
+        lv_obj_set_style_bg_color(row->box, SIM_COLOR(0x1D2922), 0);
+        lv_obj_set_style_pad_all(row->box, SIM_X(8), 0);
+        lv_obj_clear_flag(row->box, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(row->box, simInfrastructureRowEvent, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)(i + 1));
+
+        row->name = lv_label_create(row->box);
+        lv_obj_set_pos(row->name, SIM_X(2), SIM_Y(6));
+        lv_obj_set_width(row->name, SIM_X(390));
+        lv_label_set_long_mode(row->name, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_font(row->name, SIM_FONT_16, 0);
+        lv_obj_set_style_text_color(row->name, SIM_COLOR(0xE5ECE7), 0);
+
+        row->status = lv_label_create(row->box);
+        lv_obj_set_pos(row->status, SIM_X(430), SIM_Y(7));
+        lv_obj_set_width(row->status, SIM_X(110));
+        lv_obj_set_style_text_font(row->status, SIM_FONT_14, 0);
+        lv_obj_set_style_text_color(row->status, SIM_COLOR(0xD1DED5), 0);
+
+        row->signal = lv_label_create(row->box);
+        lv_obj_set_pos(row->signal, SIM_X(570), SIM_Y(7));
+        lv_obj_set_width(row->signal, SIM_X(145));
+        lv_obj_set_style_text_font(row->signal, SIM_FONT_14, 0);
+        lv_obj_set_style_text_color(row->signal, SIM_COLOR(0xD1DED5), 0);
+    }
+}
+
+static void simUpdateAdvanced(void) {
+    static const char *names[SIM_INFRASTRUCTURE_CAPACITY] = {
+        "LIVING ROOM ROUTER", "KITCHEN ROUTER", "UPSTAIRS REPEATER",
+        "GARAGE ROUTER", "SUNROOM REPEATER", "BASEMENT ROUTER"
+    };
+    static const bool online[SIM_INFRASTRUCTURE_CAPACITY] = {true, true, false, true, true, false};
+    static const uint8_t lqi[SIM_INFRASTRUCTURE_CAPACITY] = {214, 192, 0, 176, 203, 0};
+    char text[128];
+    size_t onlineCount = 0;
+    for (size_t i = 0; i < SIM_INFRASTRUCTURE_CAPACITY; ++i) if (online[i]) ++onlineCount;
+    snprintf(text, sizeof(text), "%u REGISTERED | %u ONLINE",
+             (unsigned)SIM_INFRASTRUCTURE_CAPACITY, (unsigned)onlineCount);
+    simSetText(objects.advanced_summary, text);
+
+    for (int i = 0; i < SIM_INFRASTRUCTURE_CAPACITY; ++i) {
+        SimInfrastructureRow *row = &simInfrastructureRows[i];
+        simSetText(row->name, names[i]);
+        simSetText(row->status, online[i] ? "ONLINE" : "OFFLINE");
+        if (online[i]) snprintf(text, sizeof(text), "LQI %u", (unsigned)lqi[i]);
+        else snprintf(text, sizeof(text), "LQI --");
+        simSetText(row->signal, text);
+        lv_obj_set_style_bg_color(row->box,
+                                  i == simSelectedInfrastructure ? SIM_COLOR(0x1E3529)
+                                                                 : SIM_COLOR(0x1D2922),
+                                  0);
+    }
+
+    const uint8_t selected = simSelectedInfrastructure < SIM_INFRASTRUCTURE_CAPACITY
+                                 ? simSelectedInfrastructure : 0;
+    if (online[selected]) {
+        snprintf(text, sizeof(text), "%s | ONLINE | LQI %u | last seen now",
+                 names[selected], (unsigned)lqi[selected]);
+    } else {
+        snprintf(text, sizeof(text), "%s | OFFLINE | LQI -- | waiting for check-in",
+                 names[selected]);
+    }
+    simSetText(objects.advanced_detail, text);
+    lv_obj_clear_state(objects.advanced_rename_button, LV_STATE_DISABLED);
+    lv_obj_clear_state(objects.advanced_remove_button, LV_STATE_DISABLED);
+}
+
+static void simUpdateNetworkAndUpdates(void) {
+    simSetText(objects.update_wifi_state, "CONNECTED");
+    simSetText(objects.update_wifi_detail, "Iot | 192.168.2.231");
+    simSetText(objects.update_setup_label, "CHANGE WI-FI");
+    simSetText(objects.update_disconnect_label, "DISCONNECT");
+    simSetText(objects.update_qr_hint, "SCAN TO OPEN WI-FI SETUP");
+    simSetText(objects.update_portal_info, "Simulator preview - QR pixels are rendered by firmware.");
+    simSetText(objects.update_current_version, "CURRENT  v0.2.0-alpha.55");
+    simSetText(objects.update_latest_version, "LATEST   v0.2.0-alpha.56");
+    simSetText(objects.update_h2_version, "H2        v0.2.0-alpha.31");
+    simSetText(objects.update_status, "Secure update preview ready");
+    simSetText(objects.update_check_label, "CHECK NOW");
+    simSetText(objects.update_install_label, "INSTALL UPDATE");
+    lv_obj_clear_state(objects.update_install_button, LV_STATE_DISABLED);
+}
+
 static void simUpdateSettings(void) {
-    char text[96];
+    char text[128];
     const size_t enabled = simEnabledCount();
+    const size_t reporting = simReportingCount();
+    const size_t waiting = enabled >= reporting ? enabled - reporting : 0;
+    simSetText(objects.settings_device_name, "ESP PLANTS");
     simSetText(objects.settings_h2, "ONLINE");
     snprintf(text, sizeof(text), "%u", (unsigned)enabled);
     simSetText(objects.settings_plants, text);
-    snprintf(text, sizeof(text), "READY CH 15 | P %u | R 0", (unsigned)enabled);
+    snprintf(text, sizeof(text), "READY CH 15 | P %u | R 6", (unsigned)enabled);
     simSetText(objects.settings_zigbee, text);
+    simSetText(objects.settings_unit, "F");
+    simSetText(objects.settings_theme, "MIXED / ALL");
     simSetText(objects.settings_pair, "ADD SENSOR");
     simSetText(objects.settings_appearance, simLightAppearance ? "LIGHT" : "DARK");
+    if (objects.settings_brightness_label) simSetText(objects.settings_brightness_label, "5");
+    snprintf(text, sizeof(text), "%u reporting | %u waiting",
+             (unsigned)reporting, (unsigned)waiting);
+    simSetText(objects.settings_sensor_hint, text);
+    simSetText(objects.settings_network_hint, "Zigbee channel 15 | 6 repeaters / routers");
 }
 
 static void simUpdateHeader(void) {
@@ -715,6 +910,8 @@ static void simUpdateViews(void) {
     simUpdateAll();
     simUpdatePlant();
     simUpdateSettings();
+    simUpdateAdvanced();
+    simUpdateNetworkAndUpdates();
     simUpdateControlLabels();
 }
 
@@ -728,6 +925,14 @@ static void simOpenControlsEvent(lv_event_t *event) {
 static void simCloseControlsEvent(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     simSetHidden(simControls, true);
+    if (simButton) lv_obj_move_foreground(simButton);
+}
+
+static void simPreviewPageEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    const SimPage page = (SimPage)(uintptr_t)lv_event_get_user_data(event);
+    simSetHidden(simControls, true);
+    simShowPage(page);
     if (simButton) lv_obj_move_foreground(simButton);
 }
 
@@ -825,29 +1030,29 @@ static void *simAdjustData(SimAdjustField field, int delta) {
 }
 
 static void simCreateControls(void) {
-    simButton = simMakeButton(objects.home, 548, 16, 104, 34, "SIM", simOpenControlsEvent, 0, 0);
-    lv_obj_set_style_bg_color(simButton, lv_color_hex(0x3A536F), 0);
+    simButton = simMakeButton(lv_layer_top(), 548, 16, 104, 34, "SIM", simOpenControlsEvent, 0, 0);
+    lv_obj_set_style_bg_color(simButton, SIM_COLOR(0x3A536F), 0);
 
-    simControls = lv_obj_create(objects.home);
+    simControls = lv_obj_create(lv_layer_top());
     lv_obj_set_pos(simControls, 0, 0);
-    lv_obj_set_size(simControls, 800, 480);
+    lv_obj_set_size(simControls, SIM_SCREEN_WIDTH, SIM_SCREEN_HEIGHT);
     lv_obj_set_style_radius(simControls, 0, 0);
     lv_obj_set_style_border_width(simControls, 0, 0);
-    lv_obj_set_style_bg_color(simControls, lv_color_hex(0x101814), 0);
+    lv_obj_set_style_bg_color(simControls, SIM_COLOR(0x101814), 0);
     lv_obj_set_style_pad_all(simControls, 0, 0);
     lv_obj_clear_flag(simControls, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(simControls);
     lv_label_set_text(title, "FULL SIM SENSOR CONTROLS");
-    lv_obj_set_pos(title, 20, 12);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_pos(title, SIM_X(20), SIM_Y(12));
+    lv_obj_set_style_text_font(title, SIM_FONT_24, 0);
+    lv_obj_set_style_text_color(title, SIM_COLOR(0xE5ECE7), 0);
 
     lv_obj_t *hint = lv_label_create(simControls);
     lv_label_set_text(hint, "SIMULATOR ONLY - changes here never touch ESP PLANTS firmware or saved data.");
-    lv_obj_set_pos(hint, 20, 43);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x9DB5A5), 0);
+    lv_obj_set_pos(hint, SIM_X(20), SIM_Y(43));
+    lv_obj_set_style_text_font(hint, SIM_FONT_12, 0);
+    lv_obj_set_style_text_color(hint, SIM_COLOR(0x9DB5A5), 0);
 
     simMakeButton(simControls, 684, 10, 96, 40, "CLOSE", simCloseControlsEvent, 0, 0);
 
@@ -855,16 +1060,16 @@ static void simCreateControls(void) {
     simMakeButton(simControls, 160, 76, 72, 40, "0", simPresetEvent, (void *)(uintptr_t)0, 0);
     simMakeButton(simControls, 242, 76, 72, 40, "1", simPresetEvent, (void *)(uintptr_t)1, 0);
     simMakeButton(simControls, 324, 76, 72, 40, "3", simPresetEvent, (void *)(uintptr_t)3, 0);
-    simMakeButton(simControls, 406, 76, 72, 40, "10", simPresetEvent, (void *)(uintptr_t)10, 0);
+    simMakeButton(simControls, 406, 76, 72, 40, "12", simPresetEvent, (void *)(uintptr_t)12, 0);
 
     simMakeCaption(simControls, 24, 145, "EDIT SENSOR");
     simMakeButton(simControls, 160, 132, 72, 42, "PREV", simPrevSensorEvent, 0, 0);
     simControlSensorLabel = lv_label_create(simControls);
-    lv_obj_set_pos(simControlSensorLabel, 250, 143);
-    lv_obj_set_width(simControlSensorLabel, 220);
+    lv_obj_set_pos(simControlSensorLabel, SIM_X(250), SIM_Y(143));
+    lv_obj_set_width(simControlSensorLabel, SIM_X(220));
     lv_obj_set_style_text_align(simControlSensorLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(simControlSensorLabel, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(simControlSensorLabel, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(simControlSensorLabel, SIM_FONT_16, 0);
+    lv_obj_set_style_text_color(simControlSensorLabel, SIM_COLOR(0xE5ECE7), 0);
     simMakeButton(simControls, 488, 132, 72, 42, "NEXT", simNextSensorEvent, 0, 0);
 
     simMakeCaption(simControls, 24, 202, "STATE");
@@ -875,60 +1080,64 @@ static void simCreateControls(void) {
     simMakeCaption(simControls, 24, 267, "MOISTURE");
     simMakeButton(simControls, 112, 252, 48, 42, "-", simAdjustEvent, simAdjustData(SIM_ADJUST_MOISTURE, -5), 0);
     simMoistureValue = lv_label_create(simControls);
-    lv_obj_set_pos(simMoistureValue, 170, 264);
-    lv_obj_set_width(simMoistureValue, 74);
+    lv_obj_set_pos(simMoistureValue, SIM_X(170), SIM_Y(264));
+    lv_obj_set_width(simMoistureValue, SIM_X(74));
     lv_obj_set_style_text_align(simMoistureValue, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(simMoistureValue, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(simMoistureValue, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(simMoistureValue, SIM_FONT_16, 0);
+    lv_obj_set_style_text_color(simMoistureValue, SIM_COLOR(0xE5ECE7), 0);
     simMakeButton(simControls, 254, 252, 48, 42, "+", simAdjustEvent, simAdjustData(SIM_ADJUST_MOISTURE, 5), 0);
 
     simMakeCaption(simControls, 382, 267, "TEMP");
     simMakeButton(simControls, 438, 252, 48, 42, "-", simAdjustEvent, simAdjustData(SIM_ADJUST_TEMP, -1), 0);
     simTempValue = lv_label_create(simControls);
-    lv_obj_set_pos(simTempValue, 496, 264);
-    lv_obj_set_width(simTempValue, 76);
+    lv_obj_set_pos(simTempValue, SIM_X(496), SIM_Y(264));
+    lv_obj_set_width(simTempValue, SIM_X(76));
     lv_obj_set_style_text_align(simTempValue, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(simTempValue, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(simTempValue, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(simTempValue, SIM_FONT_16, 0);
+    lv_obj_set_style_text_color(simTempValue, SIM_COLOR(0xE5ECE7), 0);
     simMakeButton(simControls, 582, 252, 48, 42, "+", simAdjustEvent, simAdjustData(SIM_ADJUST_TEMP, 1), 0);
 
     simMakeCaption(simControls, 24, 329, "AIR RH");
     simMakeButton(simControls, 112, 314, 48, 42, "-", simAdjustEvent, simAdjustData(SIM_ADJUST_HUMIDITY, -5), 0);
     simHumidityValue = lv_label_create(simControls);
-    lv_obj_set_pos(simHumidityValue, 170, 326);
-    lv_obj_set_width(simHumidityValue, 74);
+    lv_obj_set_pos(simHumidityValue, SIM_X(170), SIM_Y(326));
+    lv_obj_set_width(simHumidityValue, SIM_X(74));
     lv_obj_set_style_text_align(simHumidityValue, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(simHumidityValue, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(simHumidityValue, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(simHumidityValue, SIM_FONT_16, 0);
+    lv_obj_set_style_text_color(simHumidityValue, SIM_COLOR(0xE5ECE7), 0);
     simMakeButton(simControls, 254, 314, 48, 42, "+", simAdjustEvent, simAdjustData(SIM_ADJUST_HUMIDITY, 5), 0);
 
     simMakeCaption(simControls, 382, 329, "BATTERY");
     simMakeButton(simControls, 462, 314, 48, 42, "-", simAdjustEvent, simAdjustData(SIM_ADJUST_BATTERY, -5), 0);
     simBatteryValue = lv_label_create(simControls);
-    lv_obj_set_pos(simBatteryValue, 520, 326);
-    lv_obj_set_width(simBatteryValue, 74);
+    lv_obj_set_pos(simBatteryValue, SIM_X(520), SIM_Y(326));
+    lv_obj_set_width(simBatteryValue, SIM_X(74));
     lv_obj_set_style_text_align(simBatteryValue, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(simBatteryValue, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(simBatteryValue, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(simBatteryValue, SIM_FONT_16, 0);
+    lv_obj_set_style_text_color(simBatteryValue, SIM_COLOR(0xE5ECE7), 0);
     simMakeButton(simControls, 604, 314, 48, 42, "+", simAdjustEvent, simAdjustData(SIM_ADJUST_BATTERY, 5), 0);
 
     simMakeCaption(simControls, 24, 391, "LQI");
     simMakeButton(simControls, 112, 376, 48, 42, "-", simAdjustEvent, simAdjustData(SIM_ADJUST_LQI, -10), 0);
     simLqiValue = lv_label_create(simControls);
-    lv_obj_set_pos(simLqiValue, 170, 388);
-    lv_obj_set_width(simLqiValue, 74);
+    lv_obj_set_pos(simLqiValue, SIM_X(170), SIM_Y(388));
+    lv_obj_set_width(simLqiValue, SIM_X(74));
     lv_obj_set_style_text_align(simLqiValue, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(simLqiValue, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(simLqiValue, lv_color_hex(0xE5ECE7), 0);
+    lv_obj_set_style_text_font(simLqiValue, SIM_FONT_16, 0);
+    lv_obj_set_style_text_color(simLqiValue, SIM_COLOR(0xE5ECE7), 0);
     simMakeButton(simControls, 254, 376, 48, 42, "+", simAdjustEvent, simAdjustData(SIM_ADJUST_LQI, 10), 0);
 
-    lv_obj_t *note = lv_label_create(simControls);
-    lv_label_set_text(note, "Rows are clickable: tap any simulated plant on HOME or ALL SENSORS to open Plant Detail.");
-    lv_obj_set_pos(note, 382, 383);
-    lv_obj_set_width(note, 360);
-    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(note, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(note, lv_color_hex(0x9DB5A5), 0);
+    simMakeCaption(simControls, 382, 386, "PAGE PREVIEW");
+    simMakeButton(simControls, 382, 407, 64, 40, "HOME", simPreviewPageEvent,
+                  (void *)(uintptr_t)SIM_PAGE_HOME, 0);
+    simMakeButton(simControls, 450, 407, 58, 40, "ALL", simPreviewPageEvent,
+                  (void *)(uintptr_t)SIM_PAGE_ALL, 0);
+    simMakeButton(simControls, 512, 407, 72, 40, "PLANT", simPreviewPageEvent,
+                  (void *)(uintptr_t)SIM_PAGE_PLANT, 0);
+    simMakeButton(simControls, 588, 407, 64, 40, "SET", simPreviewPageEvent,
+                  (void *)(uintptr_t)SIM_PAGE_SETTINGS, 0);
+    simMakeButton(simControls, 656, 407, 64, 40, "ADV", simPreviewPageEvent,
+                  (void *)(uintptr_t)SIM_PAGE_ADVANCED, 0);
 
     simSetHidden(simControls, true);
 }
@@ -997,6 +1206,7 @@ static void simInitNavigation(void) {
 
     simInitSensors();
     simCreateRows();
+    simCreateInfrastructureRows();
     simCreateControls();
     simUpdateViews();
     simShowPage(SIM_PAGE_HOME);
@@ -1007,9 +1217,11 @@ static void simInitNavigation(void) {
 void ui_init(void) {
     create_screens();
 #if defined(EEZ_LVGL_SIMULATOR)
+    simAttachSharedLayer();
     simInitNavigation();
-#endif
+#else
     loadScreen(SCREEN_ID_HOME);
+#endif
 }
 
 void ui_tick(void) {

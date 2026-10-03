@@ -1431,6 +1431,48 @@ void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **valu
   lv_obj_set_pos(*value, x, y + 19);
 }
 
+lv_obj_t *screenForPage(Page page) {
+  switch (page) {
+    case Page::All: return objects.all_sensors;
+    case Page::Plant: return objects.plant_detail;
+    case Page::Settings: return objects.settings;
+    case Page::Advanced: return objects.advanced_zigbee;
+    case Page::Home:
+    default: return objects.home;
+  }
+}
+
+void attachSharedUiLayer() {
+  // Header, bottom navigation, and full-screen modals are authored once in
+  // EEZ Studio on the Home page, then reparented to LVGL's persistent top
+  // layer so the five real EEZ screens share one chrome/modal tree.
+  lv_obj_t *top = lv_layer_top();
+  if (objects.header) lv_obj_set_parent(objects.header, top);
+  if (objects.nav_bar) lv_obj_set_parent(objects.nav_bar, top);
+  if (objects.rename_modal) lv_obj_set_parent(objects.rename_modal, top);
+  if (objects.pair_modal) lv_obj_set_parent(objects.pair_modal, top);
+  if (objects.update_modal) lv_obj_set_parent(objects.update_modal, top);
+}
+
+void deleteGeneratedUiTree() {
+  // Shared objects no longer belong to objects.home after attachSharedUiLayer(),
+  // so delete them explicitly, then remove every EEZ screen. This is used only
+  // for the appearance rebuild and prevents two complete UI trees from
+  // coexisting on the 7B.
+  if (objects.header) lv_obj_del(objects.header);
+  if (objects.nav_bar) lv_obj_del(objects.nav_bar);
+  if (objects.rename_modal) lv_obj_del(objects.rename_modal);
+  if (objects.pair_modal) lv_obj_del(objects.pair_modal);
+  if (objects.update_modal) lv_obj_del(objects.update_modal);
+
+  if (objects.home) lv_obj_del(objects.home);
+  if (objects.all_sensors) lv_obj_del(objects.all_sensors);
+  if (objects.plant_detail) lv_obj_del(objects.plant_detail);
+  if (objects.settings) lv_obj_del(objects.settings);
+  if (objects.advanced_zigbee) lv_obj_del(objects.advanced_zigbee);
+  memset(&objects, 0, sizeof(objects));
+}
+
 void showPage(Page page) {
   const Page previousPage = currentPage;
   if (previousPage == Page::Plant && page != Page::Plant) {
@@ -1438,16 +1480,8 @@ void showPage(Page page) {
     detailPreferencePendingSensor = -1;
   }
   currentPage = page;
-  if (homePage) (page == Page::Home) ? lv_obj_clear_flag(homePage, LV_OBJ_FLAG_HIDDEN)
-                                     : lv_obj_add_flag(homePage, LV_OBJ_FLAG_HIDDEN);
-  if (allPage) (page == Page::All) ? lv_obj_clear_flag(allPage, LV_OBJ_FLAG_HIDDEN)
-                                   : lv_obj_add_flag(allPage, LV_OBJ_FLAG_HIDDEN);
-  if (plantPage) (page == Page::Plant) ? lv_obj_clear_flag(plantPage, LV_OBJ_FLAG_HIDDEN)
-                                       : lv_obj_add_flag(plantPage, LV_OBJ_FLAG_HIDDEN);
-  if (settingsPage) (page == Page::Settings) ? lv_obj_clear_flag(settingsPage, LV_OBJ_FLAG_HIDDEN)
-                                             : lv_obj_add_flag(settingsPage, LV_OBJ_FLAG_HIDDEN);
-  if (advancedPage) (page == Page::Advanced) ? lv_obj_clear_flag(advancedPage, LV_OBJ_FLAG_HIDDEN)
-                                             : lv_obj_add_flag(advancedPage, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t *screen = screenForPage(page);
+  if (screen && lv_scr_act() != screen) lv_scr_load(screen);
 
   const lv_color_t active = uiColorHex(0x1E3529);
   const lv_color_t idle = uiColorHex(0x151F1A);
@@ -1732,13 +1766,12 @@ void applyAppearanceAsync(void *userData) {
   // Do not keep two complete LVGL trees alive while changing appearance. The
   // 7B has deliberately tight internal-RAM headroom, so load a tiny transition
   // screen, delete the old tree, then rebuild the existing UI in the new palette.
-  lv_obj_t *oldScreen = lv_scr_act();
   lv_obj_t *transition = lv_obj_create(nullptr);
   lv_obj_clear_flag(transition, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(transition, uiColorHex(0x101814), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(transition, LV_OPA_COVER, LV_PART_MAIN);
   lv_scr_load(transition);
-  if (oldScreen && oldScreen != transition) lv_obj_del(oldScreen);
+  deleteGeneratedUiTree();
 
   buildUi(restorePage);
   appearanceRebuildPending = false;
@@ -3065,24 +3098,36 @@ void buildPairDialog(lv_obj_t *screen) {
 
 void buildUi(Page initialPage) {
   lv_obj_t *oldScreen = lv_scr_act();
-  create_screen_home();
-  lv_obj_t *screen = objects.home;
-  lv_obj_set_style_bg_color(screen, uiColorHex(0x101814), LV_PART_MAIN);
-  lv_obj_set_style_text_color(screen, uiColorHex(0xE5ECE7), LV_PART_MAIN);
-  lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-  buildHeader(screen);
-  buildHome(screen);
-  buildAll(screen);
-  buildPlant(screen);
-  buildSettings(screen);
-  buildAdvanced(screen);
-  buildNav(screen);
-  buildRename(screen);
-  buildPairDialog(screen);
-  buildUpdateDialog(screen);
+  create_screens();
+
+  lv_obj_t *screens[] = {
+      objects.home,
+      objects.all_sensors,
+      objects.plant_detail,
+      objects.settings,
+      objects.advanced_zigbee,
+  };
+  for (lv_obj_t *screen : screens) {
+    if (!screen) continue;
+    lv_obj_set_style_bg_color(screen, uiColorHex(0x101814), LV_PART_MAIN);
+    lv_obj_set_style_text_color(screen, uiColorHex(0xE5ECE7), LV_PART_MAIN);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+  }
+
+  attachSharedUiLayer();
+  buildHeader(objects.home);
+  buildHome(objects.home);
+  buildAll(objects.all_sensors);
+  buildPlant(objects.plant_detail);
+  buildSettings(objects.settings);
+  buildAdvanced(objects.advanced_zigbee);
+  buildNav(objects.home);
+  buildRename(objects.home);
+  buildPairDialog(objects.home);
+  buildUpdateDialog(objects.home);
   showPage(initialPage);
-  lv_scr_load(screen);
-  if (oldScreen && oldScreen != screen) lv_obj_del(oldScreen);
+
+  if (oldScreen && oldScreen != screenForPage(initialPage)) lv_obj_del(oldScreen);
   logLvglMemory("build-ui");
 }
 
