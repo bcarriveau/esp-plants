@@ -47,7 +47,7 @@ static TaskHandle_t lvgl_task_handle = nullptr;
 ESP_IOExpander *expander = NULL;
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
-static uint8_t seven_b_io_state = 0xFF;
+static uint8_t seven_b_io_state = static_cast<uint8_t>(0xFFU & ~(1U << ESP_PLANTS_7B_USB_CAN_SEL_IO));
 
 static bool seven_b_write_register(uint8_t reg, uint8_t value)
 {
@@ -105,7 +105,9 @@ static bool seven_b_apply_brightness_level(uint8_t level)
 static bool seven_b_io_init()
 {
     Wire.begin(I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO, I2C_MASTER_FREQ_HZ);
-    seven_b_io_state = 0xFF;
+    // Never drive EXIO5 high during startup: HIGH switches GPIO19/20 to CAN
+    // and disconnects the ESP32-S3 native USB path from the PC. Keep it LOW.
+    seven_b_io_state = static_cast<uint8_t>(0xFFU & ~(1U << ESP_PLANTS_7B_USB_CAN_SEL_IO));
     const bool mode_ok = seven_b_write_register(ESP_PLANTS_7B_IO_MODE_REG, 0xFF);
     const bool output_ok = seven_b_write_register(ESP_PLANTS_7B_IO_OUTPUT_REG, seven_b_io_state);
     if (!mode_ok || !output_ok) {

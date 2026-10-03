@@ -109,3 +109,7 @@ def test_lvgl_init_guard_and_7b_backlight_protocol_are_explicit():
     assert "ESP_PLANTS_7B_IO_EXTENSION_ADDR (0x24)" in board
     assert "ESP_PLANTS_7B_IO_PWM_REG (0x05)" in board
     assert "ESP_PLANTS_7B_BACKLIGHT_IO (2)" in board
+    assert "ESP_PLANTS_7B_USB_CAN_SEL_IO (5)" in board
+    assert "0xFFU & ~(1U << ESP_PLANTS_7B_USB_CAN_SEL_IO)" in port
+    io_init = port[port.index("static bool seven_b_io_init()") : port.index("#endif", port.index("static bool seven_b_io_init()"))]
+    assert io_init.index("ESP_PLANTS_7B_USB_CAN_SEL_IO") < io_init.index("ESP_PLANTS_7B_IO_OUTPUT_REG")

@@ -104,6 +104,9 @@
 #define ESP_PLANTS_7B_TOUCH_RESET_IO (1)
 #define ESP_PLANTS_7B_BACKLIGHT_IO (2)
 #define ESP_PLANTS_7B_LCD_RESET_IO (3)
+// EXIO5 selects the ESP32-S3 GPIO19/20 routing: LOW keeps native USB,
+// HIGH selects CAN. ESP PLANTS uses native USB; UART2 remains dedicated to H2.
+#define ESP_PLANTS_7B_USB_CAN_SEL_IO (5)
 #define ESP_PLANTS_7B_DEFAULT_BRIGHTNESS_LEVEL (5)
 
 // Backlight/reset are handled explicitly in Waveshare_ST7262_LVGL.cpp.
