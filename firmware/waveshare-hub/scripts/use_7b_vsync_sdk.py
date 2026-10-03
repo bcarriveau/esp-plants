@@ -5,7 +5,6 @@ if env.IsIntegrationDump():
 
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 from SCons.Script import Exit
@@ -128,24 +127,18 @@ env.Prepend(LIBPATH=[str(COMMON_DIR)])
 env.Prepend(LIBS=["esp_lcd_vsync"])
 
 
-def _read_symbol_addresses(elf_path, build_env):
-    nm = build_env.subst("$NM")
-    try:
-        output = subprocess.check_output(
-            [nm, "-n", str(elf_path)], stderr=subprocess.STDOUT,
-            text=True, errors="replace"
-        )
-    except Exception as exc:
-        fail("could not inspect ELF symbols with %s: %s" % (nm, exc))
+def _read_symbol_addresses_from_map(map_text, wanted):
     symbols = {}
-    for line in output.splitlines():
+    wanted = set(wanted)
+    for line in map_text.splitlines():
         parts = line.split()
-        if len(parts) >= 3:
-            try:
-                address = int(parts[0], 16)
-            except ValueError:
-                continue
-            symbols[parts[-1]] = address
+        if len(parts) < 2 or parts[-1] not in wanted:
+            continue
+        try:
+            address = int(parts[0], 16)
+        except ValueError:
+            continue
+        symbols[parts[-1]] = address
     return symbols
 
 
@@ -162,8 +155,6 @@ def verify_link_map(target, source, env):
     if "libesp_hw_support.a(" not in map_text:
         fail("link map does not show stock libesp_hw_support.a")
 
-    elf_path = Path(str(target[0]))
-    symbols = _read_symbol_addresses(elf_path, env)
     iram_symbols = (
         "gdma_start",
         "gdma_stop",
@@ -172,6 +163,7 @@ def verify_link_map(target, source, env):
         "mspi_timing_enter_low_speed_mode",
         "mspi_timing_config_set_psram_clock",
     )
+    symbols = _read_symbol_addresses_from_map(map_text, iram_symbols)
     for name in iram_symbols:
         address = symbols.get(name)
         if address is None:

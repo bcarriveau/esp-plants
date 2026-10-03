@@ -200,7 +200,16 @@ def test_post_link_guard_rejects_flash_placed_gdma_or_mspi_symbols():
         assert symbol in HOOK
     assert "0x40300000 <= address < 0x40400000" in HOOK
     assert "linked outside S3 IRAM/noflash" in HOOK
-    assert 'build_env.subst("$NM")' in HOOK
+    assert "_read_symbol_addresses_from_map" in HOOK
+    assert 'subst("$NM")' not in HOOK
+    assert "subprocess" not in HOOK
+
+
+def test_post_link_symbol_guard_uses_map_file_only_on_windows():
+    assert "parts[-1] not in wanted" in HOOK
+    assert "address = int(parts[0], 16)" in HOOK
+    assert "symbols = _read_symbol_addresses_from_map(map_text, iram_symbols)" in HOOK
+    assert "could not inspect ELF symbols" not in HOOK
 
 
 def test_platformio_post_action_accepts_scons_keyword_env():
