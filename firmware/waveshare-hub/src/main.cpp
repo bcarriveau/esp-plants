@@ -1415,7 +1415,7 @@ lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
 }
 
 void refreshUi(bool force = false, bool alreadyInLvglContext = false);
-void buildUi(Page initialPage = Page::Home);
+void buildUi(Page initialPage = Page::Home, bool initializeTheme = true);
 
 void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **value,
             const lv_font_t *font = &lv_font_montserrat_28) {
@@ -1445,8 +1445,13 @@ lv_obj_t *screenForPage(Page page) {
 void attachSharedUiLayer() {
   // Header, bottom navigation, and full-screen modals are authored once in
   // EEZ Studio on the Home page, then reparented to LVGL's persistent top
-  // layer so the five real EEZ screens share one chrome/modal tree.
+  // layer so the five real EEZ screens share one chrome/modal tree. Keep the
+  // layer itself transparent: the default LVGL theme must never paint over
+  // the active page between the shared header and bottom navigation.
   lv_obj_t *top = lv_layer_top();
+  lv_obj_set_style_bg_opa(top, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(top, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
   if (objects.header) lv_obj_set_parent(objects.header, top);
   if (objects.nav_bar) lv_obj_set_parent(objects.nav_bar, top);
   if (objects.rename_modal) lv_obj_set_parent(objects.rename_modal, top);
@@ -1773,7 +1778,7 @@ void applyAppearanceAsync(void *userData) {
   lv_scr_load(transition);
   deleteGeneratedUiTree();
 
-  buildUi(restorePage);
+  buildUi(restorePage, false);
   appearanceRebuildPending = false;
 }
 
@@ -3096,9 +3101,21 @@ void buildPairDialog(lv_obj_t *screen) {
   lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
 }
 
-void buildUi(Page initialPage) {
+void buildUi(Page initialPage, bool initializeTheme) {
   lv_obj_t *oldScreen = lv_scr_act();
-  create_screens();
+  if (initializeTheme) {
+    create_screens();
+  } else {
+    // Appearance changes only need fresh generated objects. create_screens()
+    // also reinitializes the default LVGL theme; doing that while the shared
+    // header/nav live on lv_layer_top() can leave that layer opaque and hide
+    // the newly loaded page until reboot.
+    create_screen_home();
+    create_screen_all_sensors();
+    create_screen_plant_detail();
+    create_screen_settings();
+    create_screen_advanced_zigbee();
+  }
 
   lv_obj_t *screens[] = {
       objects.home,
