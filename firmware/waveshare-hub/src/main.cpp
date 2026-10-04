@@ -336,6 +336,15 @@ uint32_t pairStartedMs = 0;
 uint8_t pairCandidateIeee[8]{};
 uint16_t pairCandidateShortAddress = 0xffff;
 uint32_t pairCandidateSeenMs = 0;
+uint32_t pairSameSensorSeenMs = 0;
+struct PairInfrastructureBaselineEntry {
+  uint8_t ieee[8]{};
+  uint16_t shortAddress = 0xffff;
+  bool online = false;
+};
+PairInfrastructureBaselineEntry pairInfrastructureBaseline[kMaxInfrastructure]{};
+size_t pairInfrastructureBaselineCount = 0;
+int pairExistingInfrastructureSeen = -1;
 // Alpha.18 permit-join stale-status guard: ignore a queued pre-request zero
 // briefly while waiting for the H2 to acknowledge a new nonzero join window.
 uint32_t permitJoinGuardUntilMs = 0;
@@ -2322,6 +2331,49 @@ void deviceNameEvent(lv_event_t *event) {
 }
 
 
+void resetPairingSessionObservations() {
+  pairSameSensorSeenMs = 0;
+  pairExistingInfrastructureSeen = -1;
+  pairInfrastructureBaselineCount = 0;
+  for (auto &entry : pairInfrastructureBaseline) entry = PairInfrastructureBaselineEntry{};
+}
+
+void snapshotInfrastructurePairingBaseline() {
+  pairInfrastructureBaselineCount = 0;
+  pairExistingInfrastructureSeen = -1;
+  for (const auto &node : infrastructure) {
+    if (!node.used || pairInfrastructureBaselineCount >= kMaxInfrastructure) continue;
+    auto &entry = pairInfrastructureBaseline[pairInfrastructureBaselineCount++];
+    memcpy(entry.ieee, node.ieee, sizeof(entry.ieee));
+    entry.shortAddress = node.shortAddress;
+    entry.online = node.online;
+  }
+}
+
+int infrastructurePairingBaselineIndex(const uint8_t ieee[8]) {
+  if (!ieee || ieeeZero(ieee)) return -1;
+  for (size_t i = 0; i < pairInfrastructureBaselineCount; ++i) {
+    if (ieeeEqual(pairInfrastructureBaseline[i].ieee, ieee)) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void noteSameReplacementSensor(const uint8_t ieee[8]) {
+  if (pairDialogState != PairDialogState::Pairing || !pairReplacing || !ieee ||
+      pairTargetSlot < 0 || pairTargetSlot >= static_cast<int>(kMaxSensors) ||
+      !sensors[pairTargetSlot].used ||
+      !ieeeEqual(ieee, sensors[pairTargetSlot].ieee)) return;
+
+  if (pairSameSensorSeenMs == 0) {
+    char formatted[24]{};
+    plantlink::formatIeee(ieee, formatted, sizeof(formatted));
+    Serial.printf("[zigbee] replacement saw currently assigned sensor %s; waiting for different IEEE\n",
+                  formatted);
+  }
+  pairSameSensorSeenMs = millis();
+  dirty.pair = true;
+}
+
 void closePairDialog() {
   pairDialogState = PairDialogState::Hidden;
   pairFoundSlot = -1;
@@ -2331,6 +2383,7 @@ void closePairDialog() {
   memset(pairCandidateIeee, 0, sizeof(pairCandidateIeee));
   pairCandidateShortAddress = 0xffff;
   pairCandidateSeenMs = 0;
+  resetPairingSessionObservations();
   if (pairModal) lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
   dirty.settings = true;
   dirty.pair = false;
@@ -2355,6 +2408,7 @@ void startPairing(bool replacing, int targetSlot) {
   pairReplacing = replacing;
   pairTargetSlot = replacing ? targetSlot : -1;
   pairFoundSlot = -1;
+  resetPairingSessionObservations();
   memset(pairCandidateIeee, 0, sizeof(pairCandidateIeee));
   pairCandidateShortAddress = 0xffff;
   pairCandidateSeenMs = 0;
@@ -2377,6 +2431,8 @@ void startInfrastructurePairing() {
   pairTargetSlot = -1;
   pairFoundSlot = -1;
   pairFoundInfrastructure = -1;
+  resetPairingSessionObservations();
+  snapshotInfrastructurePairingBaseline();
   pairStartedMs = millis();
 
   if (infrastructureCount() >= kMaxInfrastructure) {
@@ -2500,16 +2556,30 @@ void refreshPairDialog() {
   if (pairDialogState == PairDialogState::Pairing) {
     if (pairInfrastructure) {
       label(pairTitle, "ADD REPEATER");
-      label(pairInstruction,
-            "Put the Zigbee repeater/router into its normal pairing mode.");
-      snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+      if (pairExistingInfrastructureSeen >= 0 &&
+          pairExistingInfrastructureSeen < static_cast<int>(kMaxInfrastructure) &&
+          infrastructure[pairExistingInfrastructureSeen].used) {
+        label(pairInstruction,
+              "That repeater is already registered. Put a different repeater into pairing mode.");
+        snprintf(text, sizeof(text), "REPEATER ALREADY ADDED - %u s", permitJoinRemaining);
+      } else {
+        label(pairInstruction,
+              "Put the Zigbee repeater/router into its normal pairing mode.");
+        snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+      }
     } else {
       label(pairTitle, pairReplacing ? "REPLACE SENSOR" : "ADD SENSOR");
-      label(pairInstruction,
-            pairReplacing
-                ? "Hold the NEW sensor's water/drop button until its red LED begins flashing."
-                : "Hold the sensor's water/drop button until its red LED begins flashing.");
-      snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+      if (pairReplacing && pairSameSensorSeenMs != 0) {
+        label(pairInstruction,
+              "That is the sensor already assigned to this plant. Pair a different sensor to replace it.");
+        snprintf(text, sizeof(text), "SAME SENSOR DETECTED - %u s", permitJoinRemaining);
+      } else {
+        label(pairInstruction,
+              pairReplacing
+                  ? "Hold the NEW sensor's water/drop button until its red LED begins flashing."
+                  : "Hold the sensor's water/drop button until its red LED begins flashing.");
+        snprintf(text, sizeof(text), "PAIRING... %u s", permitJoinRemaining);
+      }
     }
     label(pairStatus, text);
     lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
@@ -3807,14 +3877,18 @@ void handlePairingActivity(const plantlink::Frame &frame) {
   const uint8_t *ieee = frame.payload;
   if (ieeeZero(ieee)) return;
 
-  size_t existingSlot = 0;
-  if (findSensor(ieee, &existingSlot)) return;
-
   if (pairReplacing && pairTargetSlot >= 0 &&
       pairTargetSlot < static_cast<int>(kMaxSensors) &&
       sensors[pairTargetSlot].used &&
-      ieeeEqual(ieee, sensors[pairTargetSlot].ieee)) return;
+      ieeeEqual(ieee, sensors[pairTargetSlot].ieee)) {
+    noteSameReplacementSensor(ieee);
+    return;
+  }
 
+  size_t existingSlot = 0;
+  if (findSensor(ieee, &existingSlot)) return;
+
+  pairSameSensorSeenMs = 0;
   memcpy(pairCandidateIeee, ieee, sizeof(pairCandidateIeee));
   pairCandidateShortAddress = plantlink::getU16LE(frame.payload + 8);
   pairCandidateSeenMs = millis();
@@ -3830,6 +3904,13 @@ void handlePairingActivity(const plantlink::Frame &frame) {
 void handleInfrastructureReport(const plantlink::Frame &frame) {
   plantlink::InfrastructureReportData report;
   if (!plantlink::parseInfrastructureReport(frame.payload, frame.payloadLength, report)) return;
+
+  const int baselineIndex = infrastructurePairingBaselineIndex(report.ieee);
+  const bool knownAtPairStart = baselineIndex >= 0;
+  const bool wasOnlineAtPairStart =
+      knownAtPairStart ? pairInfrastructureBaseline[baselineIndex].online : false;
+  const uint16_t shortAtPairStart =
+      knownAtPairStart ? pairInfrastructureBaseline[baselineIndex].shortAddress : 0xffff;
 
   size_t slot = 0;
   bool created = false;
@@ -3848,11 +3929,21 @@ void handleInfrastructureReport(const plantlink::Frame &frame) {
 
   if (pairInfrastructure &&
       pairDialogState == PairDialogState::Pairing &&
-      created) {
-    requestJoin(0);
-    selectedInfrastructure = static_cast<int>(slot);
-    pairFoundInfrastructure = static_cast<int>(slot);
-    pairDialogState = PairDialogState::Found;
+      node->online) {
+    if (!knownAtPairStart) {
+      requestJoin(0);
+      selectedInfrastructure = static_cast<int>(slot);
+      pairFoundInfrastructure = static_cast<int>(slot);
+      pairExistingInfrastructureSeen = -1;
+      pairDialogState = PairDialogState::Found;
+      Serial.printf("[zigbee] repeater pairing acknowledged slot=%u from pairing-session baseline\n",
+                    static_cast<unsigned>(slot + 1));
+    } else if (pairExistingInfrastructureSeen < 0 &&
+               (!wasOnlineAtPairStart || report.shortAddress != shortAtPairStart)) {
+      pairExistingInfrastructureSeen = static_cast<int>(slot);
+      Serial.printf("[zigbee] pairing saw already-registered repeater slot=%u; waiting for new IEEE\n",
+                    static_cast<unsigned>(slot + 1));
+    }
   }
 
   markInfrastructureDirty();
@@ -3865,6 +3956,7 @@ void handleDeviceJoined(const plantlink::Frame &frame) {
   const uint16_t shortAddress = plantlink::getU16LE(frame.payload + 8);
   size_t slot = 0;
   PlantSensor *s = findSensor(frame.payload, &slot);
+  if (s) noteSameReplacementSensor(frame.payload);
 
   if (!s) {
     s = acceptPairingSensor(frame.payload, shortAddress, &slot);
@@ -3925,6 +4017,7 @@ void handleSensorReport(const plantlink::Frame &frame) {
 
   size_t slot = 0;
   PlantSensor *s = findSensor(report.ieee, &slot);
+  if (s) noteSameReplacementSensor(report.ieee);
   if (frame.flags & plantlink::FlagRouteOnly) {
     if (s && report.fieldFlags == 0 && s->route.update(report)) {
       dirty.plant = true;

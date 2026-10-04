@@ -48,6 +48,47 @@ def test_replacement_gets_explicit_success_acknowledgement():
     assert "lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);" in ws
 
 
+def test_same_sensor_replacement_is_acknowledged_without_false_success():
+    ws = read(WS_MAIN)
+    assert "void noteSameReplacementSensor(const uint8_t ieee[8])" in ws
+    assert '"SAME SENSOR DETECTED - %u s"' in ws
+    assert '"That is the sensor already assigned to this plant. Pair a different sensor to replace it."' in ws
+    assert "if (s) noteSameReplacementSensor(report.ieee);" in ws
+    assert "if (s) noteSameReplacementSensor(frame.payload);" in ws
+
+    pairing_activity = ws.split("void handlePairingActivity", 1)[1].split(
+        "void handleInfrastructureReport", 1
+    )[0]
+    same_sensor = pairing_activity.index("noteSameReplacementSensor(ieee);")
+    generic_existing = pairing_activity.index("findSensor(ieee, &existingSlot)")
+    assert same_sensor < generic_existing
+
+    helper = ws.split("void noteSameReplacementSensor", 1)[1].split(
+        "void closePairDialog", 1
+    )[0]
+    assert "pairDialogState != PairDialogState::Pairing" in helper
+    assert "pairDialogState = PairDialogState::Found" not in helper
+    assert "requestJoin(0)" not in helper
+
+
+def test_repeater_pairing_uses_session_baseline_not_created_race():
+    ws = read(WS_MAIN)
+    assert "struct PairInfrastructureBaselineEntry" in ws
+    assert "snapshotInfrastructurePairingBaseline();" in ws
+    assert "infrastructurePairingBaselineIndex(report.ieee)" in ws
+    assert '"REPEATER ALREADY ADDED - %u s"' in ws
+    assert '"That repeater is already registered. Put a different repeater into pairing mode."' in ws
+
+    handler = ws.split("void handleInfrastructureReport", 1)[1].split(
+        "void handleDeviceJoined", 1
+    )[0]
+    assert "if (!knownAtPairStart)" in handler
+    assert "node->online" in handler
+    assert "pairDialogState = PairDialogState::Found;" in handler
+    assert "pairExistingInfrastructureSeen = static_cast<int>(slot);" in handler
+    assert "pairDialogState == PairDialogState::Pairing &&\n      created" not in handler
+
+
 def test_h2_identity_probe_retries_and_uses_only_fresh_positive_cache():
     ota = read(H2_OTA)
     assert "kIdentityProbeTimeoutMs = 3200" in ota
@@ -72,9 +113,9 @@ def test_link_loss_and_h2_reboot_invalidate_cached_identity():
     assert "espplants_h2_ota::clearLiveIdentity();" in service
 
 
-def test_versions_advance_for_both_changed_firmwares():
+def test_versions_advance_only_for_changed_waveshare_firmware():
     ws_header = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
     h2_header = read(ROOT / "firmware/m5-h2-zigbee/include/build_version.h")
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.60"' in ws_header
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.61"' in ws_header
     assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.33"' in h2_header
-    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.60"
+    assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.61"

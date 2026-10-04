@@ -71,5 +71,5 @@ def test_firmware_versions_advance_independently():
     ws = read("firmware/waveshare-hub/include/build_version.h")
     root_version = read("VERSION").strip()
     assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.33"' in h2
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.60"' in ws
-    assert root_version == "0.2.0-alpha.60"
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.61"' in ws
+    assert root_version == "0.2.0-alpha.61"
