@@ -10,6 +10,7 @@
 #include "advanced_virtual_list.h"
 #include "all_virtual_list.h"
 #include "home_virtual_list.h"
+#include "h2_ota_client.h"
 #include "moisture_policy.h"
 #include "phrase_engine.h"
 #include "update_service.h"
@@ -33,6 +34,7 @@ constexpr uint32_t kLinkTimeoutMs = 7000;
 constexpr uint32_t kUiRefreshIntervalMs = 1000;
 constexpr uint32_t kHomeManualSelectionMs = 30 * 1000;
 constexpr uint32_t kPhraseDisplaySettleMs = 650;
+constexpr uint32_t kPairVerificationTimeoutMs = 15000;
 constexpr size_t kMaxSensors = 32;
 constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kPlantNameBytes = 24;
@@ -99,6 +101,7 @@ enum class PairDialogState : uint8_t {
   Found = 2,
   TimedOut = 3,
   RemoveConfirm = 4,
+  Verifying = 5,
 };
 
 struct PersistedPlant {
@@ -330,6 +333,9 @@ bool pairReplacing = false;
 int pairTargetSlot = -1;
 int pairFoundSlot = -1;
 uint32_t pairStartedMs = 0;
+uint8_t pairCandidateIeee[8]{};
+uint16_t pairCandidateShortAddress = 0xffff;
+uint32_t pairCandidateSeenMs = 0;
 // Alpha.18 permit-join stale-status guard: ignore a queued pre-request zero
 // briefly while waiting for the H2 to acknowledge a new nonzero join window.
 uint32_t permitJoinGuardUntilMs = 0;
@@ -2322,6 +2328,9 @@ void closePairDialog() {
   pairFoundInfrastructure = -1;
   pairInfrastructure = false;
   pairRemovingInfrastructure = false;
+  memset(pairCandidateIeee, 0, sizeof(pairCandidateIeee));
+  pairCandidateShortAddress = 0xffff;
+  pairCandidateSeenMs = 0;
   if (pairModal) lv_obj_add_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
   dirty.settings = true;
   dirty.pair = false;
@@ -2346,6 +2355,9 @@ void startPairing(bool replacing, int targetSlot) {
   pairReplacing = replacing;
   pairTargetSlot = replacing ? targetSlot : -1;
   pairFoundSlot = -1;
+  memset(pairCandidateIeee, 0, sizeof(pairCandidateIeee));
+  pairCandidateShortAddress = 0xffff;
+  pairCandidateSeenMs = 0;
   pairStartedMs = millis();
   pairDialogState = PairDialogState::Pairing;
 
@@ -2450,7 +2462,8 @@ void pairPrimaryEvent(lv_event_t *event) {
 
 void pairSecondaryEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  if (pairDialogState == PairDialogState::Pairing) requestJoin(0);
+  if (pairDialogState == PairDialogState::Pairing ||
+      pairDialogState == PairDialogState::Verifying) requestJoin(0);
   closePairDialog();
 }
 
@@ -2468,6 +2481,14 @@ void refreshPairDialog() {
       permitJoinRemaining == 0 &&
       millis() - pairStartedMs > 2500u) {
     pairDialogState = PairDialogState::TimedOut;
+  } else if (pairDialogState == PairDialogState::Verifying &&
+             pairCandidateSeenMs != 0 &&
+             millis() - pairCandidateSeenMs > kPairVerificationTimeoutMs) {
+    memset(pairCandidateIeee, 0, sizeof(pairCandidateIeee));
+    pairCandidateShortAddress = 0xffff;
+    pairCandidateSeenMs = 0;
+    pairDialogState = permitJoinRemaining ? PairDialogState::Pairing
+                                          : PairDialogState::TimedOut;
   }
 
   lv_obj_clear_flag(pairModal, LV_OBJ_FLAG_HIDDEN);
@@ -2493,6 +2514,13 @@ void refreshPairDialog() {
     label(pairStatus, text);
     lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
     label(pairSecondaryLabel, "CANCEL");
+  } else if (pairDialogState == PairDialogState::Verifying) {
+    label(pairTitle, pairReplacing ? "REPLACE SENSOR" : "ADD SENSOR");
+    label(pairInstruction,
+          "Zigbee device joined. Confirming it is a supported plant sensor...");
+    label(pairStatus, "VERIFYING SENSOR...");
+    lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+    label(pairSecondaryLabel, "CANCEL");
   } else if (pairDialogState == PairDialogState::Found) {
     if (pairInfrastructure) {
       label(pairTitle, "REPEATER FOUND");
@@ -2510,7 +2538,7 @@ void refreshPairDialog() {
       label(pairPrimaryLabel, "RENAME");
       label(pairSecondaryLabel, "DONE");
     } else {
-      label(pairTitle, "SENSOR FOUND");
+      label(pairTitle, pairReplacing ? "SENSOR REPLACED" : "SENSOR FOUND");
       if (pairFoundSlot >= 0 && pairFoundSlot < static_cast<int>(kMaxSensors) &&
           sensors[pairFoundSlot].used) {
         if (pairReplacing) {
@@ -2523,9 +2551,14 @@ void refreshPairDialog() {
       } else {
         label(pairInstruction, "The new sensor is connected.");
       }
-      label(pairStatus, "Name it now, or tap DONE.");
-      lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
-      label(pairPrimaryLabel, "NAME PLANT");
+      if (pairReplacing) {
+        label(pairStatus, "Replacement complete.");
+        lv_obj_add_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+      } else {
+        label(pairStatus, "Name it now, or tap DONE.");
+        lv_obj_clear_flag(pairPrimary, LV_OBJ_FLAG_HIDDEN);
+        label(pairPrimaryLabel, "NAME PLANT");
+      }
       label(pairSecondaryLabel, "DONE");
     }
   } else if (pairDialogState == PairDialogState::TimedOut) {
@@ -3730,7 +3763,9 @@ void handleNetworkStatus(const plantlink::Frame &frame) {
 
 PlantSensor *acceptPairingSensor(const uint8_t ieee[8], uint16_t shortAddress,
                                   size_t *slotOut) {
-  if (pairDialogState != PairDialogState::Pairing || !ieee || ieeeZero(ieee)) return nullptr;
+  if ((pairDialogState != PairDialogState::Pairing &&
+       pairDialogState != PairDialogState::Verifying) ||
+      !ieee || ieeeZero(ieee)) return nullptr;
 
   size_t existingSlot = 0;
   if (findSensor(ieee, &existingSlot)) return nullptr;
@@ -3762,6 +3797,34 @@ PlantSensor *acceptPairingSensor(const uint8_t ieee[8], uint16_t shortAddress,
   dirty.plant = true;
   if (slotOut) *slotOut = slot;
   return s;
+}
+
+void handlePairingActivity(const plantlink::Frame &frame) {
+  if (frame.payloadLength < 10 || pairInfrastructure ||
+      (pairDialogState != PairDialogState::Pairing &&
+       pairDialogState != PairDialogState::Verifying)) return;
+
+  const uint8_t *ieee = frame.payload;
+  if (ieeeZero(ieee)) return;
+
+  size_t existingSlot = 0;
+  if (findSensor(ieee, &existingSlot)) return;
+
+  if (pairReplacing && pairTargetSlot >= 0 &&
+      pairTargetSlot < static_cast<int>(kMaxSensors) &&
+      sensors[pairTargetSlot].used &&
+      ieeeEqual(ieee, sensors[pairTargetSlot].ieee)) return;
+
+  memcpy(pairCandidateIeee, ieee, sizeof(pairCandidateIeee));
+  pairCandidateShortAddress = plantlink::getU16LE(frame.payload + 8);
+  pairCandidateSeenMs = millis();
+  pairDialogState = PairDialogState::Verifying;
+  dirty.pair = true;
+
+  char formatted[24]{};
+  plantlink::formatIeee(ieee, formatted, sizeof(formatted));
+  Serial.printf("[zigbee] pairing activity: %s short=0x%04X; verifying sensor\n",
+                formatted, pairCandidateShortAddress);
 }
 
 void handleInfrastructureReport(const plantlink::Frame &frame) {
@@ -3951,7 +4014,12 @@ void handleFrame(const plantlink::Frame &frame) {
     case plantlink::MessageType::Heartbeat:
       if (frame.payloadLength == 8) {
         const uint32_t uptime = plantlink::getU32LE(frame.payload);
-        if (haveH2Uptime && uptime < lastH2Uptime) clearRoutes();
+        if (haveH2Uptime && uptime < lastH2Uptime) {
+          clearRoutes();
+          h2BuildId[0] = '\0';
+          espplants_h2_ota::clearLiveIdentity();
+          dirty.update = true;
+        }
         lastH2Uptime = uptime;
         haveH2Uptime = true;
       }
@@ -3962,6 +4030,7 @@ void handleFrame(const plantlink::Frame &frame) {
       memcpy(build, frame.payload, n);
       strncpy(h2BuildId, build, sizeof(h2BuildId) - 1);
       h2BuildId[sizeof(h2BuildId) - 1] = '\0';
+      espplants_h2_ota::noteLiveIdentity(build);
       Serial.printf("[plantlink] H2 hello: %s\n", build);
       dirty.update = true;
       break;
@@ -3970,6 +4039,7 @@ void handleFrame(const plantlink::Frame &frame) {
     case plantlink::MessageType::DeviceJoined: handleDeviceJoined(frame); break;
     case plantlink::MessageType::DeviceLeft: handleDeviceLeft(frame); break;
     case plantlink::MessageType::InfrastructureReport: handleInfrastructureReport(frame); break;
+    case plantlink::MessageType::PairingActivity: handlePairingActivity(frame); break;
     case plantlink::MessageType::SensorReport: handleSensorReport(frame); break;
     default: break;
   }
@@ -3987,6 +4057,8 @@ void servicePlantLink() {
     h2Online = false;
     networkReady = false;
     permitJoinRemaining = 0;
+    h2BuildId[0] = '\0';
+    espplants_h2_ota::clearLiveIdentity();
     markNetworkStateDirty();
     clearRoutes();
     haveH2Uptime = false;

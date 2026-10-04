@@ -30,6 +30,7 @@ constexpr size_t kMaxSensors = 32;
 constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kCapturedApsBytes = 128;
 constexpr uint32_t kStatusIntervalMs = 1500;
+constexpr uint32_t kPairingActivityScanIntervalMs = 250;
 constexpr uint32_t kInfrastructureScanIntervalMs = 3000;
 constexpr uint32_t kInfrastructureOfflineTimeoutMs = 45000;
 constexpr uint32_t kRouterJoinSettleMs = 15000;
@@ -73,6 +74,9 @@ uint32_t lastInfrastructureScanMs = 0;
 uint32_t permitJoinUntilMs = 0;
 uint32_t lastRouterJoinActivityMs = 0;
 uint32_t deferredPermitCloseMs = 0;
+uint32_t lastPairingActivityScanMs = 0;
+uint8_t pairingActivityIeee[8]{};
+uint16_t pairingActivityShortAddress = 0xffff;
 bool zigbeeReady = false;
 
 // Arduino Zigbee openNetwork()/closeNetwork() call the BDB APIs directly.
@@ -204,6 +208,29 @@ void sendDeviceJoined(const SensorState &sensor) {
   memcpy(payload, sensor.ieee, 8);
   plantlink::putU16LE(payload + 8, sensor.shortAddress);
   sendFrame(plantlink::MessageType::DeviceJoined, payload, sizeof(payload));
+}
+
+void resetPairingActivity() {
+  memset(pairingActivityIeee, 0, sizeof(pairingActivityIeee));
+  pairingActivityShortAddress = 0xffff;
+}
+
+void sendPairingActivity(const uint8_t ieee[8], uint16_t shortAddress) {
+  if (!ieee || ieeeIsZero(ieee) || shortAddress == 0xffff) return;
+  if (ieeeEqual(pairingActivityIeee, ieee) &&
+      pairingActivityShortAddress == shortAddress) return;
+
+  uint8_t payload[10]{};
+  memcpy(payload, ieee, 8);
+  plantlink::putU16LE(payload + 8, shortAddress);
+  sendFrame(plantlink::MessageType::PairingActivity, payload, sizeof(payload));
+  memcpy(pairingActivityIeee, ieee, sizeof(pairingActivityIeee));
+  pairingActivityShortAddress = shortAddress;
+
+  char ieeeText[24]{};
+  plantlink::formatIeee(ieee, ieeeText, sizeof(ieeeText));
+  Serial.printf("[zigbee] pairing activity ieee=%s short=0x%04X\n",
+                ieeeText, shortAddress);
 }
 
 void sendDeviceLeft(const uint8_t ieee[8]) {
@@ -545,6 +572,13 @@ void processApsEvent(const ApsEvent &event) {
     updateSensorRouteFromPacket(*sensor, event);
   }
 
+  if (!sensor && permitJoinRemaining() > 0 && !ieeeIsZero(event.ieee)) {
+    // Routed end devices may not appear in the coordinator neighbor table.
+    // Their first APS packet still gives the display immediate join/verify
+    // feedback without admitting them to the plant registry.
+    sendPairingActivity(event.ieee, event.shortAddress);
+  }
+
   zg303z::NormalizedUpdate normalized;
   bool decoded = false;
   bool legacyMappingSeen = sensor ? sensor->legacyHobeianMappingSeen : false;
@@ -602,6 +636,7 @@ void processApsEvent(const ApsEvent &event) {
       if (created) {
         Serial.printf("[zigbee] confirmed new ZG-303Z plant sensor %s\n", ieeeText);
         sendDeviceJoined(*sensor);
+        resetPairingActivity();
         sendNetworkStatus();
       }
     }
@@ -652,6 +687,36 @@ bool apsDataHandler(esp_zb_apsde_data_ind_t ind) {
 
   // false = observe the frame but allow normal Zigbee stack processing to continue.
   return false;
+}
+
+void servicePairingActivity() {
+  const uint32_t now = millis();
+  if (!zigbeeReady || permitJoinRemaining() == 0 ||
+      now - lastPairingActivityScanMs < kPairingActivityScanIntervalMs) return;
+  lastPairingActivityScanMs = now;
+
+  esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_neighbor_info_t neighbor{};
+  uint8_t candidateIeee[8]{};
+  uint16_t candidateShortAddress = 0xffff;
+
+  esp_zb_lock_acquire(portMAX_DELAY);
+  while (esp_zb_nwk_get_next_neighbor(&iterator, &neighbor) == ESP_OK) {
+    if (neighbor.device_type != ESP_ZB_DEVICE_TYPE_ED ||
+        neighbor.relationship != ESP_ZB_NWK_RELATIONSHIP_CHILD ||
+        ieeeIsZero(neighbor.ieee_addr) ||
+        findSensorByIeee(neighbor.ieee_addr)) {
+      continue;
+    }
+    memcpy(candidateIeee, neighbor.ieee_addr, sizeof(candidateIeee));
+    candidateShortAddress = neighbor.short_addr;
+    break;
+  }
+  esp_zb_lock_release();
+
+  if (candidateShortAddress != 0xffff) {
+    sendPairingActivity(candidateIeee, candidateShortAddress);
+  }
 }
 
 void serviceInfrastructureRegistry() {
@@ -761,6 +826,7 @@ void handlePlantFrame(const plantlink::Frame &frame) {
           schedulePermitJoin(0);
           permitJoinUntilMs = 0;
           deferredPermitCloseMs = 0;
+          resetPairingActivity();
           Serial.println("[zigbee] permit join closed");
         }
       } else {
@@ -768,6 +834,7 @@ void handlePlantFrame(const plantlink::Frame &frame) {
         permitJoinUntilMs = millis() + static_cast<uint32_t>(seconds) * 1000u;
         deferredPermitCloseMs = 0;
         lastRouterJoinActivityMs = 0;
+        resetPairingActivity();
         Serial.printf("[zigbee] permit join open for %u seconds\n", seconds);
       }
       sendNetworkStatus();
@@ -810,6 +877,7 @@ void servicePlantLink() {
     permitJoinUntilMs = 0;
     deferredPermitCloseMs = 0;
     lastRouterJoinActivityMs = 0;
+    resetPairingActivity();
     Serial.println("[zigbee] deferred permit join close completed after router settle");
     sendNetworkStatus();
   }
@@ -821,6 +889,7 @@ void servicePlantLink() {
     sendNetworkStatus();
   }
 
+  servicePairingActivity();
   serviceInfrastructureRegistry();
 }
 

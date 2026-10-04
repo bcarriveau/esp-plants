@@ -25,12 +25,17 @@ constexpr size_t kMaxH2Bytes = 0xE0000u;
 constexpr uint32_t kAckTimeoutMs = 2500;
 constexpr uint32_t kRebootTimeoutMs = 15000;
 constexpr uint32_t kHelloTimeoutMs = 1200;
+constexpr uint32_t kIdentityProbeTimeoutMs = 3200;
+constexpr uint32_t kIdentityProbeRetryMs = 850;
+constexpr uint32_t kKnownIdentityFreshMs = 10000;
 
 volatile uint8_t lastStatus = 0;
 volatile uint8_t lastError = 0;
 volatile uint32_t nextOffset = 0;
 volatile uint32_t eventCounter = 0;
 char lastHello[96]{};
+char knownHello[96]{};
+uint32_t knownHelloSeenMs = 0;
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 uint16_t sequence = 0x5000;
 
@@ -49,6 +54,10 @@ void observer(const plantlink::Frame &frame) {
     const size_t length = std::min<size_t>(frame.payloadLength, sizeof(lastHello) - 1);
     memcpy(lastHello, frame.payload, length);
     lastHello[length] = 0;
+    if (strncmp(lastHello, kH2Prefix, strlen(kH2Prefix)) == 0) {
+      memcpy(knownHello, lastHello, sizeof(knownHello));
+      knownHelloSeenMs = millis();
+    }
     ++eventCounter;
   }
   portEXIT_CRITICAL(&mux);
@@ -124,12 +133,21 @@ TargetState probeTarget(const espplants_ota_installer::Release &release) {
   portEXIT_CRITICAL(&mux);
 
   uint8_t helloPayload[8]{};
-  plantlink::putU32LE(helloPayload, millis());
   const uint32_t before = counter();
-  sendFrame(plantlink::MessageType::Hello, helloPayload, sizeof(helloPayload));
-
   const uint32_t started = millis();
-  while (millis() - started < kHelloTimeoutMs) {
+  uint32_t lastProbeMs = 0;
+  bool probeSent = false;
+
+  while (millis() - started < kIdentityProbeTimeoutMs) {
+    const uint32_t now = millis();
+    if (!probeSent || now - lastProbeMs >= kIdentityProbeRetryMs) {
+      memset(helloPayload, 0, sizeof(helloPayload));
+      plantlink::putU32LE(helloPayload, now);
+      sendFrame(plantlink::MessageType::Hello, helloPayload, sizeof(helloPayload));
+      lastProbeMs = now;
+      probeSent = true;
+    }
+
     char hello[sizeof(lastHello)]{};
     uint32_t events = 0;
     portENTER_CRITICAL(&mux);
@@ -142,6 +160,21 @@ TargetState probeTarget(const espplants_ota_installer::Release &release) {
     }
     delay(5);
   }
+
+  // Normal PlantLink traffic also learns the H2 identity. If every active
+  // refresh attempt was lost, accept only a recently observed positive H2
+  // identity. Link-loss/reboot handling clears this cache in main.cpp.
+  char cached[sizeof(knownHello)]{};
+  uint32_t cachedAt = 0;
+  portENTER_CRITICAL(&mux);
+  memcpy(cached, knownHello, sizeof(cached));
+  cachedAt = knownHelloSeenMs;
+  portEXIT_CRITICAL(&mux);
+  if (cachedAt != 0 && millis() - cachedAt <= kKnownIdentityFreshMs &&
+      strncmp(cached, kH2Prefix, strlen(kH2Prefix)) == 0) {
+    return classifyTargetHello(cached, release);
+  }
+
   return TargetState::UNKNOWN;
 }
 
@@ -289,6 +322,21 @@ bool getAsset(const char *url, uint8_t *destination, size_t capacity, size_t &ou
 
 void observePlantLinkFrame(const void *frame) {
   if (frame) observer(*static_cast<const plantlink::Frame *>(frame));
+}
+
+void noteLiveIdentity(const char *buildId) {
+  if (!buildId || strncmp(buildId, kH2Prefix, strlen(kH2Prefix)) != 0) return;
+  portENTER_CRITICAL(&mux);
+  snprintf(knownHello, sizeof(knownHello), "%s", buildId);
+  knownHelloSeenMs = millis();
+  portEXIT_CRITICAL(&mux);
+}
+
+void clearLiveIdentity() {
+  portENTER_CRITICAL(&mux);
+  knownHello[0] = 0;
+  knownHelloSeenMs = 0;
+  portEXIT_CRITICAL(&mux);
 }
 
 TargetState targetStateForRelease(const espplants_ota_installer::Release &release) {

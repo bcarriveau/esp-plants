@@ -38,6 +38,9 @@ inline TargetState targetStateForIdentity(const char *currentBuildId,
                                                      : TargetState::UNKNOWN;
 }
 
+void noteLiveIdentity(const char *buildId);
+void clearLiveIdentity();
+
 TargetState targetStateForRelease(const espplants_ota_installer::Release &release);
 Result updateForRelease(const espplants_ota_installer::Release &release,
                         espplants_ota_installer::ProgressCallback progress,

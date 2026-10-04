@@ -9,7 +9,7 @@ constexpr size_t kHeaderBytes=7;
 constexpr size_t kCrcBytes=4;
 constexpr size_t kMaxDecodedBytes=kHeaderBytes+kMaxPayloadBytes+kCrcBytes;
 constexpr size_t kMaxEncodedBytes=kMaxDecodedBytes+(kMaxDecodedBytes/254)+2;
-enum class MessageType:uint8_t{Hello=0x01,HelloAck=0x02,Heartbeat=0x03,NetworkStatus=0x10,PermitJoin=0x11,DeviceJoined=0x12,DeviceLeft=0x13,RemoveDevice=0x14,InfrastructureReport=0x15,SensorReport=0x20,SetSensorOption=0x21,CommandResult=0x22,RawZigbeeEvent=0x30,FactoryResetNetwork=0x40,H2OtaBegin=0x50,H2OtaChunk=0x51,H2OtaEnd=0x52,H2OtaStatus=0x53,H2OtaAbort=0x54};
+enum class MessageType:uint8_t{Hello=0x01,HelloAck=0x02,Heartbeat=0x03,NetworkStatus=0x10,PermitJoin=0x11,DeviceJoined=0x12,DeviceLeft=0x13,RemoveDevice=0x14,InfrastructureReport=0x15,PairingActivity=0x16,SensorReport=0x20,SetSensorOption=0x21,CommandResult=0x22,RawZigbeeEvent=0x30,FactoryResetNetwork=0x40,H2OtaBegin=0x50,H2OtaChunk=0x51,H2OtaEnd=0x52,H2OtaStatus=0x53,H2OtaAbort=0x54};
 enum FrameFlags:uint8_t{FlagNone=0,FlagResponse=1,FlagError=2,FlagRouteOnly=4};
 enum CapabilityFlags:uint32_t{CapabilityNone=0,CapabilityZigbeeCoordinator=1u<<0,CapabilityZg303zDecoder=1u<<1,CapabilityRawZigbeeLog=1u<<2,CapabilityInfrastructureRegistry=1u<<3,CapabilityH2Ota=1u<<4};
 enum SensorFieldFlags:uint16_t{SensorHasTemperature=1u<<0,SensorHasHumidity=1u<<1,SensorHasSoilMoisture=1u<<2,SensorHasBattery=1u<<3,SensorHasWaterWarning=1u<<4};
