@@ -2602,6 +2602,30 @@ void buildHeader(lv_obj_t *screen) {
   lv_obj_add_flag(headerUpdateButton, LV_OBJ_FLAG_HIDDEN);
 }
 
+void configureTouchScrollTarget(lv_obj_t *list) {
+  if (!list) return;
+
+  // EEZ's static list containers are intentionally non-clickable. On real
+  // pointer/touch input LVGL starts scroll discovery from the pressed object,
+  // so make the runtime list itself an explicit touch target and restore the
+  // normal vertical scroll behavior here.
+  lv_obj_add_flag(list, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+}
+
+void chainVerticalDragToParent(lv_obj_t *obj) {
+  if (!obj) return;
+
+  // Virtual content/rows are not independently scrollable. Explicit vertical
+  // chaining ensures a finger drag started on a row is handed to its list.
+  lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(obj, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+  lv_obj_add_flag(obj, LV_OBJ_FLAG_GESTURE_BUBBLE);
+}
+
 void buildHome(lv_obj_t *screen) {
   (void)screen;
 
@@ -2623,8 +2647,7 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_add_event_cb(objects.home_featured_card, featuredEvent, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_flag(homeWarning, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_add_flag(homeList, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_scroll_dir(homeList, LV_DIR_VER);
+  configureTouchScrollTarget(homeList);
   lv_obj_add_event_cb(homeList, homeListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
   homeVirtualContent = lv_obj_create(homeList);
@@ -2634,7 +2657,7 @@ void buildHome(lv_obj_t *screen) {
   lv_obj_set_style_border_width(homeVirtualContent, 0, 0);
   lv_obj_set_style_bg_opa(homeVirtualContent, LV_OPA_TRANSP, 0);
   lv_obj_set_style_pad_all(homeVirtualContent, 0, 0);
-  lv_obj_clear_flag(homeVirtualContent, LV_OBJ_FLAG_SCROLLABLE);
+  chainVerticalDragToParent(homeVirtualContent);
 
   for (size_t i = 0; i < espplants_home_virtual_list::kPoolSize; ++i) {
     PlantListRow &row = rows[i];
@@ -2645,7 +2668,7 @@ void buildHome(lv_obj_t *screen) {
     lv_obj_set_style_border_width(row.box, 0, 0);
     lv_obj_set_style_bg_color(row.box, uiColorHex(0x1D2922), 0);
     lv_obj_set_style_pad_all(row.box, 8, 0);
-    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+    chainVerticalDragToParent(row.box);
     lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(row.box, rowEvent, LV_EVENT_CLICKED, &row);
 
@@ -2683,8 +2706,7 @@ void buildAll(lv_obj_t *screen) {
   allSummary = objects.all_summary;
   allList = objects.all_list;
 
-  lv_obj_add_flag(allList, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_scroll_dir(allList, LV_DIR_VER);
+  configureTouchScrollTarget(allList);
   lv_obj_add_event_cb(allList, allListScrollEvent, LV_EVENT_SCROLL, nullptr);
 
   allVirtualContent = lv_obj_create(allList);
@@ -2694,7 +2716,7 @@ void buildAll(lv_obj_t *screen) {
   lv_obj_set_style_border_width(allVirtualContent, 0, 0);
   lv_obj_set_style_bg_opa(allVirtualContent, LV_OPA_TRANSP, 0);
   lv_obj_set_style_pad_all(allVirtualContent, 0, 0);
-  lv_obj_clear_flag(allVirtualContent, LV_OBJ_FLAG_SCROLLABLE);
+  chainVerticalDragToParent(allVirtualContent);
 
   for (size_t i = 0; i < espplants_all_virtual_list::kPoolSize; ++i) {
     AllSensorRow &row = allRows[i];
@@ -2705,7 +2727,7 @@ void buildAll(lv_obj_t *screen) {
     lv_obj_set_style_border_width(row.box, 0, 0);
     lv_obj_set_style_bg_color(row.box, uiColorHex(0x1D2922), 0);
     lv_obj_set_style_pad_all(row.box, 8, 0);
-    lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+    chainVerticalDragToParent(row.box);
     lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(row.box, allRowEvent, LV_EVENT_CLICKED, &row);
 
