@@ -7,11 +7,12 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_alpha30_keeps_last_hop_resolution_and_debounces_repeater_offline_state():
+def test_current_h2_keeps_last_hop_resolution_and_debounces_repeater_offline_state():
     main = read("firmware/m5-h2-zigbee/src/main.cpp")
     route = read("firmware/m5-h2-zigbee/include/sensor_route.h")
 
-    # Alpha.28's temporary table dumper is gone from the active source path.
+    # Alpha.28's periodic topology dumper stays gone. Alpha.33 adds only a
+    # manual read-only neighbor dump for failure diagnosis.
     for old in (
         "dumpTopologyTables",
         "topologyDiagDue",
@@ -24,6 +25,8 @@ def test_alpha30_keeps_last_hop_resolution_and_debounces_repeater_offline_state(
         "esp_zb_nwk_get_next_route_record",
     ):
         assert old not in main
+    assert "void printNeighborTable()" in main
+    assert "t = dump Zigbee neighbor table (read-only)" in main
 
     # Production logic now asks one question only: did this packet arrive through
     # one unique live router neighbor? Direct children intentionally produce none.
@@ -34,7 +37,6 @@ def test_alpha30_keeps_last_hop_resolution_and_debounces_repeater_offline_state(
     assert "RouteState::ROUTED" in main
     assert "RouteState::DIRECT" not in main
     assert "Two routers with the same current LQI are ambiguous. Never guess." in route
-
 
 
 def test_repeater_offline_requires_a_sustained_neighbor_table_absence():
@@ -68,6 +70,6 @@ def test_firmware_versions_advance_independently():
     h2 = read("firmware/m5-h2-zigbee/include/build_version.h")
     ws = read("firmware/waveshare-hub/include/build_version.h")
     root_version = read("VERSION").strip()
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.30"' in h2
-    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.48"' in ws
-    assert root_version == "0.2.0-alpha.48"
+    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.33"' in h2
+    assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.60"' in ws
+    assert root_version == "0.2.0-alpha.60"

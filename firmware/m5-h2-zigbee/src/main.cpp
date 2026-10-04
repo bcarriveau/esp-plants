@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Preferences.h>
 #include <Zigbee.h>
 
 #include "aps/esp_zigbee_aps.h"
@@ -29,7 +30,12 @@ constexpr int kPlantLinkTxPin = 24;
 constexpr size_t kMaxSensors = 32;
 constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kCapturedApsBytes = 128;
+constexpr size_t kApsQueueDepth = 32;
 constexpr uint32_t kStatusIntervalMs = 1500;
+constexpr uint32_t kDiagnosticSummaryIntervalMs = 60000;
+constexpr char kNetworkFingerprintNamespace[] = "espplants-h2";
+constexpr char kNetworkFingerprintKey[] = "zbfp";
+constexpr uint8_t kNetworkFingerprintVersion = 1;
 constexpr uint32_t kPairingActivityScanIntervalMs = 250;
 constexpr uint32_t kInfrastructureScanIntervalMs = 3000;
 constexpr uint32_t kInfrastructureOfflineTimeoutMs = 45000;
@@ -70,6 +76,7 @@ PlantZigbeeGateway zbGateway(kGatewayEndpoint);
 plantlink::Decoder plantDecoder;
 uint16_t nextSequence = 1;
 uint32_t lastStatusMs = 0;
+uint32_t lastDiagnosticSummaryMs = 0;
 uint32_t lastInfrastructureScanMs = 0;
 uint32_t permitJoinUntilMs = 0;
 uint32_t lastRouterJoinActivityMs = 0;
@@ -78,6 +85,21 @@ uint32_t lastPairingActivityScanMs = 0;
 uint8_t pairingActivityIeee[8]{};
 uint16_t pairingActivityShortAddress = 0xffff;
 bool zigbeeReady = false;
+
+struct ReceiveDiagnostics {
+  volatile uint32_t apsCallbacks = 0;
+  volatile uint32_t apsQueueDrops = 0;
+  volatile uint32_t ieeeLookupFailures = 0;
+  volatile uint32_t zeroIeeeEvents = 0;
+  uint32_t ieeeLateRecoveries = 0;
+  uint32_t apsProcessed = 0;
+  uint32_t decodedFrames = 0;
+  uint32_t sensorReportsSent = 0;
+  uint32_t plantLinkShortWrites = 0;
+  uint32_t infrastructureShortRejects = 0;
+};
+
+ReceiveDiagnostics receiveDiag;
 
 // Arduino Zigbee openNetwork()/closeNetwork() call the BDB APIs directly.
 // PlantLink and the development console run from the Arduino loop task, while
@@ -153,12 +175,23 @@ bool ieeeEqual(const uint8_t a[8], const uint8_t b[8]) {
   return memcmp(a, b, 8) == 0;
 }
 
-void sendFrame(plantlink::MessageType type, const uint8_t *payload = nullptr,
+bool sendFrame(plantlink::MessageType type, const uint8_t *payload = nullptr,
                uint16_t payloadLength = 0, uint8_t flags = plantlink::FlagNone) {
   uint8_t encoded[plantlink::kMaxEncodedBytes]{};
   const size_t length = plantlink::encodeFrame(type, flags, nextSequence++, payload,
                                                 payloadLength, encoded, sizeof(encoded));
-  if (length) PlantUart.write(encoded, length);
+  if (!length) return false;
+
+  const size_t written = PlantUart.write(encoded, length);
+  if (written != length) {
+    ++receiveDiag.plantLinkShortWrites;
+    Serial.printf("[plantlink] SHORT WRITE type=0x%02X wrote=%u expected=%u total=%lu\n",
+                  static_cast<unsigned>(type), static_cast<unsigned>(written),
+                  static_cast<unsigned>(length),
+                  static_cast<unsigned long>(receiveDiag.plantLinkShortWrites));
+    return false;
+  }
+  return true;
 }
 
 uint8_t currentChannel() {
@@ -334,7 +367,9 @@ void sendSensorReport(const SensorState &sensor) {
 
   uint8_t payload[plantlink::kSensorReportPayloadBytes]{};
   const size_t length = plantlink::serializeSensorReport(report, payload, sizeof(payload));
-  if (length) sendFrame(plantlink::MessageType::SensorReport, payload, length);
+  if (length && sendFrame(plantlink::MessageType::SensorReport, payload, length)) {
+    ++receiveDiag.sensorReportsSent;
+  }
 }
 
 void sendRawEvent(const ApsEvent &event) {
@@ -532,25 +567,82 @@ void applyNormalized(SensorState &sensor, const zg303z::NormalizedUpdate &update
   }
 }
 
+bool recoverEventIeee(ApsEvent &event) {
+  if (!ieeeIsZero(event.ieee) || event.shortAddress == 0xffff) return !ieeeIsZero(event.ieee);
+
+  esp_zb_ieee_addr_t resolved{};
+  bool recovered = false;
+  esp_zb_lock_acquire(portMAX_DELAY);
+  if (esp_zb_ieee_address_by_short(event.shortAddress, resolved) == ESP_OK &&
+      !ieeeIsZero(resolved)) {
+    recovered = true;
+  } else {
+    // Direct sleepy children may already be present in the neighbor table even
+    // when the short->IEEE helper was not ready in the APS callback. Use the
+    // exact current short-address entry only; never guess from LQI or history.
+    esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+    esp_zb_nwk_neighbor_info_t neighbor{};
+    while (esp_zb_nwk_get_next_neighbor(&iterator, &neighbor) == ESP_OK) {
+      if (neighbor.short_addr == event.shortAddress && !ieeeIsZero(neighbor.ieee_addr)) {
+        memcpy(resolved, neighbor.ieee_addr, sizeof(resolved));
+        recovered = true;
+        break;
+      }
+    }
+  }
+  esp_zb_lock_release();
+
+  if (!recovered) return false;
+  memcpy(event.ieee, resolved, sizeof(event.ieee));
+  ++receiveDiag.ieeeLateRecoveries;
+  return true;
+}
+
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
 void printHex(const uint8_t *data, size_t length) {
   for (size_t i = 0; i < length; ++i) Serial.printf("%02X", data[i]);
 }
+#endif
 
-
-void processApsEvent(const ApsEvent &event) {
+void processApsEvent(ApsEvent event) {
+  ++receiveDiag.apsProcessed;
+  const bool hadZeroIeee = ieeeIsZero(event.ieee);
+  const bool recoveredIeee = hadZeroIeee && recoverEventIeee(event);
+  if (hadZeroIeee) {
+    if (recoveredIeee) {
+      char recoveredText[24]{};
+      plantlink::formatIeee(event.ieee, recoveredText, sizeof(recoveredText));
+      Serial.printf("[aps] IEEE recovered short=0x%04X ieee=%s cluster=0x%04X\n",
+                    event.shortAddress, recoveredText, event.clusterId);
+    } else {
+      Serial.printf("[aps] IEEE unresolved short=0x%04X cluster=0x%04X\n",
+                    event.shortAddress, event.clusterId);
+    }
+  }
   char ieeeText[24]{};
   plantlink::formatIeee(event.ieee, ieeeText, sizeof(ieeeText));
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
   Serial.printf("[aps] src=%s short=0x%04X ep=%u cluster=0x%04X lqi=%u rssi=%d len=%u data=",
                 ieeeText, event.shortAddress, event.sourceEndpoint, event.clusterId,
                 event.lqi, event.rssi, event.originalLength);
   printHex(event.data, event.capturedLength);
   Serial.println();
+#endif
 
   // Routers/repeaters are infrastructure, not plant slots. The neighbor-table
   // scanner normally identifies them first, but this also protects the plant
   // registry if a router emits APS traffic between scans.
   InfrastructureState *router = findInfrastructureByIeee(event.ieee);
-  if (!router) router = findInfrastructureByShort(event.shortAddress);
+  if (!router) {
+    InfrastructureState *shortMatch = findInfrastructureByShort(event.shortAddress);
+    if (shortMatch) {
+      // Never classify infrastructure from a short address alone. Short addresses
+      // are reusable after leaves/rejoins, and a failed IEEE lookup must not let
+      // an old router slot steal a valid plant frame. The periodic neighbor-table
+      // scan remains authoritative for infrastructure state.
+      ++receiveDiag.infrastructureShortRejects;
+    }
+  }
   if (router) {
     router->online = true;
     router->shortAddress = event.shortAddress;
@@ -589,10 +681,12 @@ void processApsEvent(const ApsEvent &event) {
     decoded = zg303z::decodeTuyaFrame(
         event.data, event.capturedLength, info, normalized,
         [&](const zg303z::Datapoint &dp) {
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
           Serial.printf("[tuya] dp=%u type=0x%02X len=%u", dp.id, dp.type, dp.length);
           if (dp.numericValid) Serial.printf(" value=%ld", static_cast<long>(dp.numeric));
           if (dp.metric == zg303z::Metric::Unknown) Serial.print(" UNKNOWN");
           Serial.println();
+#endif
 
           // Hardware-verified HOBEIAN ZG-303Z evidence. A generic Zigbee
           // device is not admitted to the plant registry just because it sends
@@ -607,8 +701,10 @@ void processApsEvent(const ApsEvent &event) {
             zg303zEvidence = true;
             normalized.hasWaterWarning = true;
             normalized.waterWarning = (dp.numeric != 0);
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
             Serial.printf("[tuya] legacy DP106 water warning=%s\n",
                           normalized.waterWarning ? "ON" : "OFF");
+#endif
           }
         });
   } else if (sensor &&
@@ -622,6 +718,8 @@ void processApsEvent(const ApsEvent &event) {
     decoded = zg303z::decodeZg303zSoilMirrorReport(
         event.data, event.capturedLength, normalized);
   }
+
+  if (decoded) ++receiveDiag.decodedFrames;
 
   bool created = false;
   if (!sensor && decoded && zg303zEvidence) {
@@ -649,14 +747,21 @@ void processApsEvent(const ApsEvent &event) {
     sendSensorReport(*sensor);
   }
 
-  // Keep raw traffic observable during bring-up, especially unknown devices
-  // and Tuya vendor traffic.
+  // Keep unknown/undecoded traffic observable in every build. The duplicate
+  // raw Tuya stream is development-only so release traffic stays bounded.
+#if defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
   if (!sensor || !decoded || event.clusterId == zg303z::kTuyaClusterId) {
     sendRawEvent(event);
   }
+#else
+  if (!sensor || !decoded) {
+    sendRawEvent(event);
+  }
+#endif
 }
 
 bool apsDataHandler(esp_zb_apsde_data_ind_t ind) {
+  ++receiveDiag.apsCallbacks;
   // Preserve the Arduino Zigbee core's own APS bookkeeping before observing
   // the same packet. The callback returns false so the stack still processes it.
   (void)zb_apsde_data_indication_handler(ind);
@@ -681,12 +786,148 @@ bool apsDataHandler(esp_zb_apsde_data_ind_t ind) {
   esp_zb_ieee_addr_t ieee{};
   if (esp_zb_ieee_address_by_short(ind.src_short_addr, ieee) == ESP_OK) {
     memcpy(event.ieee, ieee, 8);
+  } else {
+    ++receiveDiag.ieeeLookupFailures;
   }
+  if (ieeeIsZero(event.ieee)) ++receiveDiag.zeroIeeeEvents;
 
-  xQueueSend(apsQueue, &event, 0);
+  if (xQueueSend(apsQueue, &event, 0) != pdTRUE) {
+    ++receiveDiag.apsQueueDrops;
+  }
 
   // false = observe the frame but allow normal Zigbee stack processing to continue.
   return false;
+}
+
+const char *neighborRelationshipName(uint8_t relationship) {
+  switch (relationship) {
+    case ESP_ZB_NWK_RELATIONSHIP_PARENT: return "PARENT";
+    case ESP_ZB_NWK_RELATIONSHIP_CHILD: return "CHILD";
+    case ESP_ZB_NWK_RELATIONSHIP_SIBLING: return "SIBLING";
+    case ESP_ZB_NWK_RELATIONSHIP_NONE_OF_THE_ABOVE: return "OTHER";
+    case ESP_ZB_NWK_RELATIONSHIP_PREVIOUS_CHILD: return "PREVIOUS_CHILD";
+    case ESP_ZB_NWK_RELATIONSHIP_UNAUTHENTICATED_CHILD: return "UNAUTH_CHILD";
+    default: return "UNKNOWN";
+  }
+}
+
+void printReceiveDiagnostics(const char *prefix = "[diag]") {
+  Serial.printf(
+      "%s aps_callbacks=%lu processed=%lu queue_drops=%lu ieee_lookup_failures=%lu "
+      "zero_ieee=%lu ieee_late_recoveries=%lu decoded=%lu sensor_reports=%lu plantlink_short_writes=%lu "
+      "infra_short_rejects=%lu\n",
+      prefix,
+      static_cast<unsigned long>(receiveDiag.apsCallbacks),
+      static_cast<unsigned long>(receiveDiag.apsProcessed),
+      static_cast<unsigned long>(receiveDiag.apsQueueDrops),
+      static_cast<unsigned long>(receiveDiag.ieeeLookupFailures),
+      static_cast<unsigned long>(receiveDiag.zeroIeeeEvents),
+      static_cast<unsigned long>(receiveDiag.ieeeLateRecoveries),
+      static_cast<unsigned long>(receiveDiag.decodedFrames),
+      static_cast<unsigned long>(receiveDiag.sensorReportsSent),
+      static_cast<unsigned long>(receiveDiag.plantLinkShortWrites),
+      static_cast<unsigned long>(receiveDiag.infrastructureShortRejects));
+}
+
+void serviceDiagnosticSummary() {
+  const uint32_t now = millis();
+  if (now - lastDiagnosticSummaryMs < kDiagnosticSummaryIntervalMs) return;
+  lastDiagnosticSummaryMs = now;
+  printReceiveDiagnostics();
+}
+
+void printNeighborTable() {
+  if (!zigbeeReady) {
+    Serial.println("[neighbor] Zigbee coordinator not ready");
+    return;
+  }
+
+  size_t count = 0;
+  esp_zb_nwk_info_iterator_t iterator = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+  esp_zb_nwk_neighbor_info_t neighbor{};
+  while (true) {
+    esp_zb_lock_acquire(portMAX_DELAY);
+    const esp_err_t result = esp_zb_nwk_get_next_neighbor(&iterator, &neighbor);
+    esp_zb_lock_release();
+    if (result != ESP_OK) break;
+
+    // Never hold the Zigbee stack lock while writing a potentially slow USB log.
+    char ieeeText[24]{};
+    plantlink::formatIeee(neighbor.ieee_addr, ieeeText, sizeof(ieeeText));
+    Serial.printf(
+        "[neighbor] ieee=%s short=0x%04X type=%u relationship=%s(%u) lqi=%u rssi=%d "
+        "age=%u device_timeout=%lu timeout_counter=%lu\n",
+        ieeeText, neighbor.short_addr, neighbor.device_type,
+        neighborRelationshipName(neighbor.relationship), neighbor.relationship,
+        neighbor.lqi, neighbor.rssi, neighbor.age,
+        static_cast<unsigned long>(neighbor.device_timeout),
+        static_cast<unsigned long>(neighbor.timeout_counter));
+    ++count;
+  }
+  Serial.printf("[neighbor] END count=%u\n", static_cast<unsigned>(count));
+}
+
+void printNetworkFingerprint(const char *prefix, const uint8_t fingerprint[12]) {
+  Serial.printf(
+      "%s version=%u pan=0x%04X channel=%u ext_pan=%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\n",
+      prefix, fingerprint[0], plantlink::getU16LE(fingerprint + 1), fingerprint[3],
+      fingerprint[11], fingerprint[10], fingerprint[9], fingerprint[8],
+      fingerprint[7], fingerprint[6], fingerprint[5], fingerprint[4]);
+}
+
+void logAndRememberNetworkFingerprint() {
+  if (!zigbeeReady) return;
+
+  esp_zb_ieee_addr_t extendedPan{};
+  esp_zb_get_extended_pan_id(extendedPan);
+  uint8_t current[12]{};
+  current[0] = kNetworkFingerprintVersion;
+  plantlink::putU16LE(current + 1, esp_zb_get_pan_id());
+  current[3] = currentChannel();
+  memcpy(current + 4, extendedPan, sizeof(extendedPan));
+
+  Serial.printf("[zigbee] network identity factory_new_now=%s ",
+                esp_zb_bdb_is_factory_new() ? "yes" : "no");
+  Serial.printf("pan=0x%04X channel=%u ext_pan=%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\n",
+                esp_zb_get_pan_id(), current[3], extendedPan[7], extendedPan[6],
+                extendedPan[5], extendedPan[4], extendedPan[3], extendedPan[2],
+                extendedPan[1], extendedPan[0]);
+  int8_t txPowerDbm = 0;
+  esp_zb_get_tx_power(&txPowerDbm);
+  Serial.printf("[zigbee] tx_power=%d dBm (read-only; ESP PLANTS does not set TX power)\n",
+                static_cast<int>(txPowerDbm));
+
+  Preferences prefs;
+  if (!prefs.begin(kNetworkFingerprintNamespace, false)) {
+    Serial.println("[zigbee] fingerprint NVS open FAILED");
+    return;
+  }
+
+  const size_t storedLength = prefs.getBytesLength(kNetworkFingerprintKey);
+  if (storedLength == 0) {
+    if (prefs.putBytes(kNetworkFingerprintKey, current, sizeof(current)) == sizeof(current)) {
+      Serial.println("[zigbee] stored initial network fingerprint in ordinary NVS");
+    } else {
+      Serial.println("[zigbee] storing initial network fingerprint FAILED");
+    }
+  } else if (storedLength == sizeof(current)) {
+    uint8_t stored[sizeof(current)]{};
+    if (prefs.getBytes(kNetworkFingerprintKey, stored, sizeof(stored)) == sizeof(stored)) {
+      if (memcmp(stored, current, sizeof(current)) != 0) {
+        Serial.println("[zigbee] WARNING: coordinator network fingerprint changed; stored fingerprint retained");
+        printNetworkFingerprint("[zigbee] stored fingerprint", stored);
+        printNetworkFingerprint("[zigbee] current fingerprint", current);
+      } else {
+        Serial.println("[zigbee] network fingerprint matches stored identity");
+      }
+    } else {
+      Serial.println("[zigbee] reading stored network fingerprint FAILED");
+    }
+  } else {
+    Serial.printf("[zigbee] stored network fingerprint has unexpected length=%u; left untouched\n",
+                  static_cast<unsigned>(storedLength));
+  }
+  prefs.end();
 }
 
 void servicePairingActivity() {
@@ -891,6 +1132,7 @@ void servicePlantLink() {
 
   servicePairingActivity();
   serviceInfrastructureRegistry();
+  serviceDiagnosticSummary();
 }
 
 void printUsbConsoleHelp() {
@@ -899,7 +1141,8 @@ void printUsbConsoleHelp() {
   Serial.println("  p = open Zigbee pairing for 120 seconds (development only)");
   Serial.println("  c = close Zigbee pairing (development only)");
 #endif
-  Serial.println("  s = print Zigbee/network/sensor/repeater status");
+  Serial.println("  s = print Zigbee/network/sensor/repeater status and counters");
+  Serial.println("  t = dump Zigbee neighbor table (read-only)");
   Serial.println("  h or ? = show this help");
 #if !defined(ESP_PLANTS_H2_DEV_DIAGNOSTICS)
   Serial.println("[console] distribution build: network-changing console commands disabled");
@@ -951,6 +1194,7 @@ void printUsbConsoleStatus() {
   if (sensorCount == 0 && infrastructureCount == 0) {
     Serial.println("[console] no plant sensors or repeaters tracked yet");
   }
+  printReceiveDiagnostics("[console][diag]");
 }
 
 void handleUsbConsoleCommand(char command) {
@@ -987,6 +1231,10 @@ void handleUsbConsoleCommand(char command) {
 
     case 's':
       printUsbConsoleStatus();
+      break;
+
+    case 't':
+      printNeighborTable();
       break;
 
     case 'h':
@@ -1045,6 +1293,7 @@ bool startZigbee() {
   Serial.printf("[zigbee] coordinator started; connected=%s channel=%u max_children=%u network_size=%u\n",
                 zigbeeReady ? "yes" : "no", currentChannel(),
                 kCoordinatorMaxChildren, kOverallNetworkSize);
+  logAndRememberNetworkFingerprint();
 
   // Observe raw APS frames so vendor-specific Tuya 0xEF00 traffic remains visible.
   // This is registered after Arduino Zigbee startup and returns false so the stack
@@ -1065,7 +1314,7 @@ void setup() {
   Serial.printf("PlantLink UART1: RX=%d TX=%d baud=%lu\n", kPlantLinkRxPin,
                 kPlantLinkTxPin, static_cast<unsigned long>(kPlantLinkBaud));
 
-  apsQueue = xQueueCreate(12, sizeof(ApsEvent));
+  apsQueue = xQueueCreate(kApsQueueDepth, sizeof(ApsEvent));
   if (!apsQueue) {
     Serial.println("FATAL: could not allocate APS event queue");
     while (true) delay(1000);

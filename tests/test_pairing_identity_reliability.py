@@ -76,5 +76,5 @@ def test_versions_advance_for_both_changed_firmwares():
     ws_header = read(ROOT / "firmware/waveshare-hub/include/build_version.h")
     h2_header = read(ROOT / "firmware/m5-h2-zigbee/include/build_version.h")
     assert '#define ESP_PLANTS_WAVESHARE_VERSION "0.2.0-alpha.60"' in ws_header
-    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.32"' in h2_header
+    assert '#define ESP_PLANTS_H2_VERSION "0.2.0-alpha.33"' in h2_header
     assert read(ROOT / "VERSION").strip() == "0.2.0-alpha.60"
