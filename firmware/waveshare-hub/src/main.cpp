@@ -4006,6 +4006,14 @@ void handleDeviceLeft(const plantlink::Frame &frame) {
   s->route = {};
   s->lastSeenMs = 0;
   s->shortAddress = 0xffff;
+  // Retain the persisted registration/name, but invalidate all transient
+  // readings. A temperature-only rejoin is not a fresh moisture report.
+  s->fieldFlags = 0;
+  s->reportedFieldFlagsThisBoot = 0;
+  s->phraseDisplayPending = false;
+  s->phraseDisplayDueMs = 0;
+  s->displayedPhrase = nullptr;
+  s->phraseRotation = {};
   Serial.printf("[zigbee] registered sensor left: %s slot=%u now waiting\n",
                 ieee, static_cast<unsigned>(slot + 1));
   markSensorValuesDirty(true);

@@ -345,11 +345,13 @@ void updateSensorRouteFromPacket(SensorState &sensor, const ApsEvent &event) {
   }
 }
 
-void sendSensorReport(const SensorState &sensor) {
+void sendSensorReport(const SensorState &sensor, uint16_t updatedFieldFlags) {
   plantlink::SensorReportData report;
   memcpy(report.ieee, sensor.ieee, 8);
   report.shortAddress = sensor.shortAddress;
-  report.fieldFlags = sensor.fieldFlags;
+  // Only fields updated by THIS decoded APS packet are marked present.
+  // sensor.fieldFlags remains the cached set for diagnostics, not freshness.
+  report.fieldFlags = updatedFieldFlags;
   report.temperatureCentiC = sensor.temperatureCentiC;
   report.humidityCentiPct = sensor.humidityCentiPct;
   report.soilMoisturePct = sensor.soilMoisturePct;
@@ -431,15 +433,23 @@ InfrastructureState *findOrCreateInfrastructure(const uint8_t ieee[8],
                                                 uint16_t shortAddress,
                                                 bool &created) {
   created = false;
+  // A Zigbee short address can be reassigned. IEEE is the sole identity key.
+  if (!ieee || ieeeIsZero(ieee)) return nullptr;
   InfrastructureState *node = findInfrastructureByIeee(ieee);
-  if (!node) node = findInfrastructureByShort(shortAddress);
+  // Retain the old router's IEEE/slot; it can only become offline, never
+  // silently turn into the new router when a short address is reused.
+  for (auto &oldNode : infrastructure) {
+    if (oldNode.used && oldNode.shortAddress == shortAddress &&
+        !ieeeEqual(oldNode.ieee, ieee)) {
+      oldNode.shortAddress = 0xffff;
+      oldNode.online = false;
+    }
+  }
   if (node) {
-    if (!ieeeIsZero(ieee)) memcpy(node->ieee, ieee, sizeof(node->ieee));
     node->shortAddress = shortAddress;
     return node;
   }
 
-  if (!ieee || ieeeIsZero(ieee)) return nullptr;
   for (auto &candidate : infrastructure) {
     if (candidate.used) continue;
     candidate = InfrastructureState{};
@@ -509,26 +519,21 @@ void removeDeviceByIeee(const uint8_t ieee[8]) {
 
 SensorState *findOrCreateSensor(const ApsEvent &event, bool &created) {
   created = false;
-
-  if (!ieeeIsZero(event.ieee)) {
-    for (auto &sensor : sensors) {
-      if (sensor.used && ieeeEqual(sensor.ieee, event.ieee)) {
-        sensor.shortAddress = event.shortAddress;
-        return &sensor;
-      }
-    }
-  }
-
-  // If IEEE lookup failed, allow an existing short address to keep collecting
-  // debug data, but do not create a permanent identity from a short address.
-  for (auto &sensor : sensors) {
-    if (sensor.used && sensor.shortAddress == event.shortAddress) {
-      if (!ieeeIsZero(event.ieee)) memcpy(sensor.ieee, event.ieee, 8);
-      return &sensor;
-    }
-  }
-
   if (ieeeIsZero(event.ieee)) return nullptr;
+
+  // Never overwrite a known sensor's IEEE when a different sensor reuses its
+  // 16-bit short address. Expire the old routing address, not its identity.
+  for (auto &sensor : sensors) {
+    if (sensor.used && sensor.shortAddress == event.shortAddress &&
+        !ieeeEqual(sensor.ieee, event.ieee)) {
+      sensor.shortAddress = 0xffff;
+    }
+  }
+  SensorState *existing = findSensorByIeee(event.ieee);
+  if (existing) {
+    existing->shortAddress = event.shortAddress;
+    return existing;
+  }
 
   for (auto &sensor : sensors) {
     if (!sensor.used) {
@@ -544,27 +549,34 @@ SensorState *findOrCreateSensor(const ApsEvent &event, bool &created) {
   return nullptr;
 }
 
-void applyNormalized(SensorState &sensor, const zg303z::NormalizedUpdate &update) {
+uint16_t applyNormalized(SensorState &sensor, const zg303z::NormalizedUpdate &update) {
+  uint16_t updatedFieldFlags = 0;
   if (update.hasTemperature) {
+    updatedFieldFlags |= plantlink::SensorHasTemperature;
     sensor.temperatureCentiC = update.temperatureCentiC;
     sensor.fieldFlags |= plantlink::SensorHasTemperature;
   }
   if (update.hasHumidity) {
+    updatedFieldFlags |= plantlink::SensorHasHumidity;
     sensor.humidityCentiPct = update.humidityCentiPct;
     sensor.fieldFlags |= plantlink::SensorHasHumidity;
   }
   if (update.hasSoilMoisture) {
+    updatedFieldFlags |= plantlink::SensorHasSoilMoisture;
     sensor.soilMoisturePct = update.soilMoisturePct;
     sensor.fieldFlags |= plantlink::SensorHasSoilMoisture;
   }
   if (update.hasBattery) {
+    updatedFieldFlags |= plantlink::SensorHasBattery;
     sensor.batteryPct = update.batteryPct;
     sensor.fieldFlags |= plantlink::SensorHasBattery;
   }
   if (update.hasWaterWarning) {
+    updatedFieldFlags |= plantlink::SensorHasWaterWarning;
     sensor.waterWarning = update.waterWarning ? 1 : 0;
     sensor.fieldFlags |= plantlink::SensorHasWaterWarning;
   }
+  return updatedFieldFlags;
 }
 
 bool recoverEventIeee(ApsEvent &event) {
@@ -655,7 +667,16 @@ void processApsEvent(ApsEvent event) {
   }
 
   SensorState *sensor = findSensorByIeee(event.ieee);
-  if (!sensor) sensor = findSensorByShort(event.shortAddress);
+  // IEEE recovery must succeed before an APS packet can update a known
+  // sensor. An unresolved or different IEEE must never borrow its data.
+  if (!ieeeIsZero(event.ieee)) {
+    for (auto &oldSensor : sensors) {
+      if (oldSensor.used && oldSensor.shortAddress == event.shortAddress &&
+          !ieeeEqual(oldSensor.ieee, event.ieee)) {
+        oldSensor.shortAddress = 0xffff;
+      }
+    }
+  }
   if (sensor) {
     sensor->shortAddress = event.shortAddress;
     sensor->lqi = event.lqi;
@@ -743,8 +764,8 @@ void processApsEvent(ApsEvent event) {
   }
 
   if (sensor && decoded) {
-    applyNormalized(*sensor, normalized);
-    sendSensorReport(*sensor);
+    const uint16_t updatedFields = applyNormalized(*sensor, normalized);
+    if (updatedFields != 0) sendSensorReport(*sensor, updatedFields);
   }
 
   // Keep unknown/undecoded traffic observable in every build. The duplicate

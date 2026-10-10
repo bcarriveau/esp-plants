@@ -67,8 +67,17 @@ repeater_ieee[8]     # offsets 22-29, next-hop router IEEE, zero unless ROUTED
 ```
 
 Only fields whose validity bits are set in `field_flags` are authoritative.
+For a normal SensorReport, those bits describe **measurements actually present
+in the most recently decoded APS packet**, not everything the H2 has cached.
+The H2 retains other previously received values in RAM for diagnostics, but
+never marks them as fresh in a new report. A repeated soil value still sets
+the soil flag when a genuine new soil report arrives. Temperature-only,
+battery-only, and warning-only reports cannot mark soil as newly reported or
+advance a plant's phrase. No payload layout or PlantLink version changes.
+
 This lets standard Zigbee clusters and Tuya datapoints arrive at different
-times while the H2 maintains one normalized sensor state.
+times while the H2 maintains one normalized sensor state. Both controllers
+should be updated together when moving from the older cached-flag behavior.
 
 ## Coordinated v2 update (intentional break)
 
