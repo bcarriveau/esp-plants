@@ -1,6 +1,6 @@
 // ESP PLANTS board configuration for Waveshare ESP32-S3-Touch-LCD-7B.
 // Geometry/timings follow Waveshare's official 1024x600 7B Arduino example.
-// This remains a bring-up target until Bill physically validates the board.
+// 7B display behavior has been exercised on hardware; release validation remains separate.
 #pragma once
 
 #define I2C_MASTER_SCL_IO 9
@@ -37,8 +37,10 @@
 #define ESP_PANEL_LCD_RGB_DATA_WIDTH (16)
 #define ESP_PANEL_LCD_RGB_PIXEL_BITS (16)
 
-// Conservative first bring-up: one PSRAM framebuffer. Waveshare's demo uses
-// two; ESP PLANTS will only increase this after memory/TLS/OTA stress testing.
+// Board-level fallback only: lcd_init() overrides this *before panel->begin()*
+// with LVGL_PORT_DISP_BUFFER_NUM = 3 for the active triple-buffer/full-refresh
+// path (3 x 1024 x 600 x RGB565 = 3,686,400 bytes of PSRAM). Do not treat this
+// fallback define as the effective framebuffer count or change runtime buffers.
 #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM (1)
 // VSYNC-restart experiment baseline: retain the tested 24 MHz 7B pixel
 // clock and 15-line bounce buffer while changing only the linked IDF driver.

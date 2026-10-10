@@ -17,14 +17,15 @@ Zigbee coordinator / translator
  PlantLink UART
       |
 Waveshare ESP32-S3
-800x480 ESP PLANTS UI
+7: 800x480 / 7B: 1024x600
+ESP PLANTS UI
 ```
 
 ### Waveshare display hub
 
 The Waveshare owns the user-facing application:
 
-- 800x480 LVGL UI
+- LVGL UI: 800x480 on the original 7 and 1024x600 on the 7B
 - plant names and Zigbee sensor assignments
 - device/title name
 - temperature unit and personality/theme settings
@@ -35,7 +36,7 @@ The Waveshare owns the user-facing application:
 
 The original Waveshare 7-inch target is the physically verified ESP PLANTS display baseline.
 
-The Waveshare 7B has its own PlatformIO target and board-specific boundary. It is **not** claimed as physically verified ESP PLANTS runtime hardware yet.
+The Waveshare 7B has its own 1024x600 PlatformIO target and board-specific display driver. Bill has physically tested its ESP PLANTS runtime, including sensor bursts, page changes, Wi-Fi activity, OTA preflight, and RGB resync without seeing the former vertical roll/bounce. These are development-hardware observations, **not** a complete production-release qualification.
 
 ### M5Stack ESP32-H2
 
@@ -188,11 +189,16 @@ Historical baseline documents may still describe that legacy implementation. The
 - Waveshare A/B OTA installation end-to-end
 - H2-through-Waveshare OTA transfer/install before the Waveshare update
 
+### Physically exercised on the Waveshare 7B development hardware
+
+- ESP PLANTS runtime and touch/page navigation during stress testing
+- sensor-report bursts, Wi-Fi activity, OTA preflight, and explicit RGB resync
+- no visible roll/bounce during Bill's reported stress-test sessions
+
 ### Not claimed as physically verified
 
-- Waveshare 7B ESP PLANTS runtime
-- final 7B board-specific behavior
-- complete production release lifecycle across every target
+- complete production-release lifecycle across every target
+- exhaustive 7B long-duration and all-update-path qualification
 
 ## Source of truth
 
