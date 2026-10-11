@@ -16,6 +16,7 @@
 #include "update_service.h"
 #include "runtime_flash_guard.h"
 #include "sensor_route_view.h"
+#include "deferred_persistence_retry.h"
 #include "sensor_liveness.h"
 #include "ui_appearance.h"
 #ifdef ESP_PLANTS_WAVESHARE_7B
@@ -224,6 +225,7 @@ uint32_t pendingPlantPersistenceMask = 0;
 uint32_t pendingInfrastructurePersistenceMask = 0;
 uint32_t pendingMoisturePersistenceMask = 0;
 uint32_t uiPersistenceDueMs = 0;
+uint8_t uiPersistenceFailedBatches = 0;
 
 void queueUiPersistence(uint32_t bits) {
   const uint32_t due = millis() + kUiPersistenceDelayMs;
@@ -708,12 +710,14 @@ void moisturePreferenceKey(size_t slot, char out[12]) {
   snprintf(out, 12, "moist%02u", static_cast<unsigned>(slot));
 }
 
-void saveMoisturePreference(size_t slot) {
-  if (slot >= kMaxSensors || !sensors[slot].used) return;
+bool saveMoisturePreference(size_t slot) {
+  if (slot >= kMaxSensors || !sensors[slot].used) return true;
   char key[12]{};
   moisturePreferenceKey(slot, key);
   const size_t written = preferences.putChar(key, sensors[slot].moisturePreference);
-  logRuntimePreferenceWrite("moisture preference", written == sizeof(int8_t));
+  const bool saved = written == sizeof(int8_t);
+  logRuntimePreferenceWrite("moisture preference", saved);
+  return saved;
 }
 
 void defaultName(size_t slot, char *out, size_t size) {
@@ -821,15 +825,17 @@ size_t onlineInfrastructureCount() {
   return count;
 }
 
-void saveInfrastructureSlot(size_t slot) {
-  if (slot >= kMaxInfrastructure || !infrastructure[slot].used) return;
+bool saveInfrastructureSlot(size_t slot) {
+  if (slot >= kMaxInfrastructure || !infrastructure[slot].used) return true;
   PersistedInfrastructure p{};
   memcpy(p.ieee, infrastructure[slot].ieee, sizeof(p.ieee));
   strncpy(p.name, infrastructure[slot].name, sizeof(p.name) - 1);
   char key[12]{};
   infrastructureKey(slot, key);
   const size_t written = preferences.putBytes(key, &p, sizeof(p));
-  logRuntimePreferenceWrite("repeater registry", written == sizeof(p));
+  const bool saved = written == sizeof(p);
+  logRuntimePreferenceWrite("repeater registry", saved);
+  return saved;
 }
 
 void loadInfrastructureRegistry() {
@@ -889,7 +895,7 @@ InfrastructureNode *findOrCreateInfrastructure(const plantlink::InfrastructureRe
       node->used = true;
       memcpy(node->ieee, report.ieee, sizeof(node->ieee));
       defaultInfrastructureName(slot, node->name, sizeof(node->name));
-      saveInfrastructureSlot(slot);
+      if (!saveInfrastructureSlot(slot)) queueInfrastructurePersistence(slot);
       created = true;
       if (selectedInfrastructure < 0) selectedInfrastructure = static_cast<int>(slot);
       break;
@@ -1103,23 +1109,22 @@ void formatLastReport(const PlantSensor &sensor, char *out, size_t size) {
   else snprintf(out, size, "%s", age);
 }
 
-void saveSlot(size_t slot) {
-  if (slot >= kMaxSensors || !sensors[slot].used) return;
+bool saveSlot(size_t slot) {
+  if (slot >= kMaxSensors || !sensors[slot].used) return true;
   PersistedPlant p{};
   memcpy(p.ieee, sensors[slot].ieee, sizeof(p.ieee));
   strncpy(p.name, sensors[slot].name, sizeof(p.name) - 1);
   char key[12]{};
   slotKey(slot, key);
   const size_t written = preferences.putBytes(key, &p, sizeof(p));
-  logRuntimePreferenceWrite("plant registry", written == sizeof(p));
+  const bool saved = written == sizeof(p);
+  logRuntimePreferenceWrite("plant registry", saved);
+  return saved;
 }
 
 void serviceDeferredPersistence() {
   const uint32_t now = millis();
-  uint32_t settings = 0;
-  uint32_t plants = 0;
-  uint32_t infrastructureSlots = 0;
-  uint32_t moisture = 0;
+  espplants_deferred_persistence::Masks requested;
 
   portENTER_CRITICAL(&uiPersistenceMux);
   const bool pending = pendingUiPersistenceBits || pendingPlantPersistenceMask ||
@@ -1129,47 +1134,90 @@ void serviceDeferredPersistence() {
     portEXIT_CRITICAL(&uiPersistenceMux);
     return;
   }
-  settings = pendingUiPersistenceBits;
-  plants = pendingPlantPersistenceMask;
-  infrastructureSlots = pendingInfrastructurePersistenceMask;
-  moisture = pendingMoisturePersistenceMask;
+  requested.settings = pendingUiPersistenceBits;
+  requested.plants = pendingPlantPersistenceMask;
+  requested.infrastructure = pendingInfrastructurePersistenceMask;
+  requested.moisture = pendingMoisturePersistenceMask;
+  // Take this batch atomically. Any edits queued while flash writes run remain
+  // pending and will be saved separately, even if this batch succeeds.
   pendingUiPersistenceBits = 0;
   pendingPlantPersistenceMask = 0;
   pendingInfrastructurePersistenceMask = 0;
   pendingMoisturePersistenceMask = 0;
   portEXIT_CRITICAL(&uiPersistenceMux);
 
+  espplants_deferred_persistence::Masks failed;
 #ifdef ESP_PLANTS_WAVESHARE_7B
-  if (settings & kPersistBrightness) {
+  if (requested.settings & kPersistBrightness) {
     const size_t written = preferences.putUChar("bright_lvl", brightnessLevel);
-    logRuntimePreferenceWrite("brightness", written == sizeof(uint8_t));
+    const bool saved = written == sizeof(uint8_t);
+    logRuntimePreferenceWrite("brightness", saved);
+    if (!saved) failed.settings |= kPersistBrightness;
   }
 #endif
-  if (settings & kPersistTemperatureUnit) {
+  if (requested.settings & kPersistTemperatureUnit) {
     const size_t written = preferences.putBool("fahrenheit", useFahrenheit);
-    logRuntimePreferenceWrite("temperature unit", written == sizeof(uint8_t));
+    const bool saved = written == sizeof(uint8_t);
+    logRuntimePreferenceWrite("temperature unit", saved);
+    if (!saved) failed.settings |= kPersistTemperatureUnit;
   }
-  if (settings & kPersistPhraseTheme) {
+  if (requested.settings & kPersistPhraseTheme) {
     const size_t written = preferences.putUChar(
         "phrase_theme", static_cast<uint8_t>(phraseTheme));
-    logRuntimePreferenceWrite("phrase theme", written == sizeof(uint8_t));
+    const bool saved = written == sizeof(uint8_t);
+    logRuntimePreferenceWrite("phrase theme", saved);
+    if (!saved) failed.settings |= kPersistPhraseTheme;
   }
-  if (settings & kPersistDeviceName) {
+  if (requested.settings & kPersistDeviceName) {
     const size_t written = preferences.putString("device_name", deviceName);
-    logRuntimePreferenceWrite("device name", written == strlen(deviceName));
+    const bool saved = written == strlen(deviceName);
+    logRuntimePreferenceWrite("device name", saved);
+    if (!saved) failed.settings |= kPersistDeviceName;
   }
-  if (settings & kPersistAppearance) {
+  if (requested.settings & kPersistAppearance) {
     const size_t written = preferences.putBool("ui_light", espplants_ui_is_light());
-    logRuntimePreferenceWrite("display appearance", written == sizeof(uint8_t));
+    const bool saved = written == sizeof(uint8_t);
+    logRuntimePreferenceWrite("display appearance", saved);
+    if (!saved) failed.settings |= kPersistAppearance;
   }
 
   for (size_t slot = 0; slot < kMaxSensors; ++slot) {
-    if (plants & (1UL << slot)) saveSlot(slot);
-    if (moisture & (1UL << slot)) saveMoisturePreference(slot);
+    const uint32_t bit = 1UL << slot;
+    if ((requested.plants & bit) && !saveSlot(slot)) failed.plants |= bit;
+    if ((requested.moisture & bit) && !saveMoisturePreference(slot)) {
+      failed.moisture |= bit;
+    }
   }
   for (size_t slot = 0; slot < kMaxInfrastructure; ++slot) {
-    if (infrastructureSlots & (1UL << slot)) saveInfrastructureSlot(slot);
+    const uint32_t bit = 1UL << slot;
+    if ((requested.infrastructure & bit) && !saveInfrastructureSlot(slot)) {
+      failed.infrastructure |= bit;
+    }
   }
+
+  if (!failed.any()) {
+    uiPersistenceFailedBatches = 0;
+    return;
+  }
+
+  if (uiPersistenceFailedBatches < UINT8_MAX) ++uiPersistenceFailedBatches;
+  const uint32_t retryDelay =
+      espplants_deferred_persistence::retryDelayMs(uiPersistenceFailedBatches);
+  portENTER_CRITICAL(&uiPersistenceMux);
+  // Do not discard or delay new edits queued during the write attempt.
+  const bool newEditsQueued = pendingUiPersistenceBits ||
+                              pendingPlantPersistenceMask ||
+                              pendingInfrastructurePersistenceMask ||
+                              pendingMoisturePersistenceMask;
+  pendingUiPersistenceBits |= failed.settings;
+  pendingPlantPersistenceMask |= failed.plants;
+  pendingInfrastructurePersistenceMask |= failed.infrastructure;
+  pendingMoisturePersistenceMask |= failed.moisture;
+  if (!newEditsQueued) uiPersistenceDueMs = millis() + retryDelay;
+  portEXIT_CRITICAL(&uiPersistenceMux);
+  Serial.printf("[flash] deferred write retry queued (attempt=%u delay=%lums)\n",
+                static_cast<unsigned>(uiPersistenceFailedBatches),
+                static_cast<unsigned long>(retryDelay));
 }
 
 void loadRegistry() {
@@ -1233,7 +1281,7 @@ PlantSensor *findOrCreateSensor(const uint8_t ieee[8], uint16_t shortAddress,
     memcpy(s.ieee, ieee, sizeof(s.ieee));
     s.shortAddress = shortAddress;
     defaultName(slot, s.name, sizeof(s.name));
-    saveSlot(slot);
+    if (!saveSlot(slot)) queuePlantPersistence(slot);
     if (selectedSensor < 0) selectedSensor = static_cast<int>(slot);
     if (slotOut) *slotOut = slot;
 
@@ -1399,7 +1447,7 @@ PlantSensor *replacePlantIdentity(size_t slot, const uint8_t ieee[8], uint16_t s
   strncpy(replacement.name, preservedName, sizeof(replacement.name) - 1);
   replacement.name[sizeof(replacement.name) - 1] = '\0';
   sensors[slot] = replacement;
-  saveSlot(slot);
+  if (!saveSlot(slot)) queuePlantPersistence(slot);
 
   selectedSensor = static_cast<int>(slot);
   manualHomeSensor = -1;

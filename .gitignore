@@ -44,3 +44,5 @@ logs/
 /COMMIT MESSAGE*.txt
 /ESP_PLANTS_*.zip
 crashdumps/
+
+tools/ESP-PLANTS-Create-Drive-ZIP.bat
