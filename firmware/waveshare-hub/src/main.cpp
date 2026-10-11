@@ -19,6 +19,7 @@
 #include "deferred_persistence_retry.h"
 #include "sensor_liveness.h"
 #include "ui_appearance.h"
+#include "boot_splash.h"
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #include "ui_7b/screens.h"
 #else
@@ -208,6 +209,7 @@ bool h2Online = false;
 bool haveH2Uptime = false;
 uint32_t lastH2Uptime = 0;
 bool networkReady = false;
+bool bootSplashActive = false;
 bool useFahrenheit = true;
 uint8_t brightnessLevel = 5;
 
@@ -4266,7 +4268,10 @@ void setup() {
   if (lvgl_port_lock(-1)) {
     logDisplayRuntimeConfig();
     logLvglMemory("lvgl-init-pre-ui");
+    espplants_boot_splash::show(deviceName, espplants_ui_is_light());
+    bootSplashActive = true;
     buildUi();
+    espplants_boot_splash::animateAndDismiss();
     lvgl_port_unlock();
   }
   Serial.println("[display] ready");
@@ -4285,6 +4290,20 @@ void loop() {
   static bool lastActionableUpdate = false;
   static bool updateWorkerWasBusy = false;
   espplants_update::service();
+  // Update the temporary boot overlay from real H2/Zigbee and Wi-Fi state.
+  // The LVGL timer dismisses it whether or not either link comes online.
+  static uint32_t lastSplashStatusMs = 0;
+  const uint32_t splashNow = millis();
+  if (bootSplashActive && splashNow - lastSplashStatusMs >= 200u) {
+    lastSplashStatusMs = splashNow;
+    if (lvgl_port_lock(0)) {
+      bootSplashActive = espplants_boot_splash::update(
+          h2Online, networkReady, espplants_update::wifiConfigured(),
+          espplants_update::wifiConnected(),
+          espplants_update::wifiReconnectSuppressed(), true);
+      lvgl_port_unlock();
+    }
+  }
   const bool updateWorkerBusy =
       espplants_update::checking() || espplants_update::installing();
   if (updateWorkerWasBusy && !updateWorkerBusy) {
