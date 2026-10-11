@@ -4268,10 +4268,18 @@ void setup() {
   if (lvgl_port_lock(-1)) {
     logDisplayRuntimeConfig();
     logLvglMemory("lvgl-init-pre-ui");
+    // Show the image immediately after LCD init. Do not create the EEZ Home
+    // tree first: doing so caused Home to appear before the boot splash.
     espplants_boot_splash::show(deviceName, espplants_ui_is_light());
-    bootSplashActive = true;
-    buildUi();
-    espplants_boot_splash::animateAndDismiss();
+    bootSplashActive = espplants_boot_splash::active();
+    if (bootSplashActive) {
+      espplants_boot_splash::startAnimation();
+      bootSplashActive = espplants_boot_splash::active();
+    }
+    if (!bootSplashActive) {
+      // If the temporary splash cannot be created, boot normally.
+      buildUi();
+    }
     lvgl_port_unlock();
   }
   Serial.println("[display] ready");
@@ -4320,7 +4328,17 @@ void loop() {
     dirty.header = true;
     dirty.update = true;
   }
-  refreshUi();
+  // The splash stays in the system layer while EEZ Home is built underneath.
+  // Only then dismiss it; no Home-before-splash or blank transition.
+  if (bootSplashActive && espplants_boot_splash::readyToOpenDashboard()) {
+    if (lvgl_port_lock(25)) {
+      buildUi();
+      espplants_boot_splash::dismiss();
+      bootSplashActive = false;
+      lvgl_port_unlock();
+    }
+  }
+  if (!bootSplashActive) refreshUi();
   serviceRuntimeTelemetry();
   delay(2);
 }

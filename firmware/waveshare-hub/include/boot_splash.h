@@ -1,13 +1,15 @@
 #pragma once
 
-// Temporary boot-only LVGL overlay. The application pages/navigation remain
-// owned by EEZ Studio; this overlay is removed automatically after startup.
+// Boot-only photo layer. EEZ pages are not built until the timed splash ends.
+// All functions except readyToOpenDashboard() are called with the LVGL lock.
 namespace espplants_boot_splash {
 void show(const char *deviceName, bool lightAppearance);
-void animateAndDismiss();
+void startAnimation();
+bool active();
+bool readyToOpenDashboard();
+void dismiss();
 
-// Call only while holding the LVGL port lock. Returns false once dismissed.
-// Report real state; no connection is inferred from animation progress.
+// Live status only; H2 UART presence and Zigbee network readiness are distinct.
 bool update(bool h2Linked, bool zigbeeReady,
             bool wifiConfigured, bool wifiConnected,
             bool wifiReconnectSuppressed, bool systemReady);
