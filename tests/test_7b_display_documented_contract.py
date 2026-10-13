@@ -30,7 +30,7 @@ def test_keep_hardware_tested_display_timings_and_bounce_buffer():
     board = source('include/waveshare_panel_board_7b.h')
     cfg = source('lib/Waveshare_ST7262_LVGL/src/Waveshare_ST7262_LVGL.h')
     pio = source('platformio.ini')
-    assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)' in board
+    assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (22 * 1000 * 1000)' in board
     assert '#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)' in board
     assert '#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)' in cfg
     assert 'post:scripts/use_7b_vsync_sdk.py' in pio

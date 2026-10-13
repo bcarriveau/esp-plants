@@ -23,8 +23,8 @@ def env_section(name: str) -> str:
     return PIO[start:next_section]
 
 
-def test_24mhz_15line_baseline_and_mode2_are_locked():
-    assert "#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)" in BOARD
+def test_22mhz_15line_ab_and_mode2_are_locked():
+    assert "#define ESP_PANEL_LCD_RGB_CLK_HZ (22 * 1000 * 1000)" in BOARD
     assert "#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)" in BOARD
     assert "#define LVGL_PORT_AVOID_TEARING_MODE (2)" in DRIVER_H
     assert "#define LVGL_PORT_DISP_BUFFER_NUM (3)" in DRIVER_H

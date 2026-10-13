@@ -21,7 +21,7 @@ def test_effective_runtime_path_uses_header_macro():
     assert '#define LVGL_PORT_AVOID_TEARING_MODE (2)' in header
     assert 'callbacks.on_vsync = on7bRawVsync;' in driver
     assert 'callbacks.on_bounce_frame_finish = on7bBounceFrameFinish;' in driver
-    assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)' in BOARD.read_text()
+    assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (22 * 1000 * 1000)' in BOARD.read_text()
     ini = INI.read_text()
     assert 'upload_port = COM11' in ini
     assert 'upload_port = COM13' in ini

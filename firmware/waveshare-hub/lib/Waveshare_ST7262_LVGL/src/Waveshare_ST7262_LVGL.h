@@ -97,7 +97,7 @@
 #ifdef ESP_PLANTS_WAVESHARE_7B
 // Restore the 15-line 7B baseline after the 20-line A/B test: visual
 // bounce remained despite zero >60ms callback gaps. Keep triple buffering,
-// 24 MHz PCLK and the original 7's 10-line configuration unchanged.
+// 7B PCLK is set in its board header; the original 7 stays unchanged.
 // 600 rows is divisible by two 15-line RGB565 bounce buffers.
 #define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)
 #else

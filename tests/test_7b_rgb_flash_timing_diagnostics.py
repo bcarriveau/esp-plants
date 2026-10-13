@@ -22,7 +22,7 @@ def test_three_buffers_and_panel_clock_unchanged():
     assert '#define LVGL_PORT_AVOID_TEARING_MODE (2)' in CONFIG
     assert '#define LVGL_PORT_DISP_BUFFER_NUM (3)' in CONFIG
     assert '#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)' in CONFIG
-    assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)' in BOARD
+    assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (22 * 1000 * 1000)' in BOARD
     assert 'upload_port = COM11' in PIO
     assert 'upload_port = COM13' in PIO
 

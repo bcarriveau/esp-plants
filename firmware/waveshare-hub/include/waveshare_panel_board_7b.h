@@ -26,7 +26,7 @@
 #define ESP_PANEL_LCD_BUS_SKIP_INIT_HOST (1)
 #define ESP_PANEL_LCD_BUS_TYPE (ESP_PANEL_BUS_TYPE_RGB)
 
-#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)
+#define ESP_PANEL_LCD_RGB_CLK_HZ (22 * 1000 * 1000)
 #define ESP_PANEL_LCD_RGB_HPW (162)
 #define ESP_PANEL_LCD_RGB_HBP (152)
 #define ESP_PANEL_LCD_RGB_HFP (48)
@@ -42,8 +42,8 @@
 // path (3 x 1024 x 600 x RGB565 = 3,686,400 bytes of PSRAM). Do not treat this
 // fallback define as the effective framebuffer count or change runtime buffers.
 #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM (1)
-// VSYNC-restart experiment baseline: retain the tested 24 MHz 7B pixel
-// clock and 15-line bounce buffer while changing only the linked IDF driver.
+// 7B-only 22 MHz pixel-clock A/B experiment. Retain the 15-line bounce
+// buffer and existing VSYNC-restart driver; all other timings stay unchanged.
 #define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)
 
 #define ESP_PANEL_LCD_RGB_IO_HSYNC (46)
