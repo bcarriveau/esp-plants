@@ -12,6 +12,7 @@
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <stdarg.h>
 #include <strings.h>
 #include <time.h>
@@ -1900,13 +1901,30 @@ void disconnectWifi() {
   waitingForClockNotice = false;
   // Keep the STA/netif allocated. reconnectSuppressed is what intentionally
   // keeps ESP PLANTS offline until the user reconnects or the device reboots.
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  // Capture before/after; do not log until after the Wi-Fi and status work.
+  const uint32_t disconnectCallStartUs = static_cast<uint32_t>(esp_timer_get_time());
+#endif
   WiFi.disconnect(false, false);
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  const uint32_t disconnectCallEndUs = static_cast<uint32_t>(esp_timer_get_time());
+#endif
   sawWifiConnected = false;
   strncpy(connectedSsid, "--", sizeof(connectedSsid) - 1);
   connectedSsid[sizeof(connectedSsid) - 1] = '\0';
   strncpy(wifiAddressText, "--", sizeof(wifiAddressText) - 1);
   wifiAddressText[sizeof(wifiAddressText) - 1] = '\0';
   setStatus("Wi-Fi disconnected until you reconnect or reboot");
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  const uint32_t statusReadyUs = static_cast<uint32_t>(esp_timer_get_time());
+  Serial.printf("[wifi-disconnect-diag] call_start_us=%lu call_end_us=%lu "
+                "call_duration_us=%lu status_ready_us=%lu status_after_call_us=%lu\n",
+                static_cast<unsigned long>(disconnectCallStartUs),
+                static_cast<unsigned long>(disconnectCallEndUs),
+                static_cast<unsigned long>(disconnectCallEndUs - disconnectCallStartUs),
+                static_cast<unsigned long>(statusReadyUs),
+                static_cast<unsigned long>(statusReadyUs - disconnectCallEndUs));
+#endif
   Serial.println("[wifi] user disconnected station; saved credentials retained");
 }
 

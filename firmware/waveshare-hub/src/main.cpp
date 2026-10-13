@@ -286,6 +286,12 @@ struct UiDirtyState {
 
 UiDirtyState dirty;
 bool updateModalOpen = false;
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+// Diagnostics only: correlate the touch callback with the next LVGL status
+// refresh. This does not defer either Wi-Fi or drawing.
+bool sevenBDisconnectUiTracePending = false;
+uint32_t sevenBDisconnectTapUs = 0;
+#endif
 
 void markSensorRegistryDirty() {
   dirty.header = true;
@@ -1971,10 +1977,15 @@ void wifiSetupEvent(lv_event_t *event) {
 
 void wifiDisconnectEvent(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  if (espplants_update::wifiReconnectSuppressed())
+  if (espplants_update::wifiReconnectSuppressed()) {
     espplants_update::reconnectWifi();
-  else
+  } else {
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+    sevenBDisconnectTapUs = static_cast<uint32_t>(esp_timer_get_time());
+    sevenBDisconnectUiTracePending = true;
+#endif
     espplants_update::disconnectWifi();
+  }
   dirty.update = true;
 }
 
@@ -3689,6 +3700,13 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
     }
   }
 
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  const bool traceDisconnectRedraw = sevenBDisconnectUiTracePending && updateModalOpen &&
+                                     (force || dirty.update || intervalElapsed);
+  const uint32_t disconnectRedrawStartUs = traceDisconnectRedraw
+      ? static_cast<uint32_t>(esp_timer_get_time()) : 0;
+  uint32_t disconnectRedrawEndUs = 0;
+#endif
   if (updateModalOpen && (force || dirty.update || intervalElapsed)) {
     if (espplants_update::wifiConnected()) {
       label(updateWifiState, "CONNECTED");
@@ -3826,6 +3844,12 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
 
     dirty.update = false;
   }
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  if (traceDisconnectRedraw) {
+    disconnectRedrawEndUs = static_cast<uint32_t>(esp_timer_get_time());
+    sevenBDisconnectUiTracePending = false;
+  }
+#endif
 
   if (pairDialogState != PairDialogState::Hidden &&
       (force || dirty.pair || intervalElapsed)) {
@@ -3834,6 +3858,19 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
   }
 
   if (lockedHere) lvgl_port_unlock();
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  if (traceDisconnectRedraw) {
+    // These times mark CPU-side LVGL object updates, not RGB frame presentation.
+    // Print only after releasing the LVGL lock to avoid perturbing the redraw.
+    Serial.printf("[wifi-ui-diag] tap_us=%lu redraw_start_us=%lu "
+                  "redraw_end_us=%lu tap_to_redraw_us=%lu redraw_duration_us=%lu\n",
+                  static_cast<unsigned long>(sevenBDisconnectTapUs),
+                  static_cast<unsigned long>(disconnectRedrawStartUs),
+                  static_cast<unsigned long>(disconnectRedrawEndUs),
+                  static_cast<unsigned long>(disconnectRedrawStartUs - sevenBDisconnectTapUs),
+                  static_cast<unsigned long>(disconnectRedrawEndUs - disconnectRedrawStartUs));
+  }
+#endif
 #if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
   recordUiRefreshRuntime(refreshStartedUs, lockWaitUs, force,
                          timedPageWork || timedModalWork);

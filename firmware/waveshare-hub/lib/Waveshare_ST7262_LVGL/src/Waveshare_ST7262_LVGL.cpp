@@ -84,6 +84,12 @@ static volatile uint32_t seven_b_diag_framebuffer_commit_count = 0;
 static volatile uint32_t seven_b_diag_last_frame_us = 0;
 static volatile uint32_t seven_b_diag_max_frame_gap_us = 0;
 static volatile uint32_t seven_b_diag_gaps_over_60ms = 0;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+// ISR stores only 32-bit microsecond values. The LVGL task reports them later.
+// Timestamps are esp_timer_get_time() modulo 2^32 (~71.6 minutes).
+static volatile uint32_t seven_b_diag_last_long_gap_us = 0;
+static volatile uint32_t seven_b_diag_last_long_gap_at_us = 0;
+#endif
 static void *seven_b_diag_last_presented_buffer = nullptr;
 
 static bool seven_b_set_backlight_duty(uint8_t duty_percent)
@@ -551,7 +557,13 @@ IRAM_ATTR bool onRgbVsyncCallback(void *user_data)
         const uint32_t frame_gap_us = frame_us - previous_frame_us;
         if (frame_gap_us > seven_b_diag_max_frame_gap_us)
             seven_b_diag_max_frame_gap_us = frame_gap_us;
-        if (frame_gap_us > 60000U) ++seven_b_diag_gaps_over_60ms;
+        if (frame_gap_us > 60000U) {
+            ++seven_b_diag_gaps_over_60ms;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+            seven_b_diag_last_long_gap_us = frame_gap_us;
+            seven_b_diag_last_long_gap_at_us = frame_us;
+#endif
+        }
     }
 #endif
 #if LVGL_PORT_FULL_REFRESH && (LVGL_PORT_DISP_BUFFER_NUM == 3) && (LVGL_PORT_ROTATION_DEGREE == 0)
@@ -816,6 +828,9 @@ static void lvgl_port_task(void *arg)
         static uint32_t diag_last_pointer_change = 0;
         static uint32_t diag_last_bounce_finish = 0;
         static uint32_t diag_last_commit = 0;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+        static uint32_t diag_last_reported_long_gaps = 0;
+#endif
         const uint32_t diag_now_ms = millis();
         if (diag_last_ms == 0)
         {
@@ -852,6 +867,18 @@ static void lvgl_port_task(void *arg)
                 static_cast<unsigned long>(bounce_hz100 % 100U),
                 static_cast<unsigned long>(max_gap_us),
                 static_cast<unsigned long>(delayed_frames));
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+            if (delayed_frames != diag_last_reported_long_gaps)
+            {
+                Serial.printf("[rgb-gap-diag] callback_at_us=%lu frame_gap_us=%lu "
+                              "new_long_gaps=%lu total_long_gaps=%lu\n",
+                              static_cast<unsigned long>(seven_b_diag_last_long_gap_at_us),
+                              static_cast<unsigned long>(seven_b_diag_last_long_gap_us),
+                              static_cast<unsigned long>(delayed_frames - diag_last_reported_long_gaps),
+                              static_cast<unsigned long>(delayed_frames));
+                diag_last_reported_long_gaps = delayed_frames;
+            }
+#endif
             diag_last_ms = diag_now_ms;
             diag_last_flush = flush_now;
             diag_last_present = present_now;
