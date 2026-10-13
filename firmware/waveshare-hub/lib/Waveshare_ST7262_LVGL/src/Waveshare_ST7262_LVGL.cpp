@@ -77,6 +77,17 @@ static volatile uint32_t seven_b_diag_flush_count = 0;
 static volatile uint32_t seven_b_diag_present_count = 0;
 static volatile uint32_t seven_b_diag_present_pointer_change_count = 0;
 static volatile uint32_t seven_b_diag_bounce_frame_finish_count = 0;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+// Separate raw LCD VSYNC from bounce-buffer frame completion. A Wi-Fi radio
+// transition may delay the PSRAM bounce-buffer path without stalling VSYNC.
+// Diagnostic only: never request a panel restart from either callback.
+static volatile uint32_t seven_b_diag_raw_vsync_count = 0;
+static volatile uint32_t seven_b_diag_raw_last_us = 0;
+static volatile uint32_t seven_b_diag_raw_max_gap_us = 0;
+static volatile uint32_t seven_b_diag_raw_gaps_over_60ms = 0;
+static volatile uint32_t seven_b_diag_raw_long_gap_at_us = 0;
+static volatile uint32_t seven_b_diag_raw_long_gap_us = 0;
+#endif
 static volatile uint32_t seven_b_diag_framebuffer_commit_count = 0;
 // The bounce-frame-finish callback occurs at the normal panel scan rate;
 // count only exceptionally long *gaps* separately from normal callbacks.
@@ -827,6 +838,9 @@ static void lvgl_port_task(void *arg)
         static uint32_t diag_last_present = 0;
         static uint32_t diag_last_pointer_change = 0;
         static uint32_t diag_last_bounce_finish = 0;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+        static uint32_t diag_last_raw_vsync = 0;
+#endif
         static uint32_t diag_last_commit = 0;
 #if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
         static uint32_t diag_last_reported_long_gaps = 0;
@@ -843,6 +857,10 @@ static void lvgl_port_task(void *arg)
             const uint32_t present_now = seven_b_diag_present_count;
             const uint32_t pointer_change_now = seven_b_diag_present_pointer_change_count;
             const uint32_t bounce_finish_now = seven_b_diag_bounce_frame_finish_count;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+            const uint32_t raw_vsync_now = seven_b_diag_raw_vsync_count;
+            const uint32_t raw_delta = raw_vsync_now - diag_last_raw_vsync;
+#endif
             const uint32_t commit_now = seven_b_diag_framebuffer_commit_count;
             const uint32_t max_gap_us = seven_b_diag_max_frame_gap_us;
             const uint32_t delayed_frames = seven_b_diag_gaps_over_60ms;
@@ -883,6 +901,22 @@ static void lvgl_port_task(void *arg)
             diag_last_flush = flush_now;
             diag_last_present = present_now;
             diag_last_pointer_change = pointer_change_now;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+            // Keep the same 5-second window as display-diag. These counts
+            // distinguish LCD timing from PSRAM bounce-frame completion.
+            Serial.printf(
+                "[rgb-path-diag] dt=%lums raw_vsync=%lu bounce_frame_finish=%lu "
+                "max_raw_gap_us=%lu raw_gaps_over_60ms=%lu "
+                "last_raw_long_gap_at_us=%lu last_raw_long_gap_us=%lu\n",
+                static_cast<unsigned long>(dt_ms),
+                static_cast<unsigned long>(raw_delta),
+                static_cast<unsigned long>(bounce_finish_delta),
+                static_cast<unsigned long>(seven_b_diag_raw_max_gap_us),
+                static_cast<unsigned long>(seven_b_diag_raw_gaps_over_60ms),
+                static_cast<unsigned long>(seven_b_diag_raw_long_gap_at_us),
+                static_cast<unsigned long>(seven_b_diag_raw_long_gap_us));
+            diag_last_raw_vsync = raw_vsync_now;
+#endif
             diag_last_bounce_finish = bounce_finish_now;
             diag_last_commit = commit_now;
         }
@@ -890,6 +924,41 @@ static void lvgl_port_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
     }
 }
+
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+// The native LCD ISR emits raw VSYNC even if the driver has not completed a
+// PSRAM-to-bounce-buffer frame. No Serial, allocations or panel controls here.
+IRAM_ATTR static bool on7bRawVsync(esp_lcd_panel_handle_t,
+                                   const esp_lcd_rgb_panel_event_data_t *, void *)
+{
+    const uint32_t now_us = static_cast<uint32_t>(esp_timer_get_time());
+    const uint32_t prev_us = seven_b_diag_raw_last_us;
+    seven_b_diag_raw_last_us = now_us;
+    ++seven_b_diag_raw_vsync_count;
+    if (prev_us != 0U)
+    {
+        const uint32_t gap_us = now_us - prev_us;
+        if (gap_us > seven_b_diag_raw_max_gap_us)
+            seven_b_diag_raw_max_gap_us = gap_us;
+        if (gap_us > 60000U)
+        {
+            ++seven_b_diag_raw_gaps_over_60ms;
+            seven_b_diag_raw_long_gap_at_us = now_us;
+            seven_b_diag_raw_long_gap_us = gap_us;
+        }
+    }
+    return false;
+}
+
+// Preserve the original LVGL triple-buffer frame-completion handling exactly.
+// This adapter only translates the native IDF bounce-finish callback signature.
+IRAM_ATTR static bool on7bBounceFrameFinish(esp_lcd_panel_handle_t,
+                                            const esp_lcd_rgb_panel_event_data_t *,
+                                            void *user_ctx)
+{
+    return onRgbVsyncCallback(user_ctx);
+}
+#endif
 
 IRAM_ATTR bool onRefreshFinishCallback(void *user_data)
 {
@@ -962,6 +1031,21 @@ bool lvgl_port_init(ESP_PanelLcd *lcd, ESP_PanelTouch *tp)
 
 #if LVGL_PORT_AVOID_TEAR
     lcd->attachRefreshFinishCallback(onRgbVsyncCallback, (void *)lvgl_task_handle);
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+    // The ESP_Panel wrapper registers only the frame-finish hook. Register
+    // BOTH raw VSYNC and the same frame-finish operation via ESP-IDF so the
+    // timings can be compared. If registration fails, its original callback
+    // remains intact. Never touch on_bounce_empty: the driver fills the bounce
+    // buffers from its PSRAM framebuffers, without an app callback.
+    esp_lcd_rgb_panel_event_callbacks_t callbacks = {};
+    callbacks.on_vsync = on7bRawVsync;
+    callbacks.on_bounce_frame_finish = on7bBounceFrameFinish;
+    const esp_err_t err = esp_lcd_rgb_panel_register_event_callbacks(
+        lcd->getHandle(), &callbacks, (void *)lvgl_task_handle);
+    Serial.printf("[rgb-path-diag] raw VSYNC + existing bounce-finish probe %s err=%d\n",
+                  err == ESP_OK ? "enabled" : "UNAVAILABLE (original callback retained)",
+                  static_cast<int>(err));
+#endif
 #endif
 
     return true;
