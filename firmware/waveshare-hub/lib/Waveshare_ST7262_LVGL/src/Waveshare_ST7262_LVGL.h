@@ -95,9 +95,12 @@
  *
  */
 #ifdef ESP_PLANTS_WAVESHARE_7B
-// VSYNC-restart experiment baseline: keep 15 lines at 24 MHz PCLK.
+// TEMPORARY 7B A/B TEST: 20-line bounce buffers instead of the 15-line
+// baseline; preserve the 24 MHz pixel clock and triple-buffer LVGL path.
+// IDF requires 600 rows to divide evenly into 2 * 20-line chunks.
+// Two RGB565 bounce buffers use 81,920 bytes at 1024px (20,480 more).
 // The original 7 remains at 10 lines.
-#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)
+#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 20)
 #else
 #define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)
 #endif
