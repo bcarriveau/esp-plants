@@ -29,7 +29,7 @@ def test_24mhz_15line_baseline_and_mode2_are_locked():
     assert "#define LVGL_PORT_AVOID_TEARING_MODE (2)" in DRIVER_H
     assert "#define LVGL_PORT_DISP_BUFFER_NUM (3)" in DRIVER_H
     assert "#define LVGL_PORT_FULL_REFRESH (1)" in DRIVER_H
-    assert "#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 20)" in DRIVER_H
+    assert "#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)" in DRIVER_H
     assert 600 % (2 * 20) == 0
 
 

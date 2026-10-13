@@ -102,6 +102,76 @@ static volatile uint32_t seven_b_diag_last_long_gap_us = 0;
 static volatile uint32_t seven_b_diag_last_long_gap_at_us = 0;
 #endif
 static void *seven_b_diag_last_presented_buffer = nullptr;
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+// Trace the *submission* of a complete LVGL PSRAM framebuffer separately
+// from raw VSYNC and bounce-frame completion. The 20-line experiment showed
+// visible rolling even with zero >60ms callback gaps. Save only eight recent
+// submissions; do not print while LVGL holds the display lock.
+struct SevenBPresentTrace {
+    uint32_t submitted_us;
+    uint32_t draw_duration_us;
+    uint32_t raw_vsync_age_us;
+    uint32_t bounce_finish_age_us;
+    uintptr_t framebuffer;
+};
+static constexpr uint8_t k7bPresentTraceCapacity = 8;
+static SevenBPresentTrace seven_b_present_traces[k7bPresentTraceCapacity] = {};
+static uint8_t seven_b_present_head = 0;
+static uint8_t seven_b_present_count = 0;
+static uint32_t seven_b_present_overwrites = 0;
+static portMUX_TYPE seven_b_present_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void record7bFramePresentation(uint32_t submitted_us, uint32_t draw_duration_us,
+                                     uint32_t raw_vsync_age_us,
+                                     uint32_t bounce_finish_age_us,
+                                     uintptr_t framebuffer)
+{
+    const SevenBPresentTrace sample = {
+        submitted_us, draw_duration_us, raw_vsync_age_us,
+        bounce_finish_age_us, framebuffer
+    };
+    portENTER_CRITICAL(&seven_b_present_mux);
+    seven_b_present_traces[seven_b_present_head] = sample;
+    seven_b_present_head = static_cast<uint8_t>((seven_b_present_head + 1U) % k7bPresentTraceCapacity);
+    if (seven_b_present_count < k7bPresentTraceCapacity)
+        ++seven_b_present_count;
+    else
+        ++seven_b_present_overwrites;
+    portEXIT_CRITICAL(&seven_b_present_mux);
+}
+
+// Called only by the normal LVGL task, outside the LVGL mutex. Capture the
+// bounded ring under a short critical section, then do all serial I/O outside.
+static void report7bFramePresentations()
+{
+    SevenBPresentTrace batch[k7bPresentTraceCapacity] = {};
+    uint8_t count = 0;
+    uint32_t overwritten = 0;
+    portENTER_CRITICAL(&seven_b_present_mux);
+    count = seven_b_present_count;
+    const uint8_t oldest = static_cast<uint8_t>(
+        (seven_b_present_head + k7bPresentTraceCapacity - count) % k7bPresentTraceCapacity);
+    for (uint8_t i = 0; i < count; ++i)
+        batch[i] = seven_b_present_traces[(oldest + i) % k7bPresentTraceCapacity];
+    overwritten = seven_b_present_overwrites;
+    seven_b_present_count = 0;
+    seven_b_present_overwrites = 0;
+    portEXIT_CRITICAL(&seven_b_present_mux);
+    if (count == 0 && overwritten == 0) return;
+    Serial.printf("[rgb-present-diag] recent=%u overwritten=%lu (5s window)\n",
+                  static_cast<unsigned>(count), static_cast<unsigned long>(overwritten));
+    for (uint8_t i = 0; i < count; ++i) {
+        const SevenBPresentTrace &entry = batch[i];
+        Serial.printf("[rgb-present-diag] submit_us=%lu draw_us=%lu "
+                      "raw_age_us=%lu finish_age_us=%lu framebuffer=0x%lx\n",
+                      static_cast<unsigned long>(entry.submitted_us),
+                      static_cast<unsigned long>(entry.draw_duration_us),
+                      static_cast<unsigned long>(entry.raw_vsync_age_us),
+                      static_cast<unsigned long>(entry.bounce_finish_age_us),
+                      static_cast<unsigned long>(entry.framebuffer));
+    }
+}
+#endif
 
 static bool seven_b_set_backlight_duty(uint8_t duty_percent)
 {
@@ -542,9 +612,21 @@ void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color
         seven_b_diag_last_presented_buffer = color_map;
     }
 #endif
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+    const uint32_t submit_us = static_cast<uint32_t>(esp_timer_get_time());
+    const uint32_t last_raw_us = seven_b_diag_raw_last_us;
+    const uint32_t last_finish_us = seven_b_diag_last_frame_us;
+#endif
     lcd->drawBitmap(offsetx1, offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, (const uint8_t *)color_map);
 
     lvgl_port_rgb_next_buf = color_map;
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+    record7bFramePresentation(
+        submit_us, static_cast<uint32_t>(esp_timer_get_time()) - submit_us,
+        last_raw_us ? submit_us - last_raw_us : 0U,
+        last_finish_us ? submit_us - last_finish_us : 0U,
+        reinterpret_cast<uintptr_t>(color_map));
+#endif
 #endif
 
     lv_disp_flush_ready(drv);
@@ -916,6 +998,7 @@ static void lvgl_port_task(void *arg)
                 static_cast<unsigned long>(seven_b_diag_raw_long_gap_at_us),
                 static_cast<unsigned long>(seven_b_diag_raw_long_gap_us));
             diag_last_raw_vsync = raw_vsync_now;
+            report7bFramePresentations();
 #endif
             diag_last_bounce_finish = bounce_finish_now;
             diag_last_commit = commit_now;

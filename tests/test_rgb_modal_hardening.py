@@ -80,19 +80,18 @@ def test_both_waveshare_variants_use_proven_triple_buffer_full_refresh_mode():
     assert "#define LVGL_PORT_AVOID_TEARING_MODE (2)" in DRIVER_H
     assert "#define LVGL_PORT_AVOID_TEARING_MODE (3)" not in DRIVER_H
     bounce = """#ifdef ESP_PLANTS_WAVESHARE_7B
-// TEMPORARY 7B A/B TEST: 20-line bounce buffers instead of the 15-line
-// baseline; preserve the 24 MHz pixel clock and triple-buffer LVGL path.
-// IDF requires 600 rows to divide evenly into 2 * 20-line chunks.
-// Two RGB565 bounce buffers use 81,920 bytes at 1024px (20,480 more).
-// The original 7 remains at 10 lines.
-#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 20)
+// Restore the 15-line 7B baseline after the 20-line A/B test: visual
+// bounce remained despite zero >60ms callback gaps. Keep triple buffering,
+// 24 MHz PCLK and the original 7's 10-line configuration unchanged.
+// 600 rows is divisible by two 15-line RGB565 bounce buffers.
+#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)
 #else
 #define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 10)
 #endif"""
     assert bounce in DRIVER_H
-    # IDF 5.1 requires fb_size % (2 * bounce_size) == 0. Twenty lines are
-    # legal for the 1024x600 7B diagnostic; the original 800x480 stays at 10.
-    assert 600 % (2 * 20) == 0
+    # IDF 5.1 requires fb_size % (2 * bounce_size) == 0. The restored
+    # 15-line 7B buffer is legal; the original 800x480 stays at 10.
+    assert 600 % (2 * 15) == 0
     assert 480 % (2 * 10) == 0
     assert "#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)" in BOARD_7B
     assert "CONFIG_SPIRAM_FETCH_INSTRUCTIONS" in DRIVER_CPP

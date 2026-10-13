@@ -32,7 +32,7 @@ def test_keep_hardware_tested_display_timings_and_bounce_buffer():
     pio = source('platformio.ini')
     assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)' in board
     assert '#define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE (ESP_PANEL_LCD_WIDTH * 15)' in board
-    assert '#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 20)' in cfg
+    assert '#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)' in cfg
     assert 'post:scripts/use_7b_vsync_sdk.py' in pio
     assert 'upload_port = COM11' in pio
     assert 'upload_port = COM13' in pio

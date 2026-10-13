@@ -28,7 +28,7 @@ def test_probe_is_7b_only_and_compares_native_events():
 
 def test_no_changes_to_config_or_ui_behavior():
     assert '#define LVGL_PORT_AVOID_TEARING_MODE (2)' in HEADER.read_text()
-    assert '#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 20)' in HEADER.read_text()
+    assert '#define LVGL_PORT_RGB_BOUNCE_BUFFER_SIZE (LVGL_PORT_DISP_WIDTH * 15)' in HEADER.read_text()
     assert '#define ESP_PANEL_LCD_RGB_CLK_HZ (24 * 1000 * 1000)' in BOARD.read_text()
     ini = INI.read_text()
     assert 'upload_port = COM11' in ini
