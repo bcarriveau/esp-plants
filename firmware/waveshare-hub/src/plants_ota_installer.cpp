@@ -9,6 +9,7 @@
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_ota_ops.h>
+#include <esp_timer.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
@@ -138,6 +139,12 @@ struct FlashWriterContext {
   uint16_t slotLengths[kOtaRingSlotCount]{};
   uint32_t expectedFirmwareBytes = 0;
   uint32_t writtenBytes = 0;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  // Diagnostic counters only; no changes to A/B validation or writer pacing.
+  uint32_t flashWriteCalls = 0;
+  uint32_t maxFlashWriteUs = 0;
+  uint32_t slowFlashWritesOver20Ms = 0;
+#endif
   esp_ota_handle_t otaHandle = 0;
   bool otaHandleActive = false;
   char error[128]{};
@@ -525,8 +532,19 @@ void flashWriterTask(void *parameter) {
         // PSRAM is touched only while copying into this internal buffer. The
         // subsequent flash operation depends only on internal stack/data.
         memcpy(writer.internalWriteBuffer, source + offset, chunk);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+        const int64_t flashStartedUs = esp_timer_get_time();
+#endif
         const esp_err_t writeResult =
             esp_ota_write(writer.otaHandle, writer.internalWriteBuffer, chunk);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+        const uint32_t flashWriteUs = static_cast<uint32_t>(
+            esp_timer_get_time() - flashStartedUs);
+        ++writer.flashWriteCalls;
+        if (flashWriteUs > writer.maxFlashWriteUs)
+          writer.maxFlashWriteUs = flashWriteUs;
+        if (flashWriteUs > 20000U) ++writer.slowFlashWritesOver20Ms;
+#endif
         if (writeResult != ESP_OK) {
           char text[128]{};
           snprintf(text, sizeof(text), "Firmware write failed: %s",
@@ -535,6 +553,18 @@ void flashWriterTask(void *parameter) {
           break;
         }
         writer.writtenBytes += static_cast<uint32_t>(chunk);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+        // Report only every 256 KiB, from the task that owns these counters.
+        // Counters are cumulative, so serial logs align with [display-diag].
+        if (writer.writtenBytes % (256U * 1024U) == 0U) {
+          Serial.printf(
+              "[ota-flash-diag] written=%lu write_calls=%lu max_write_us=%lu writes_over_20ms=%lu (cumulative)\n",
+              static_cast<unsigned long>(writer.writtenBytes),
+              static_cast<unsigned long>(writer.flashWriteCalls),
+              static_cast<unsigned long>(writer.maxFlashWriteUs),
+              static_cast<unsigned long>(writer.slowFlashWritesOver20Ms));
+        }
+#endif
         offset += chunk;
       }
       if (flashWriterState(writer) == FlashWriterState::FAILED) continue;
@@ -548,6 +578,14 @@ void flashWriterTask(void *parameter) {
         failFlashWriter(writer, "Flash writer did not receive the complete firmware image");
         continue;
       }
+#ifdef ESP_PLANTS_WAVESHARE_7B
+      Serial.printf(
+          "[ota-flash-diag] complete_bytes=%lu write_calls=%lu max_write_us=%lu writes_over_20ms=%lu (cumulative)\n",
+          static_cast<unsigned long>(writer.writtenBytes),
+          static_cast<unsigned long>(writer.flashWriteCalls),
+          static_cast<unsigned long>(writer.maxFlashWriteUs),
+          static_cast<unsigned long>(writer.slowFlashWritesOver20Ms));
+#endif
       const esp_err_t endResult = esp_ota_end(writer.otaHandle);
       writer.otaHandleActive = false;
       if (endResult != ESP_OK) {

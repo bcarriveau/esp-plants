@@ -10,6 +10,7 @@
 #ifdef ESP_PLANTS_WAVESHARE_7B
 #include <Wire.h>
 #include <esp_lcd_panel_rgb.h>
+#include <esp_timer.h>
 #endif
 #include <ESP_Panel_Library.h>
 #include <ESP_IOExpander_Library.h>
@@ -77,6 +78,12 @@ static volatile uint32_t seven_b_diag_present_count = 0;
 static volatile uint32_t seven_b_diag_present_pointer_change_count = 0;
 static volatile uint32_t seven_b_diag_bounce_frame_finish_count = 0;
 static volatile uint32_t seven_b_diag_framebuffer_commit_count = 0;
+// The bounce-frame-finish callback occurs at the normal panel scan rate;
+// count only exceptionally long *gaps* separately from normal callbacks.
+// These counters are telemetry, never used to restart or reconfigure RGB.
+static volatile uint32_t seven_b_diag_last_frame_us = 0;
+static volatile uint32_t seven_b_diag_max_frame_gap_us = 0;
+static volatile uint32_t seven_b_diag_gaps_over_60ms = 0;
 static void *seven_b_diag_last_presented_buffer = nullptr;
 
 static bool seven_b_set_backlight_duty(uint8_t duty_percent)
@@ -534,6 +541,18 @@ IRAM_ATTR bool onRgbVsyncCallback(void *user_data)
     // With a non-zero RGB bounce buffer ESP32_Display_Panel attaches this
     // callback to on_bounce_frame_finish, not raw VSYNC.
     ++seven_b_diag_bounce_frame_finish_count;
+    // esp_timer_get_time() is callable from ISR; only 32-bit counters are
+    // touched here. A >60 ms gap is abnormal for this ~26 Hz panel, but a
+    // normal callback count alone does NOT prove the scan is healthy.
+    const uint32_t frame_us = static_cast<uint32_t>(esp_timer_get_time());
+    const uint32_t previous_frame_us = seven_b_diag_last_frame_us;
+    seven_b_diag_last_frame_us = frame_us;
+    if (previous_frame_us != 0U) {
+        const uint32_t frame_gap_us = frame_us - previous_frame_us;
+        if (frame_gap_us > seven_b_diag_max_frame_gap_us)
+            seven_b_diag_max_frame_gap_us = frame_gap_us;
+        if (frame_gap_us > 60000U) ++seven_b_diag_gaps_over_60ms;
+    }
 #endif
 #if LVGL_PORT_FULL_REFRESH && (LVGL_PORT_DISP_BUFFER_NUM == 3) && (LVGL_PORT_ROTATION_DEGREE == 0)
     if (lvgl_port_rgb_next_buf != lvgl_port_rgb_last_buf)
@@ -810,6 +829,8 @@ static void lvgl_port_task(void *arg)
             const uint32_t pointer_change_now = seven_b_diag_present_pointer_change_count;
             const uint32_t bounce_finish_now = seven_b_diag_bounce_frame_finish_count;
             const uint32_t commit_now = seven_b_diag_framebuffer_commit_count;
+            const uint32_t max_gap_us = seven_b_diag_max_frame_gap_us;
+            const uint32_t delayed_frames = seven_b_diag_gaps_over_60ms;
             const uint32_t flush_delta = flush_now - diag_last_flush;
             const uint32_t present_delta = present_now - diag_last_present;
             const uint32_t pointer_change_delta = pointer_change_now - diag_last_pointer_change;
@@ -818,7 +839,7 @@ static void lvgl_port_task(void *arg)
             const uint32_t flush_hz100 = static_cast<uint32_t>((static_cast<uint64_t>(flush_delta) * 100000ULL) / dt_ms);
             const uint32_t bounce_hz100 = static_cast<uint32_t>((static_cast<uint64_t>(bounce_finish_delta) * 100000ULL) / dt_ms);
             Serial.printf(
-                "[display-diag] dt=%lums flush=%lu (%lu.%02lu/s) present=%lu ptr_change=%lu commit=%lu bounce_frame_finish=%lu (%lu.%02lu/s)\n",
+                "[display-diag] dt=%lums flush=%lu (%lu.%02lu/s) present=%lu ptr_change=%lu commit=%lu bounce_frame_finish=%lu (%lu.%02lu/s) max_frame_gap_us=%lu gaps_over_60ms=%lu (cumulative)\n",
                 static_cast<unsigned long>(dt_ms),
                 static_cast<unsigned long>(flush_delta),
                 static_cast<unsigned long>(flush_hz100 / 100U),
@@ -828,7 +849,9 @@ static void lvgl_port_task(void *arg)
                 static_cast<unsigned long>(commit_delta),
                 static_cast<unsigned long>(bounce_finish_delta),
                 static_cast<unsigned long>(bounce_hz100 / 100U),
-                static_cast<unsigned long>(bounce_hz100 % 100U));
+                static_cast<unsigned long>(bounce_hz100 % 100U),
+                static_cast<unsigned long>(max_gap_us),
+                static_cast<unsigned long>(delayed_frames));
             diag_last_ms = diag_now_ms;
             diag_last_flush = flush_now;
             diag_last_present = present_now;
@@ -937,7 +960,10 @@ bool lvgl_port_unlock(void)
 void lcd_init(void)
 {
     pinMode(GPIO_INPUT_IO_4, OUTPUT);
-    Serial.printf("[display] sdkconfig xip_fetch=%d xip_rodata=%d data_cache_line_64b=%d lcd_restart_in_vsync=%d\n",
+    // This is the application's Arduino SDK header, NOT the custom 7B RGB
+    // library's SDK config. The 7B linker post-check separately verifies the
+    // replacement archive and VSYNC/IRAM placement against its manifest.
+    Serial.printf("[display] app_sdkconfig xip_fetch=%d xip_rodata=%d data_cache_line_64b=%d lcd_restart_in_vsync=%d (app header only)\n",
                   kSdkconfigXipFetch, kSdkconfigXipRodata,
                   kSdkconfigDataCacheLine64B, kSdkconfigLcdRestartInVsync);
 #ifdef ESP_PLANTS_WAVESHARE_7B
