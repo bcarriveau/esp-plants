@@ -4,9 +4,11 @@
 
 namespace espplants_update {
 
-// 7B boot diagnostic: optionally postpone only the Wi-Fi station startup.
+// 7B boot diagnostic: postpone saved Wi-Fi until the entire splash is gone.
 // The updater, persisted credentials and time seed initialize immediately.
-void begin(bool deferWifiUntilPlantGrown = false);
+void begin(bool deferWifiUntilSplashDismissed = false);
+// Call only after the splash has actually been dismissed (not at zoom end).
+void notifyBootSplashDismissed();
 void service();
 
 void startWifiSetup();

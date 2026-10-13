@@ -45,9 +45,10 @@ constexpr uint32_t kDailyCheckSeconds = 24UL * 60UL * 60UL;
 constexpr uint32_t kFailedCheckRetryMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWifiReconnectMs = 30UL * 1000UL;
 #ifdef ESP_PLANTS_WAVESHARE_7B
-// Diagnostic A/B: match boot_splash.cpp kGrowDurationMs (4300 ms).
-// Do not alter the normal 7 or the 7B RGB driver/animation timings.
-constexpr uint32_t k7bPlantGrowthWifiDelayMs = 4300U;
+// Diagnostic A/B: start saved Wi-Fi only after the entire 6.5s splash has
+// been dismissed. Give the first Home frame 300ms to present before radio work.
+// Preserve the 7B image/zoom, RGB settings and the original 7 behavior.
+constexpr uint32_t k7bPostSplashWifiSettleMs = 300U;
 #endif
 constexpr uint32_t kPortalConnectTimeoutMs = 20UL * 1000UL;
 constexpr uint32_t kPortalSuccessHoldMs = 10UL * 1000UL;
@@ -217,7 +218,82 @@ bool reconnectSuppressed = false;
 bool autoCheckedThisBoot = false;
 bool waitingForClockNotice = false;
 #ifdef ESP_PLANTS_WAVESHARE_7B
-bool wifiStartupDeferredForPlantGrowth = false;
+bool wifiStartupDeferredForSplash = false;
+uint32_t wifiSplashDismissedAtMs = 0;
+
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+// Minimal native-event recorder: callback runs on Arduino's Wi-Fi event task,
+// NOT the UI task. Only capture timestamps here; print later in service().
+struct WifiRadioEventDiag {
+  uint32_t eventUs;
+  uint16_t eventId;
+  uint16_t reason;
+};
+constexpr uint8_t kWifiRadioEventTraceCapacity = 12;
+portMUX_TYPE wifiRadioEventMux = portMUX_INITIALIZER_UNLOCKED;
+WifiRadioEventDiag wifiRadioEventTrace[kWifiRadioEventTraceCapacity]{};
+uint8_t wifiRadioEventHead = 0;
+uint8_t wifiRadioEventCount = 0;
+uint32_t wifiRadioEventDropped = 0;
+
+void on7bWifiRadioEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event != ARDUINO_EVENT_WIFI_STA_START &&
+      event != ARDUINO_EVENT_WIFI_STA_STOP &&
+      event != ARDUINO_EVENT_WIFI_STA_CONNECTED &&
+      event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED &&
+      event != ARDUINO_EVENT_WIFI_STA_GOT_IP) return;
+  const WifiRadioEventDiag entry{
+      static_cast<uint32_t>(esp_timer_get_time()),
+      static_cast<uint16_t>(event),
+      event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED
+          ? static_cast<uint16_t>(info.wifi_sta_disconnected.reason) : 0U};
+  portENTER_CRITICAL(&wifiRadioEventMux);
+  if (wifiRadioEventCount < kWifiRadioEventTraceCapacity) {
+    const uint8_t index = (wifiRadioEventHead + wifiRadioEventCount) %
+                          kWifiRadioEventTraceCapacity;
+    wifiRadioEventTrace[index] = entry;
+    ++wifiRadioEventCount;
+  } else {
+    ++wifiRadioEventDropped;
+  }
+  portEXIT_CRITICAL(&wifiRadioEventMux);
+}
+
+void drain7bWifiRadioEvents() {
+  while (true) {
+    WifiRadioEventDiag entry{};
+    uint32_t dropped = 0;
+    bool found = false;
+    portENTER_CRITICAL(&wifiRadioEventMux);
+    if (wifiRadioEventCount) {
+      entry = wifiRadioEventTrace[wifiRadioEventHead];
+      wifiRadioEventHead = (wifiRadioEventHead + 1U) % kWifiRadioEventTraceCapacity;
+      --wifiRadioEventCount;
+      found = true;
+    } else if (wifiRadioEventDropped) {
+      dropped = wifiRadioEventDropped;
+      wifiRadioEventDropped = 0;
+    }
+    portEXIT_CRITICAL(&wifiRadioEventMux);
+    if (!found) {
+      if (dropped) Serial.printf("[wifi-event-diag] dropped=%lu\n",
+                                  static_cast<unsigned long>(dropped));
+      break;
+    }
+    const char *name = "UNKNOWN";
+    switch (entry.eventId) {
+      case ARDUINO_EVENT_WIFI_STA_START: name = "STA_START"; break;
+      case ARDUINO_EVENT_WIFI_STA_STOP: name = "STA_STOP"; break;
+      case ARDUINO_EVENT_WIFI_STA_CONNECTED: name = "STA_CONNECTED"; break;
+      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: name = "STA_DISCONNECTED"; break;
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP: name = "STA_GOT_IP"; break;
+    }
+    Serial.printf("[wifi-event-diag] event_us=%lu event=%s reason=%u\n",
+                  static_cast<unsigned long>(entry.eventUs), name,
+                  static_cast<unsigned>(entry.reason));
+  }
+}
+#endif  // !ESP_PLANTS_DISTRIBUTION_BUILD
 #endif
 uint32_t bootStartedMs = 0;
 uint32_t lastReconnectAttemptMs = 0;
@@ -595,7 +671,17 @@ void beginStationConnection(bool restartRadio = false) {
     if (!setupPortalRunning) WiFi.setSleep(false);
   }
   WiFi.setAutoReconnect(true);
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  const uint32_t wifiBeginCallUs = static_cast<uint32_t>(esp_timer_get_time());
+#endif
   WiFi.begin(savedSsid.c_str(), savedPassword.c_str());
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  const uint32_t wifiBeginDoneUs = static_cast<uint32_t>(esp_timer_get_time());
+  Serial.printf("[wifi-event-diag] begin_start_us=%lu begin_end_us=%lu duration_us=%lu\n",
+                static_cast<unsigned long>(wifiBeginCallUs),
+                static_cast<unsigned long>(wifiBeginDoneUs),
+                static_cast<unsigned long>(wifiBeginDoneUs - wifiBeginCallUs));
+#endif
   lastReconnectAttemptMs = millis();
   setStatus("Connecting to Wi-Fi...");
   Serial.printf("[wifi] connecting to \"%s\"\n", savedSsid.c_str());
@@ -1676,10 +1762,20 @@ bool shouldAutoCheck() {
 
 }  // namespace
 
-void begin(bool deferWifiUntilPlantGrown) {
+void notifyBootSplashDismissed() {
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  if (initialized && wifiStartupDeferredForSplash && !wifiSplashDismissedAtMs) {
+    wifiSplashDismissedAtMs = millis();
+    Serial.printf("[wifi-ab] 7B splash dismissed; station releases after %lums Home settle\n",
+                  static_cast<unsigned long>(k7bPostSplashWifiSettleMs));
+  }
+#endif
+}
+
+void begin(bool deferWifiUntilSplashDismissed) {
   if (initialized) return;
 #ifndef ESP_PLANTS_WAVESHARE_7B
-  (void)deferWifiUntilPlantGrown;
+  (void)deferWifiUntilSplashDismissed;
 #endif
   initialized = true;
   bootStartedMs = millis();
@@ -1700,6 +1796,10 @@ void begin(bool deferWifiUntilPlantGrown) {
 #endif
 
   WiFi.persistent(false);
+#if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  // No Serial or LVGL work in the Wi-Fi event callback itself.
+  WiFi.onEvent(on7bWifiRadioEvent);
+#endif
   if (!networkPreferences.begin(kNetworkNamespace, false, kPlantDataPartition)) {
     setStatus("Could not open persistent network settings");
     return;
@@ -1720,11 +1820,11 @@ void begin(bool deferWifiUntilPlantGrown) {
   configurePortalRoutes();
   if (savedSsid.length()) {
 #ifdef ESP_PLANTS_WAVESHARE_7B
-    if (deferWifiUntilPlantGrown) {
-      wifiStartupDeferredForPlantGrowth = true;
-      setStatus("Wi-Fi waiting for boot plant growth");
-      Serial.printf("[wifi-ab] 7B station startup deferred %lums for plant zoom\n",
-                    static_cast<unsigned long>(k7bPlantGrowthWifiDelayMs));
+    if (deferWifiUntilSplashDismissed) {
+      wifiStartupDeferredForSplash = true;
+      wifiSplashDismissedAtMs = 0;
+      setStatus("Wi-Fi waiting for complete boot splash");
+      Serial.println("[wifi-ab] 7B station startup deferred until splash dismissed");
     } else
 #endif
     {
@@ -1742,18 +1842,22 @@ void service() {
   if (!initialized) return;
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
-  // Release the station only after the existing 4.3s plant-growth interval.
-  // Other updater initialization was intentionally not delayed.
-  if (wifiStartupDeferredForPlantGrowth &&
-      millis() - bootStartedMs >= k7bPlantGrowthWifiDelayMs) {
-    wifiStartupDeferredForPlantGrowth = false;
-    Serial.printf("[wifi-ab] 7B station startup released +%lums after updater begin\n",
+  // Wait for main.cpp to actually dismiss the complete splash; there is no
+  // independent elapsed-time fallback that could run Wi-Fi during the zoom.
+  if (wifiStartupDeferredForSplash && wifiSplashDismissedAtMs != 0 &&
+      millis() - wifiSplashDismissedAtMs >= k7bPostSplashWifiSettleMs) {
+    wifiStartupDeferredForSplash = false;
+    Serial.printf("[wifi-ab] 7B station startup released +%lums after splash dismissal (+%lums after updater begin)\n",
+                  static_cast<unsigned long>(millis() - wifiSplashDismissedAtMs),
                   static_cast<unsigned long>(millis() - bootStartedMs));
     const esp_reset_reason_t reason = esp_reset_reason();
     const bool coldRadioReset =
         reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
     beginStationConnection(coldRadioReset);
   }
+#if !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
+  drain7bWifiRadioEvents();
+#endif
 #endif
 
   espplants_ota_installer::serviceRestart();
@@ -1818,7 +1922,7 @@ void service() {
   if (!connected && savedSsid.length() && !setupPortalRunning &&
       !reconnectSuppressed &&
 #ifdef ESP_PLANTS_WAVESHARE_7B
-      !wifiStartupDeferredForPlantGrowth &&
+      !wifiStartupDeferredForSplash &&
 #endif
       millis() - lastReconnectAttemptMs >= kWifiReconnectMs) {
     beginStationConnection();

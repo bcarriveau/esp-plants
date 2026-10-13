@@ -4322,9 +4322,9 @@ void setup() {
   Serial.println("[display] ready");
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
-  // Controlled 7B A/B test: keep the full growing plant animation unchanged,
-  // but start the Wi-Fi station after its 4.3s growth interval. If the splash
-  // cannot start, connect immediately as before.
+  // Controlled 7B A/B test: retain the complete 6.5s photo splash and
+  // defer the Wi-Fi station until Home replaces the splash. If splash creation
+  // fails, connect immediately as before.
   espplants_update::begin(bootSplashActive);
 #else
   espplants_update::begin();
@@ -4380,6 +4380,11 @@ void loop() {
       espplants_boot_splash::dismiss();
       bootSplashActive = false;
       lvgl_port_unlock();
+#ifdef ESP_PLANTS_WAVESHARE_7B
+      // Start the Wi-Fi settle clock only after the complete splash is gone.
+      // No new LVGL work or panel restart is performed here.
+      espplants_update::notifyBootSplashDismissed();
+#endif
     }
   }
   if (!bootSplashActive) refreshUi();
