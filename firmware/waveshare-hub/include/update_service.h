@@ -4,7 +4,9 @@
 
 namespace espplants_update {
 
-void begin();
+// 7B boot diagnostic: optionally postpone only the Wi-Fi station startup.
+// The updater, persisted credentials and time seed initialize immediately.
+void begin(bool deferWifiUntilPlantGrown = false);
 void service();
 
 void startWifiSetup();

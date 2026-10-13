@@ -4284,7 +4284,14 @@ void setup() {
   }
   Serial.println("[display] ready");
 
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  // Controlled 7B A/B test: keep the full growing plant animation unchanged,
+  // but start the Wi-Fi station after its 4.3s growth interval. If the splash
+  // cannot start, connect immediately as before.
+  espplants_update::begin(bootSplashActive);
+#else
   espplants_update::begin();
+#endif
   Serial.println("[plantlink] waiting for H2 frames");
 }
 

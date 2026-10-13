@@ -43,6 +43,11 @@ constexpr char kManifestAssetName[] = "esp-plants-waveshare.manifest.json";
 constexpr uint32_t kDailyCheckSeconds = 24UL * 60UL * 60UL;
 constexpr uint32_t kFailedCheckRetryMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWifiReconnectMs = 30UL * 1000UL;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+// Diagnostic A/B: match boot_splash.cpp kGrowDurationMs (4300 ms).
+// Do not alter the normal 7 or the 7B RGB driver/animation timings.
+constexpr uint32_t k7bPlantGrowthWifiDelayMs = 4300U;
+#endif
 constexpr uint32_t kPortalConnectTimeoutMs = 20UL * 1000UL;
 constexpr uint32_t kPortalSuccessHoldMs = 10UL * 1000UL;
 constexpr uint32_t kPortalSessionTimeoutMs = 5UL * 60UL * 1000UL;
@@ -210,6 +215,9 @@ bool sawWifiConnected = false;
 bool reconnectSuppressed = false;
 bool autoCheckedThisBoot = false;
 bool waitingForClockNotice = false;
+#ifdef ESP_PLANTS_WAVESHARE_7B
+bool wifiStartupDeferredForPlantGrowth = false;
+#endif
 uint32_t bootStartedMs = 0;
 uint32_t lastReconnectAttemptMs = 0;
 uint32_t nextFailedCheckMs = 0;
@@ -1667,8 +1675,11 @@ bool shouldAutoCheck() {
 
 }  // namespace
 
-void begin() {
+void begin(bool deferWifiUntilPlantGrown) {
   if (initialized) return;
+#ifndef ESP_PLANTS_WAVESHARE_7B
+  (void)deferWifiUntilPlantGrown;
+#endif
   initialized = true;
   bootStartedMs = millis();
 
@@ -1707,10 +1718,20 @@ void begin() {
 
   configurePortalRoutes();
   if (savedSsid.length()) {
-    const esp_reset_reason_t reason = esp_reset_reason();
-    const bool coldRadioReset =
-        reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
-    beginStationConnection(coldRadioReset);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+    if (deferWifiUntilPlantGrown) {
+      wifiStartupDeferredForPlantGrowth = true;
+      setStatus("Wi-Fi waiting for boot plant growth");
+      Serial.printf("[wifi-ab] 7B station startup deferred %lums for plant zoom\n",
+                    static_cast<unsigned long>(k7bPlantGrowthWifiDelayMs));
+    } else
+#endif
+    {
+      const esp_reset_reason_t reason = esp_reset_reason();
+      const bool coldRadioReset =
+          reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
+      beginStationConnection(coldRadioReset);
+    }
   } else {
     setStatus("Wi-Fi not configured - use SET UP WI-FI");
   }
@@ -1718,6 +1739,21 @@ void begin() {
 
 void service() {
   if (!initialized) return;
+
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  // Release the station only after the existing 4.3s plant-growth interval.
+  // Other updater initialization was intentionally not delayed.
+  if (wifiStartupDeferredForPlantGrowth &&
+      millis() - bootStartedMs >= k7bPlantGrowthWifiDelayMs) {
+    wifiStartupDeferredForPlantGrowth = false;
+    Serial.printf("[wifi-ab] 7B station startup released +%lums after updater begin\n",
+                  static_cast<unsigned long>(millis() - bootStartedMs));
+    const esp_reset_reason_t reason = esp_reset_reason();
+    const bool coldRadioReset =
+        reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT;
+    beginStationConnection(coldRadioReset);
+  }
+#endif
 
   espplants_ota_installer::serviceRestart();
   if (espplants_ota_installer::restartState() == espplants_ota_installer::RestartState::FAILED) {
@@ -1780,6 +1816,9 @@ void service() {
 
   if (!connected && savedSsid.length() && !setupPortalRunning &&
       !reconnectSuppressed &&
+#ifdef ESP_PLANTS_WAVESHARE_7B
+      !wifiStartupDeferredForPlantGrowth &&
+#endif
       millis() - lastReconnectAttemptMs >= kWifiReconnectMs) {
     beginStationConnection();
   }
