@@ -8,6 +8,13 @@
 namespace {
 
 portMUX_TYPE gRuntimeFlashMux = portMUX_INITIALIZER_UNLOCKED;
+
+#ifdef ESP_PLANTS_WAVESHARE_7B
+// TEMPORARY A/B DIAGNOSTIC, 7B ONLY. Compare Wi-Fi setup/reboot with the
+// existing auto-resync baseline. Keep explicit OTA/display resync intact.
+// Set false to restore automatic VSYNC resync after each NVS commit.
+constexpr bool k7bSuppressNvsAutoRecoveryForABTest = true;
+#endif
 bool gDisplayReady = false;
 bool gDisplayRecoveryPending = false;
 
@@ -16,7 +23,9 @@ void queueRecoveryFromRuntimeCommit() {
   portENTER_CRITICAL(&gRuntimeFlashMux);
   if (gDisplayReady) {
 #ifdef ESP_PLANTS_WAVESHARE_7B
-    gDisplayRecoveryPending = true;
+    if (!k7bSuppressNvsAutoRecoveryForABTest) {
+      gDisplayRecoveryPending = true;
+    }
 #endif
     shouldLog = true;
   }
@@ -24,7 +33,9 @@ void queueRecoveryFromRuntimeCommit() {
 
   if (shouldLog) {
 #ifdef ESP_PLANTS_WAVESHARE_7B
-    Serial.println("[flash] runtime NVS commit complete; RGB recovery queued");
+    Serial.println(k7bSuppressNvsAutoRecoveryForABTest
+        ? "[rgb-ab] NVS commit OK; automatic RGB recovery suppressed"
+        : "[flash] runtime NVS commit complete; RGB recovery queued");
 #else
     Serial.println("[flash] runtime NVS commit complete");
 #endif
@@ -51,6 +62,11 @@ void markDisplayReady() {
   portENTER_CRITICAL(&gRuntimeFlashMux);
   gDisplayReady = true;
   portEXIT_CRITICAL(&gRuntimeFlashMux);
+#ifdef ESP_PLANTS_WAVESHARE_7B
+  Serial.println(k7bSuppressNvsAutoRecoveryForABTest
+      ? "[rgb-ab] 7B TEST: NVS auto-resync OFF; explicit recovery ON"
+      : "[rgb-ab] 7B baseline: NVS auto-resync ON; explicit recovery ON");
+#endif
 }
 
 void requestDisplayRecovery(const char *reason) {
