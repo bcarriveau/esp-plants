@@ -44,6 +44,7 @@ constexpr char kManifestAssetName[] = "esp-plants-waveshare.manifest.json";
 constexpr uint32_t kDailyCheckSeconds = 24UL * 60UL * 60UL;
 constexpr uint32_t kFailedCheckRetryMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kWifiReconnectMs = 30UL * 1000UL;
+constexpr uint32_t kWifiConnectPendingMs = 20UL * 1000UL;
 #ifdef ESP_PLANTS_WAVESHARE_7B
 // Diagnostic A/B: start saved Wi-Fi only after the entire 6.5s splash has
 // been dismissed. Give the first Home frame 300ms to present before radio work.
@@ -297,6 +298,47 @@ void drain7bWifiRadioEvents() {
 #endif
 uint32_t bootStartedMs = 0;
 uint32_t lastReconnectAttemptMs = 0;
+// A Wi-Fi association is asynchronous. A call returning from WiFi.begin() is
+// not permission for another task (or Arduino auto-reconnect) to start again.
+portMUX_TYPE stationAttemptMux = portMUX_INITIALIZER_UNLOCKED;
+bool stationAttemptBusy = false;
+uint32_t stationAttemptAtMs = 0;
+
+bool claimStationAttempt() {
+  bool claimed = false;
+  portENTER_CRITICAL(&stationAttemptMux);
+  if (!stationAttemptBusy) {
+    stationAttemptBusy = true;
+    stationAttemptAtMs = millis();
+    claimed = true;
+  }
+  portEXIT_CRITICAL(&stationAttemptMux);
+  return claimed;
+}
+
+void releaseStationAttempt() {
+  portENTER_CRITICAL(&stationAttemptMux);
+  stationAttemptBusy = false;
+  portEXIT_CRITICAL(&stationAttemptMux);
+}
+
+bool stationAttemptPending() {
+  portENTER_CRITICAL(&stationAttemptMux);
+  const bool pending = stationAttemptBusy;
+  portEXIT_CRITICAL(&stationAttemptMux);
+  return pending;
+}
+
+void retireStationAttemptIfSettled() {
+  if (!stationAttemptPending()) return;
+  const wl_status_t state = WiFi.status();
+  if ((state == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) ||
+      state == WL_CONNECT_FAILED ||
+      state == WL_NO_SSID_AVAIL ||
+      millis() - stationAttemptAtMs >= kWifiConnectPendingMs) {
+    releaseStationAttempt();
+  }
+}
 uint32_t nextFailedCheckMs = 0;
 uint32_t lastCheckEpoch = 0;
 
@@ -572,7 +614,18 @@ void configurePortalRoutes() {
     portalAttemptStartedMs = millis();
     portalStopAtMs = 0;
     setStatus("Testing Wi-Fi %s...", pendingSsid.c_str());
+    if (stationAttemptPending()) {
+      portalConnectionPending = false;
+      portalAttemptState = PortalAttemptState::Failed;
+      portalResultMessage = "Wi-Fi is busy connecting. Try again shortly.";
+      portalServer.send(200, "text/html", portalStatusPage());
+      return;
+    }
+    if (!claimStationAttempt()) return;
+    WiFi.setAutoReconnect(false);
     WiFi.mode(WIFI_AP_STA);
+    WiFi.disconnect(false, false);
+    delay(100);
     WiFi.begin(pendingSsid.c_str(), pendingPassword.c_str());
     lastReconnectAttemptMs = millis();
     portalServer.send(200, "text/html", portalStatusPage());
@@ -598,11 +651,10 @@ void failPendingWifi(const char *reason) {
       : String("Connection failed. Check the password and try again.");
   pendingPassword = "";
   WiFi.disconnect(false, false);
-  if (savedSsid.length()) {
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.begin(savedSsid.c_str(), savedPassword.c_str());
-    lastReconnectAttemptMs = millis();
-  }
+  releaseStationAttempt();
+  // Restore known-good credentials on the next service pass, not within the
+  // disconnect callback window. Never overwrite them for a failed test.
+  lastReconnectAttemptMs = millis();
   setStatus("Wi-Fi test failed - check password and try again");
   Serial.printf("[wifi] setup test failed for \"%s\": %s\n",
                 lastAttemptSsid.c_str(), portalResultMessage.c_str());
@@ -642,8 +694,12 @@ void stopSetupPortal() {
 }
 
 void beginStationConnection(bool restartRadio = false) {
-  if (!savedSsid.length()) return;
+  if (!savedSsid.length() || reconnectSuppressed || portalConnectionPending ||
+      stationAttemptPending()) return;
+  if (!claimStationAttempt()) return;
 
+  // Firmware owns retry timing. Arduino auto-reconnect must not start a
+  // second esp_wifi_connect while our association is still in progress.
   WiFi.setAutoReconnect(false);
   if (restartRadio && !setupPortalRunning) {
     // Same cold-start station-radio bring-up used by Aircraft Radar to clear
@@ -655,6 +711,7 @@ void beginStationConnection(bool restartRadio = false) {
       lastReconnectAttemptMs = millis();
       setStatus("Could not enable Wi-Fi station mode");
       Serial.println("[wifi] station mode enable failed; connection not attempted");
+      releaseStationAttempt();
       return;
     }
     WiFi.setSleep(false);
@@ -664,13 +721,14 @@ void beginStationConnection(bool restartRadio = false) {
       lastReconnectAttemptMs = millis();
       setStatus("Could not enable Wi-Fi station mode");
       Serial.println("[wifi] station mode enable failed; connection not attempted");
+      releaseStationAttempt();
       return;
     }
     WiFi.disconnect(false, false);
     delay(100);
     if (!setupPortalRunning) WiFi.setSleep(false);
   }
-  WiFi.setAutoReconnect(true);
+  // Keep Arduino auto-reconnect disabled: all retries pass the claim above.
 #if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
   const uint32_t wifiBeginCallUs = static_cast<uint32_t>(esp_timer_get_time());
 #endif
@@ -778,7 +836,14 @@ bool recoverOtaNetwork(const char *reason) {
   Serial.printf("[update] OTA network recovery: %s\n", reason ? reason : "transport");
   // Reuse the proven hard station-radio bring-up. eraseap=false preserves both
   // the user's ESP PLANTS NVS credentials and the Wi-Fi driver's saved state.
-  beginStationConnection(true);
+  if (stationAttemptPending()) {
+    Serial.println("[update] OTA recovery deferred: station already connecting");
+  } else if (!validStationAddress()) {
+    beginStationConnection(false);
+  } else {
+    // A TLS socket failure is not evidence that DHCP/radio is broken.
+    Serial.println("[update] station IP is valid; retaining radio and DHCP lease");
+  }
 
   const uint32_t wifiStarted = millis();
   while (millis() - wifiStarted < kOtaRecoveryWifiTimeoutMs) {
@@ -817,15 +882,9 @@ bool otaMemoryPreflight(const char *stage, bool &recoveryUsed) {
   OtaMemorySnapshot snapshot = otaMemorySnapshot(stage);
   if (otaMemorySafe(snapshot)) return true;
 
-  if (!recoveryUsed) {
-    recoveryUsed = true;
-    setStatus("OTA memory is low; recycling Wi-Fi before secure update...");
-    if (recoverOtaNetwork("memory preflight")) {
-      snapshot = otaMemorySnapshot("after recovery");
-      if (otaMemorySafe(snapshot)) return true;
-    }
-  }
-
+  // Memory pressure does not establish a radio fault; recycling the station
+  // can make the allocator/socket situation worse and disturb the display.
+  (void)recoveryUsed;
   setStatus("OTA stopped safely: internal memory below secure-update threshold");
   return false;
 }
@@ -1114,6 +1173,13 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     const bool complete = esp_http_client_is_complete_data_received(client);
     const bool lengthMatches =
         length <= 0 || body.length() == static_cast<size_t>(length);
+    if (!ok || !complete || !lengthMatches) {
+      Serial.printf("[update] HTTPS response incomplete: HTTP=%d read_error=%d complete=%u bytes=%u content_length=%lld errno=%d chunked=%u\n",
+                    statusCode, transportReadFailure ? 1 : 0,
+                    complete ? 1U : 0U, static_cast<unsigned>(body.length()),
+                    static_cast<long long>(length), esp_http_client_get_errno(client),
+                    esp_http_client_is_chunked_response(client) ? 1U : 0U);
+    }
     if (opened) esp_http_client_close(client);
     esp_http_client_cleanup(client);
     if (transportReadFailure ||
@@ -1605,8 +1671,14 @@ void runUpdateCheckOnNetworkWorker() {
     }
 
     recoveryUsed = true;
-    if (!recoverOtaNetwork("GitHub metadata transport failure") ||
-        !otaMemorySafe(otaMemorySnapshot("after transport recovery"))) {
+    // Retrying a fresh TLS connection is less disruptive than recycling a
+    // healthy station for every transient GitHub/socket read error.
+    if (!validStationAddress() && !recoverOtaNetwork("GitHub metadata transport failure")) {
+      nextFailedCheckMs = millis() + kFailedCheckRetryMs;
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+    if (!otaMemorySafe(otaMemorySnapshot("before HTTPS retry"))) {
       nextFailedCheckMs = millis() + kFailedCheckRetryMs;
       break;
     }
@@ -1872,7 +1944,8 @@ void service() {
     portalServer.handleClient();
   }
 
-  const bool connected = WiFi.status() == WL_CONNECTED;
+  retireStationAttemptIfSettled();
+  const bool connected = validStationAddress();
   if (connected && !sawWifiConnected) {
     sawWifiConnected = true;
     strncpy(connectedSsid, WiFi.SSID().c_str(), sizeof(connectedSsid) - 1);
@@ -1906,6 +1979,15 @@ void service() {
                millis() - portalAttemptStartedMs >= kPortalConnectTimeoutMs) {
       failPendingWifi("Connection timed out. Check the password and signal, then try again.");
     }
+  }
+
+  // A failed candidate must not strand the previous known-good network while
+  // the editable setup page remains available on the phone hotspot.
+  if (setupPortalRunning && portalAttemptState == PortalAttemptState::Failed &&
+      !portalConnectionPending && savedSsid.length() && !reconnectSuppressed &&
+      !stationAttemptPending() && !validStationAddress() &&
+      millis() - lastReconnectAttemptMs >= 500U) {
+    beginStationConnection();  // WIFI_AP_STA preserves the setup hotspot.
   }
 
   if (setupPortalRunning && portalStartedMs && !portalStopAtMs &&
@@ -1965,6 +2047,7 @@ void service() {
 void startWifiSetup() {
   if (!initialized || setupPortalRunning) return;
   reconnectSuppressed = false;
+  WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAP(setupSsidText, setupPasswordText)) {
     setStatus("Could not start Wi-Fi setup hotspot");
@@ -2001,6 +2084,8 @@ void disconnectWifi() {
   }
   if (setupPortalRunning) stopSetupPortal();
   reconnectSuppressed = true;
+  releaseStationAttempt();
+  WiFi.setAutoReconnect(false);
   manualCheckRequested = false;
   waitingForClockNotice = false;
   // Keep the STA/netif allocated. reconnectSuppressed is what intentionally
@@ -2040,7 +2125,8 @@ void reconnectWifi() {
   }
   if (installTaskRunning) return;
   reconnectSuppressed = false;
-  beginStationConnection();
+  retireStationAttemptIfSettled();
+  if (!validStationAddress()) beginStationConnection();
 }
 
 void forgetWifi() {
@@ -2051,6 +2137,8 @@ void forgetWifi() {
   }
   if (setupPortalRunning) stopSetupPortal();
   reconnectSuppressed = true;
+  releaseStationAttempt();
+  WiFi.setAutoReconnect(false);
   manualCheckRequested = false;
   waitingForClockNotice = false;
   hasUpdate = false;
