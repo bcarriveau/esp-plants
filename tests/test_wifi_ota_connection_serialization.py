@@ -62,3 +62,31 @@ def test_failed_candidate_restores_previous_wifi_without_overwriting_it():
     assert "PortalAttemptState::Failed" in service
     assert "beginStationConnection();  // WIFI_AP_STA" in service
     assert 'networkPreferences.putString("ssid"' not in failure
+
+
+def test_chunked_metadata_read_retries_idf_eagain_even_if_socket_errno_is_zero():
+    # ESP-IDF esp_http_client_read() returns -ESP_ERR_HTTP_EAGAIN, not
+    # necessarily -1 with errno=EAGAIN. Without this check the HTTP 200
+    # chunked GitHub response was rejected after a temporary no-data read.
+    s = section("bool httpsGetText(", "String normalizedVersion(")
+    assert "got == -ESP_ERR_HTTP_EAGAIN" in s
+    assert "lastReadErrno = esp_http_client_get_errno(client)" in s
+    assert "lastReadErrno == EAGAIN" in s
+    assert "lastReadErrno == EWOULDBLOCK" in s
+    assert "lastReadErrno == ETIMEDOUT" in s
+    assert "delay(10);\n        continue;" in s
+
+
+def test_metadata_eagain_retry_is_bounded_and_partial_http_200_is_rejected():
+    s = section("bool httpsGetText(", "String normalizedVersion(")
+    assert "kMetadataIdleTimeoutMs = 30UL * 1000UL" in SRC
+    assert "kMetadataBodyTotalTimeoutMs = 90UL * 1000UL" in SRC
+    assert "millis() - lastDataMs >= kMetadataIdleTimeoutMs" in s
+    assert "millis() - bodyStartedMs >= kMetadataBodyTotalTimeoutMs" in s
+    assert "readTimedOut = true" in s
+    assert "lastReadResult" in s and "lastReadErrno" in s
+    assert "esp_http_client_is_complete_data_received(client)" in s
+    assert "return ok && complete && lengthMatches;" in s
+    assert "kMaxMetadataRedirects" in SRC
+    assert "config.crt_bundle_attach = esp_crt_bundle_attach" in s
+    assert "config.skip_cert_common_name_check = false" in s

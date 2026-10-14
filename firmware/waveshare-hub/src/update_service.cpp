@@ -66,7 +66,11 @@ constexpr uint32_t kTimeSeedMaxEpoch = 4102444800UL;  // 2100-01-01 UTC
 constexpr char kTimeSeedKey[] = "last_ntp";
 constexpr uint32_t kSaneEpoch = kTimeSeedMinEpoch;
 constexpr uint32_t kMetadataTimeoutMs = 15000UL;
-constexpr uint32_t kMetadataIdleTimeoutMs = 10000UL;
+// A single esp_http_client_read() may wait up to kMetadataTimeoutMs (15 s)
+// and return -ESP_ERR_HTTP_EAGAIN without setting socket errno. Allow a
+// bounded retry across such temporary gaps without accepting partial JSON.
+constexpr uint32_t kMetadataIdleTimeoutMs = 30UL * 1000UL;
+constexpr uint32_t kMetadataBodyTotalTimeoutMs = 90UL * 1000UL;
 constexpr size_t kMaxReleaseListBytes = 96U * 1024U;
 constexpr uint8_t kMaxMetadataRedirects = 3;
 constexpr char kUserAgent[] = "ESP-PLANTS-Waveshare-Updater/1";
@@ -1127,13 +1131,27 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     }
 
     uint8_t buffer[1024];
-    uint32_t lastDataMs = millis();
+    const uint32_t bodyStartedMs = millis();
+    uint32_t lastDataMs = bodyStartedMs;
     bool ok = true;
     bool bodyLimitRejected = false;
     bool transportReadFailure = false;
+    bool readTimedOut = false;
+    int lastReadResult = 0;
+    int lastReadErrno = 0;
     for (;;) {
+      // A stalled response is never treated as complete, even if a peer sent
+      // HTTP 200. Both deadlines use wrap-safe millis() subtraction.
+      if (millis() - lastDataMs >= kMetadataIdleTimeoutMs ||
+          millis() - bodyStartedMs >= kMetadataBodyTotalTimeoutMs) {
+        readTimedOut = true;
+        transportReadFailure = true;
+        ok = false;
+        break;
+      }
       const int got = esp_http_client_read(
           client, reinterpret_cast<char *>(buffer), sizeof(buffer));
+      lastReadResult = got;
       if (got > 0) {
         if (!body.append(buffer, static_cast<size_t>(got))) {
           bodyLimitRejected = true;
@@ -1152,19 +1170,18 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
 
       if (got == 0) {
         if (esp_http_client_is_complete_data_received(client)) break;
-        if (millis() - lastDataMs >= kMetadataIdleTimeoutMs) {
-          transportReadFailure = true;
-          ok = false;
-          break;
-        }
         delay(10);
         continue;
       }
 
-      const int socketError = esp_http_client_get_errno(client);
-      if (socketError == EAGAIN || socketError == EWOULDBLOCK ||
-          socketError == ETIMEDOUT) {
-        if (millis() - lastDataMs < kMetadataIdleTimeoutMs) continue;
+      lastReadErrno = esp_http_client_get_errno(client);
+      // The ESP-IDF client reports a temporary TLS/socket read timeout as
+      // -ESP_ERR_HTTP_EAGAIN, sometimes with errno=0. A normal EAGAIN/timeout
+      // in errno is also retryable. The deadlines above bound both cases.
+      if (got == -ESP_ERR_HTTP_EAGAIN || lastReadErrno == EAGAIN ||
+          lastReadErrno == EWOULDBLOCK || lastReadErrno == ETIMEDOUT) {
+        delay(10);
+        continue;
       }
       transportReadFailure = true;
       ok = false;
@@ -1174,11 +1191,14 @@ bool httpsGetText(const char *initialUrl, const char *accept, size_t maximumByte
     const bool lengthMatches =
         length <= 0 || body.length() == static_cast<size_t>(length);
     if (!ok || !complete || !lengthMatches) {
-      Serial.printf("[update] HTTPS response incomplete: HTTP=%d read_error=%d complete=%u bytes=%u content_length=%lld errno=%d chunked=%u\n",
+      Serial.printf("[update] HTTPS response incomplete: HTTP=%d read_error=%d complete=%u bytes=%u content_length=%lld errno=%d chunked=%u read_result=%d timeout=%u elapsed_ms=%lu idle_ms=%lu\n",
                     statusCode, transportReadFailure ? 1 : 0,
                     complete ? 1U : 0U, static_cast<unsigned>(body.length()),
-                    static_cast<long long>(length), esp_http_client_get_errno(client),
-                    esp_http_client_is_chunked_response(client) ? 1U : 0U);
+                    static_cast<long long>(length), lastReadErrno,
+                    esp_http_client_is_chunked_response(client) ? 1U : 0U,
+                    lastReadResult, readTimedOut ? 1U : 0U,
+                    static_cast<unsigned long>(millis() - bodyStartedMs),
+                    static_cast<unsigned long>(millis() - lastDataMs));
     }
     if (opened) esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -1486,6 +1506,8 @@ bool checkGithubRelease() {
                     kMaxReleaseListBytes, releasesBody, code)) {
     lastCheckTransportFailure = lastHttpsTransportFailure;
     if (code == 403) setStatus("GitHub rate limit reached; try later");
+    else if (code == 200 && lastHttpsTransportFailure)
+      setStatus("Secure GitHub response incomplete; will retry safely");
     else setStatus("Secure GitHub check failed (HTTP %d)", code);
     return false;
   }
@@ -1663,7 +1685,7 @@ void runUpdateCheckOnNetworkWorker() {
 
   for (uint8_t attempt = 0; attempt < 2; ++attempt) {
     setStatus(attempt == 0 ? "Checking GitHub securely for updates..."
-                           : "Retrying secure GitHub check after network recovery...");
+                           : "Retrying secure GitHub check with fresh TLS...");
     if (checkGithubRelease()) break;
     if (!lastCheckTransportFailure || recoveryUsed || attempt != 0) {
       nextFailedCheckMs = millis() + kFailedCheckRetryMs;
