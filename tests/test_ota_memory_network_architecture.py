@@ -86,7 +86,13 @@ def test_package_and_h2_downloads_remain_bounded():
     assert "String manifestBody" not in update
     assert "packageLayoutValid(release.packageSize, release.firmwareSize)" in installer
     assert "kMaxH2Bytes = 0xE0000u" in h2
-    assert "heap_caps_malloc(kMaxH2Bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)" in h2
+    # The H2 staging buffer is sized to the validated manifest, not the
+    # maximum allowed firmware image, with one byte for oversized download detection.
+    assert "release.h2FirmwareSize > kMaxH2Bytes" in h2
+    assert "static_cast<size_t>(release.h2FirmwareSize) + 1U" in h2
+    assert "heap_caps_malloc(imageCapacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)" in h2
+    assert "getAsset(url, image, imageCapacity, imageLength" in h2
+    assert "imageLength != release.h2FirmwareSize" in h2
 
 
 def test_preflight_logs_and_gates_current_internal_heap_and_largest_block():

@@ -375,8 +375,11 @@ Result updateForRelease(const espplants_ota_installer::Release &release,
     return Result::FAILED;
   }
 
+  // Reserve only the validated manifest's H2 image size, not the maximum
+  // allowed image size. One spare byte lets getAsset reject oversized downloads.
+  const size_t imageCapacity = static_cast<size_t>(release.h2FirmwareSize) + 1U;
   uint8_t *image = static_cast<uint8_t *>(
-      heap_caps_malloc(kMaxH2Bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+      heap_caps_malloc(imageCapacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (!image) {
     plantlink::setFrameObserver(previous);
     copyText(message, messageCapacity, "H2 OTA PSRAM allocation failed");
@@ -386,7 +389,7 @@ Result updateForRelease(const espplants_ota_installer::Release &release,
   char url[512]{};
   snprintf(url, sizeof(url), "%s%s/%s", kReleasePrefix, release.tag, release.h2Asset);
   size_t imageLength = 0;
-  if (!getAsset(url, image, kMaxH2Bytes, imageLength, message, messageCapacity)) {
+  if (!getAsset(url, image, imageCapacity, imageLength, message, messageCapacity)) {
     heap_caps_free(image);
     plantlink::setFrameObserver(previous);
     return Result::FAILED;
