@@ -210,6 +210,16 @@ typedef struct _objects_t {
     lv_obj_t *advanced_back_button;
     lv_obj_t *advanced_back_button_label;
     lv_obj_t *advanced_add_button;
+    lv_obj_t *advanced_factory_reset_button;
+    lv_obj_t *advanced_factory_reset_button_label;
+    lv_obj_t *factory_reset_scrim;
+    lv_obj_t *factory_reset_dialog;
+    lv_obj_t *factory_reset_title;
+    lv_obj_t *factory_reset_message;
+    lv_obj_t *factory_reset_cancel_button;
+    lv_obj_t *factory_reset_cancel_label;
+    lv_obj_t *factory_reset_confirm_button;
+    lv_obj_t *factory_reset_confirm_label;
     lv_obj_t *advanced_add_button_label;
     lv_obj_t *advanced_head_repeater;
     lv_obj_t *advanced_head_status;

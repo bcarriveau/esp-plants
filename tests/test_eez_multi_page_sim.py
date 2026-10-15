@@ -40,8 +40,12 @@ def test_both_eez_projects_have_five_real_editable_pages():
 
         home_children = [c.get("identifier") for c in pages[0]["components"][0]["children"]]
         assert home_children == ["home_page", *SHARED]
-        for page in pages[1:]:
+        for page in pages[1:-1]:
             assert len(page["components"][0]["children"]) == 1
+        # The Advanced page now owns a full-screen factory-reset confirmation
+        # and dimmer; other screens retain their locked layout and page tree.
+        advanced_children = [w.get("identifier") for w in pages[-1]["components"][0]["children"]]
+        assert advanced_children == ["advanced_page", "factory_reset_scrim", "factory_reset_dialog"]
 
 
 def test_generated_ui_has_five_screen_roots_and_real_screen_navigation():
@@ -119,8 +123,8 @@ def test_appearance_rebuild_deletes_all_five_screens_before_recreating():
     appearance = main[main.index("void applyAppearanceAsync"): main.index("void appearanceEvent")]
     assert "lv_scr_load(transition);" in appearance
     assert "deleteGeneratedUiTree();" in appearance
-    assert "buildUi(restorePage);" in appearance
-    assert appearance.index("deleteGeneratedUiTree();") < appearance.index("buildUi(restorePage);")
+    assert "buildUi(restorePage, false);" in appearance
+    assert appearance.index("deleteGeneratedUiTree();") < appearance.index("buildUi(restorePage, false);")
 
 
 def test_eez_ui_templates_match_generated_full_sim_sources():

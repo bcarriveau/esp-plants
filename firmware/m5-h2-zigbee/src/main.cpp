@@ -32,6 +32,8 @@ constexpr size_t kMaxInfrastructure = 32;
 constexpr size_t kCapturedApsBytes = 128;
 constexpr size_t kApsQueueDepth = 32;
 constexpr uint32_t kStatusIntervalMs = 1500;
+constexpr uint32_t kFactoryResetArmMs = 10000;
+constexpr uint32_t kFactoryResetH2DelayMs = 700;
 constexpr uint32_t kDiagnosticSummaryIntervalMs = 60000;
 constexpr char kNetworkFingerprintNamespace[] = "espplants-h2";
 constexpr char kNetworkFingerprintKey[] = "zbfp";
@@ -75,6 +77,9 @@ class PlantZigbeeGateway : public ZigbeeGateway {
 PlantZigbeeGateway zbGateway(kGatewayEndpoint);
 plantlink::Decoder plantDecoder;
 uint16_t nextSequence = 1;
+uint32_t factoryResetArmedNonce = 0;
+uint32_t factoryResetArmDeadlineMs = 0;
+uint32_t factoryResetExecuteAtMs = 0;
 uint32_t lastStatusMs = 0;
 uint32_t lastDiagnosticSummaryMs = 0;
 uint32_t lastInfrastructureScanMs = 0;
@@ -1112,11 +1117,67 @@ void handlePlantFrame(const plantlink::Frame &frame) {
       }
       break;
 
-    case plantlink::MessageType::FactoryResetNetwork:
-      // Destructive reset remains deliberately unimplemented. Do not add a
-      // network wipe here without a separate, explicit confirmation design.
-      Serial.println("[zigbee] ignored unconfirmed factory reset command");
+    case plantlink::MessageType::FactoryResetNetwork: {
+      // Only the Waveshare's explicitly held, two-stage confirmation can
+      // activate a destructive reset. Malformed/legacy 0x40 frames do nothing.
+      if (frame.flags != plantlink::FlagNone ||
+          frame.payloadLength != plantlink::kFactoryResetPayloadBytes ||
+          plantlink::getU32LE(frame.payload + 8) != plantlink::kFactoryResetGuardMagic ||
+          !plantlink::getU32LE(frame.payload + 4)) {
+        Serial.println("[zigbee] rejected malformed factory reset request");
+        break;
+      }
+      const uint32_t phase = plantlink::getU32LE(frame.payload);
+      const uint32_t nonce = plantlink::getU32LE(frame.payload + 4);
+      uint8_t response[plantlink::kFactoryResetPayloadBytes]{};
+      plantlink::putU32LE(response + 4, nonce);
+      plantlink::putU32LE(response + 8, plantlink::kFactoryResetGuardMagic);
+      if (phase == plantlink::kFactoryResetPrepareMagic && !factoryResetExecuteAtMs) {
+        factoryResetArmedNonce = nonce;
+        factoryResetArmDeadlineMs = millis() + kFactoryResetArmMs;
+        plantlink::putU32LE(response, plantlink::kFactoryResetReadyMagic);
+        sendFrame(plantlink::MessageType::FactoryResetNetwork, response,
+                  sizeof(response), plantlink::FlagResponse);
+        Serial.println("[zigbee] factory reset prepared; waiting for explicit execute");
+      } else if (phase == plantlink::kFactoryResetExecuteMagic &&
+                 factoryResetArmedNonce == nonce &&
+                 static_cast<int32_t>(millis() - factoryResetArmDeadlineMs) < 0 &&
+                 !factoryResetExecuteAtMs) {
+        // Remove only our diagnostic fingerprint; Zigbee.factoryReset(true)
+        // erases the actual Zigbee storage and reboots the H2.
+        bool fingerprintOk = true;
+        Preferences fingerprint;
+        if (fingerprint.begin(kNetworkFingerprintNamespace, false)) {
+          fingerprintOk = !fingerprint.isKey(kNetworkFingerprintKey) ||
+                          fingerprint.remove(kNetworkFingerprintKey);
+          fingerprint.end();
+        } else fingerprintOk = false;
+        if (fingerprintOk) {
+          plantlink::putU32LE(response, plantlink::kFactoryResetAcceptedMagic);
+          if (sendFrame(plantlink::MessageType::FactoryResetNetwork, response,
+                        sizeof(response), plantlink::FlagResponse)) {
+            // Send a second identical ACK before any reboot. A lost response
+            // otherwise leaves the Waveshare believing its old registry lives
+            // on the same Zigbee network after H2 has already wiped itself.
+            (void)sendFrame(plantlink::MessageType::FactoryResetNetwork, response,
+                            sizeof(response), plantlink::FlagResponse);
+            factoryResetExecuteAtMs = millis() + kFactoryResetH2DelayMs;
+            Serial.println("[zigbee] factory reset accepted; Zigbee storage wipe scheduled");
+          } else {
+            Serial.println("[zigbee] factory reset aborted: UART ACK write failed");
+          }
+        } else {
+          plantlink::putU32LE(response, plantlink::kFactoryResetDeniedMagic);
+          sendFrame(plantlink::MessageType::FactoryResetNetwork, response,
+                    sizeof(response), plantlink::FlagResponse | plantlink::FlagError);
+          Serial.println("[zigbee] factory reset aborted: NVS fingerprint erase failed");
+        }
+        factoryResetArmedNonce = 0;
+      } else {
+        Serial.println("[zigbee] ignored unarmed or expired factory reset execute");
+      }
       break;
+    }
 
     default:
       break;
@@ -1353,6 +1414,14 @@ void setup() {
 }
 
 void loop() {
+  if (factoryResetExecuteAtMs &&
+      static_cast<int32_t>(millis() - factoryResetExecuteAtMs) >= 0) {
+    Serial.println("[zigbee] erasing coordinator network storage; H2 will reboot");
+    Serial.flush();
+    Zigbee.factoryReset(true);
+    // Espressif's factory reset is expected to reboot itself.
+    while (true) delay(1000);
+  }
   serviceUsbConsole();
   servicePlantLink();
 

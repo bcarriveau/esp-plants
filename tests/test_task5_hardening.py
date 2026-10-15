@@ -47,7 +47,9 @@ def test_h2_release_debug_surface_is_reduced_but_dev_mode_remains():
 
 def test_privileged_commands_have_narrow_guards():
     main = read("firmware/m5-h2-zigbee/src/main.cpp")
-    assert "ignored unconfirmed factory reset command" in main
+    assert "rejected malformed factory reset request" in main
+    assert "ignored unarmed or expired factory reset execute" in main
+    assert "Zigbee.factoryReset(true);" in main
     assert "rejected remove for ieee=%s because no joined/known short address exists" in main
     assert "if (frame.payloadLength == 8)" in main
 

@@ -25,6 +25,9 @@ redesigning the display-side code.
 
 ## Destructive reset
 
-PlantLink reserves a factory-reset message, but this bring-up firmware ignores
-it. We will not allow a normal firmware update, UART reconnect, or accidental UI
-tap to destroy the Zigbee network.
+Factory reset is available only through the Waveshare's confirmed 5-second
+hold on Advanced Zigbee > FACTORY RESET. H2 requires a matching nonce in a
+short-lived PREP/EXEC PlantLink transaction; a bare reset frame is ignored.
+H2 acknowledges before wiping its Zigbee stack and rebooting. Ordinary H2
+OTA, UART reconnects and pairing requests never erase Zigbee data. Both
+controllers require the corresponding firmware for this capability.

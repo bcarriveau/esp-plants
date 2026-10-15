@@ -2634,6 +2634,98 @@ void create_screen_advanced_zigbee() {
         }
     }
     
+    // Factory reset controls are sourced from esp_plants.eez-project.
+    // Destructive entry in existing Advanced Zigbee header: no other geometry moved.
+    {
+        lv_obj_t *obj = lv_btn_create(objects.advanced_card);
+        objects.advanced_factory_reset_button = obj;
+        lv_obj_set_pos(obj, 350, 12);
+        lv_obj_set_size(obj, 166, 42);
+        lv_obj_set_style_radius(obj, 11, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(0x7a4037), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_t *t = lv_label_create(obj);
+        objects.advanced_factory_reset_button_label = t;
+        lv_label_set_text_static(t, "FACTORY RESET");
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_center(t);
+    }
+    // Blocking dimmer covers header, content, and nav; modal floats above it.
+    {
+        lv_obj_t *obj = lv_obj_create(objects.advanced_zigbee);
+        objects.factory_reset_scrim = obj;
+        lv_obj_set_pos(obj, 0, 0);
+        lv_obj_set_size(obj, 800, 480);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(0x0c100e), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(obj, LV_OPA_70, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    }
+    {
+        lv_obj_t *obj = lv_obj_create(objects.advanced_zigbee);
+        objects.factory_reset_dialog = obj;
+        lv_obj_set_pos(obj, 130, 90);
+        lv_obj_set_size(obj, 540, 300);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(0x233029), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_radius(obj, 18, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        {
+            lv_obj_t *t = lv_label_create(obj);
+            objects.factory_reset_title = t;
+            lv_obj_set_pos(t, 30, 22);
+            lv_obj_set_size(t, 470, 30);
+            lv_label_set_text_static(t, "RESET ESP PLANTS?");
+            lv_obj_set_style_text_font(t, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(t, lv_color_hex(0xf1f5f2), LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+        {
+            lv_obj_t *t = lv_label_create(obj);
+            objects.factory_reset_message = t;
+            lv_obj_set_pos(t, 30, 75);
+            lv_obj_set_size(t, 480, 120);
+            lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+            lv_label_set_text(t, "This erases all plants, names, assignments, Wi-Fi, and the H2 Zigbee network. Firmware stays installed. Sensors must be paired again.");
+            lv_obj_set_style_text_font(t, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(t, lv_color_hex(0xe5ece7), LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+        {
+            lv_obj_t *b = lv_btn_create(obj);
+            objects.factory_reset_cancel_button = b;
+            lv_obj_set_pos(b, 30, 226);
+            lv_obj_set_size(b, 210, 50);
+            lv_obj_set_style_bg_color(b, lv_color_hex(0x42554a), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_radius(b, 11, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_t *t = lv_label_create(b);
+            objects.factory_reset_cancel_label = t;
+            lv_label_set_text_static(t, "CANCEL");
+            lv_obj_set_style_text_font(t, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_center(t);
+        }
+        {
+            lv_obj_t *b = lv_btn_create(obj);
+            objects.factory_reset_confirm_button = b;
+            lv_obj_set_pos(b, 273, 226);
+            lv_obj_set_size(b, 237, 50);
+            lv_obj_set_style_bg_color(b, lv_color_hex(0xa63b38), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_radius(b, 11, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_t *t = lv_label_create(b);
+            objects.factory_reset_confirm_label = t;
+            lv_label_set_text_static(t, "HOLD 5S TO RESET");
+            lv_obj_set_style_text_font(t, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_center(t);
+        }
+    }
+
     tick_screen_advanced_zigbee();
 }
 

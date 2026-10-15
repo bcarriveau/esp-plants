@@ -4,7 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(EEZ_LVGL_SIMULATOR)
+#include "ui_appearance_sim.h"
+#else
 #include "../ui_appearance.h"
+#endif
 
 #define ESP_PLANTS_UI_EEZ_SOURCE_LIGHT 0
 
@@ -134,6 +138,16 @@ static SimInfrastructureRow simInfrastructureRows[SIM_INFRASTRUCTURE_CAPACITY];
 static uint8_t simSelectedSensor = 0;
 static uint8_t simSelectedInfrastructure = 0;
 static SimPage simCurrentPage = SIM_PAGE_HOME;
+// Simulator-only child lock/reset. No NVS, UART, or Zigbee commands run here.
+static bool simLocked = false;
+static bool simLockPressArmed = false;
+static uint32_t simLockPressAt = 0;
+static lv_obj_t *simLockShield = 0;
+static lv_obj_t *simLockHotspot = 0;
+static lv_obj_t *simLockBody = 0;
+static lv_obj_t *simLockShackle = 0;
+static bool simResetHolding = false;
+static uint32_t simResetHoldAt = 0;
 
 static lv_obj_t *simButton = 0;
 static lv_obj_t *simControls = 0;
@@ -230,11 +244,16 @@ static enum ScreensEnum simScreenId(SimPage page) {
 
 static void simAttachSharedLayer(void) {
     lv_obj_t *top = lv_layer_top();
+    lv_obj_set_style_bg_opa(top, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(top, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
     if (objects.header) lv_obj_set_parent(objects.header, top);
     if (objects.nav_bar) lv_obj_set_parent(objects.nav_bar, top);
     if (objects.rename_modal) lv_obj_set_parent(objects.rename_modal, top);
     if (objects.pair_modal) lv_obj_set_parent(objects.pair_modal, top);
     if (objects.update_modal) lv_obj_set_parent(objects.update_modal, top);
+    if (objects.factory_reset_scrim) lv_obj_set_parent(objects.factory_reset_scrim, top);
+    if (objects.factory_reset_dialog) lv_obj_set_parent(objects.factory_reset_dialog, top);
 }
 
 static void simShowPage(SimPage page) {
@@ -286,6 +305,11 @@ static void simBrightnessEvent(lv_event_t *event) {
 static void simInitNavigation(void);
 
 static void simDeleteUiTree(void) {
+    if (simLockShield) { lv_obj_del(simLockShield); simLockShield = 0; }
+    if (simLockHotspot) { lv_obj_del(simLockHotspot); simLockHotspot = 0; }
+    simLockBody = 0;  // The EEZ header owns both lock parts.
+    simLockShackle = 0;
+    simLockPressArmed = false;
     if (simControls) { lv_obj_del(simControls); simControls = 0; }
     if (simButton) { lv_obj_del(simButton); simButton = 0; }
 
@@ -296,6 +320,8 @@ static void simDeleteUiTree(void) {
     if (objects.rename_modal) lv_obj_del(objects.rename_modal);
     if (objects.pair_modal) lv_obj_del(objects.pair_modal);
     if (objects.update_modal) lv_obj_del(objects.update_modal);
+    if (objects.factory_reset_dialog) lv_obj_del(objects.factory_reset_dialog);
+    if (objects.factory_reset_scrim) lv_obj_del(objects.factory_reset_scrim);
 
     if (objects.home) lv_obj_del(objects.home);
     if (objects.all_sensors) lv_obj_del(objects.all_sensors);
@@ -320,7 +346,14 @@ static void simRebuildAppearance(void *userData) {
     lv_scr_load(transition);
     simDeleteUiTree();
 
-    create_screens();
+    // Rebuild only the generated screen trees. create_screens() also
+    // reinitializes LVGL's default theme, which can make the persistent top
+    // layer opaque during a live Light/Dark transition.
+    create_screen_home();
+    create_screen_all_sensors();
+    create_screen_plant_detail();
+    create_screen_settings();
+    create_screen_advanced_zigbee();
     simAttachSharedLayer();
     simInitNavigation();
     memcpy(simSensors, savedSensors, sizeof(savedSensors));
@@ -745,6 +778,7 @@ static void simUpdatePlant(void) {
     lv_obj_clear_state(objects.remove_button, LV_STATE_DISABLED);
 }
 
+
 static void simInfrastructureRowEvent(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     const uintptr_t encoded = (uintptr_t)lv_event_get_user_data(event);
@@ -878,6 +912,10 @@ static void simUpdateHeader(void) {
     snprintf(text, sizeof(text), "%u %s", (unsigned)enabled,
              enabled == 1 ? "PLANT" : "PLANTS");
     simSetText(objects.header_count, text);
+    lv_obj_set_style_translate_x(objects.header_count, simLocked ? -SIM_X(21) : 0,
+                                  LV_PART_MAIN);
+    simSetHidden(simLockBody, !simLocked);
+    simSetHidden(simLockShackle, !simLocked);
     simSetHidden(objects.header_update_button, true);
 }
 
@@ -1142,6 +1180,119 @@ static void simCreateControls(void) {
     simSetHidden(simControls, true);
 }
 
+static void simLockCountEvent(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        bool valid = true;
+        if (lv_event_get_target(event) == simLockShield) {
+            lv_indev_t *indev = lv_indev_get_act();
+            lv_point_t p = {0, 0};
+            if (!indev) valid = false;
+            else lv_indev_get_point(indev, &p);
+            valid = valid && p.x >= SIM_X(680) && p.y < SIM_Y(65);
+        }
+        simLockPressArmed = valid;
+        simLockPressAt = lv_tick_get();
+    } else if (code == LV_EVENT_PRESSING) {
+        if (simLockPressArmed && lv_tick_elaps(simLockPressAt) >= 3000) {
+            simLockPressArmed = false;
+            simLocked = !simLocked;
+            simSetHidden(simLockShield, !simLocked);
+            simUpdateHeader();
+        }
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        simLockPressArmed = false;
+    }
+}
+
+static void simBuildHeaderLockIndicator(void) {
+    const lv_color_t ink = lv_obj_get_style_text_color(objects.header_count, LV_PART_MAIN);
+    simLockShackle = lv_obj_create(objects.header);
+    lv_obj_set_pos(simLockShackle, SIM_X(767), SIM_Y(22));
+    lv_obj_set_size(simLockShackle, SIM_X(8), SIM_Y(14));
+    lv_obj_set_style_pad_all(simLockShackle, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(simLockShackle, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_color(simLockShackle, ink, LV_PART_MAIN);
+    lv_obj_set_style_border_width(simLockShackle, SIM_X(2), LV_PART_MAIN);
+    lv_obj_set_style_radius(simLockShackle, SIM_X(5), LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(simLockShackle, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(simLockShackle, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(simLockShackle, LV_OBJ_FLAG_HIDDEN);
+
+    simLockBody = lv_obj_create(objects.header);
+    lv_obj_set_pos(simLockBody, SIM_X(764), SIM_Y(30));
+    lv_obj_set_size(simLockBody, SIM_X(14), SIM_Y(12));
+    lv_obj_set_style_pad_all(simLockBody, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(simLockBody, ink, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(simLockBody, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(simLockBody, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(simLockBody, SIM_X(2), LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(simLockBody, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(simLockBody, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(simLockBody, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void simCreateLockControls(void) {
+    simBuildHeaderLockIndicator();
+    simLockHotspot = lv_obj_create(objects.header);
+    lv_obj_set_pos(simLockHotspot, SIM_X(680), 0);
+    lv_obj_set_size(simLockHotspot, SIM_X(120), SIM_Y(65));
+    lv_obj_set_style_bg_opa(simLockHotspot, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(simLockHotspot, 0, 0);
+    lv_obj_set_style_pad_all(simLockHotspot, 0, 0);
+    lv_obj_add_flag(simLockHotspot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(simLockHotspot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(simLockHotspot, simLockCountEvent, LV_EVENT_ALL, 0);
+
+    simLockShield = lv_obj_create(lv_layer_top());
+    lv_obj_set_pos(simLockShield, 0, 0);
+    lv_obj_set_size(simLockShield, SIM_SCREEN_WIDTH, SIM_SCREEN_HEIGHT);
+    lv_obj_set_style_bg_opa(simLockShield, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(simLockShield, 0, 0);
+    lv_obj_set_style_pad_all(simLockShield, 0, 0);
+    lv_obj_add_flag(simLockShield, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(simLockShield, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(simLockShield, simLockCountEvent, LV_EVENT_ALL, 0);
+    simSetHidden(simLockShield, !simLocked);
+}
+
+static void simOpenResetEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    simResetHolding = false;
+    simSetText(objects.factory_reset_message,
+       "SIMULATOR ONLY: This would erase all Waveshare user data and the H2 Zigbee network. Firmware stays installed. Hold RESET for 5 seconds.");
+    simSetHidden(objects.factory_reset_scrim, false);
+    simSetHidden(objects.factory_reset_dialog, false);
+    lv_obj_move_foreground(objects.factory_reset_scrim);
+    lv_obj_move_foreground(objects.factory_reset_dialog);
+}
+
+static void simCancelResetEvent(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    simResetHolding = false;
+    simSetHidden(objects.factory_reset_dialog, true);
+    simSetHidden(objects.factory_reset_scrim, true);
+}
+
+static void simConfirmResetEvent(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        simResetHolding = true;
+        simResetHoldAt = lv_tick_get();
+    } else if (code == LV_EVENT_PRESSING) {
+        if (simResetHolding && lv_tick_elaps(simResetHoldAt) >= 5000) {
+            simResetHolding = false;
+            for (int i = 0; i < SIM_SENSOR_CAPACITY; ++i) simSensors[i].enabled = false;
+            simSetHidden(objects.factory_reset_dialog, true);
+            simSetHidden(objects.factory_reset_scrim, true);
+            simUpdateViews();
+            simShowPage(SIM_PAGE_HOME);
+        }
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        simResetHolding = false;
+    }
+}
+
 static void simInitNavigation(void) {
     lv_obj_add_event_cb(objects.nav_home, simPageEvent, LV_EVENT_CLICKED,
                         (void *)(uintptr_t)SIM_PAGE_HOME);
@@ -1158,6 +1309,12 @@ static void simInitNavigation(void) {
                         LV_EVENT_CLICKED, (void *)(uintptr_t)SIM_PAGE_ADVANCED);
     lv_obj_add_event_cb(objects.advanced_back_button, simPageEvent,
                         LV_EVENT_CLICKED, (void *)(uintptr_t)SIM_PAGE_SETTINGS);
+    lv_obj_add_event_cb(objects.advanced_factory_reset_button, simOpenResetEvent,
+                        LV_EVENT_CLICKED, 0);
+    lv_obj_add_event_cb(objects.factory_reset_cancel_button, simCancelResetEvent,
+                        LV_EVENT_CLICKED, 0);
+    lv_obj_add_event_cb(objects.factory_reset_confirm_button, simConfirmResetEvent,
+                        LV_EVENT_ALL, 0);
 
     lv_obj_add_event_cb(objects.settings_network_button, simOpenUpdateEvent,
                         LV_EVENT_CLICKED, 0);
@@ -1208,6 +1365,7 @@ static void simInitNavigation(void) {
     simCreateRows();
     simCreateInfrastructureRows();
     simCreateControls();
+    simCreateLockControls();
     simUpdateViews();
     simShowPage(SIM_PAGE_HOME);
 }

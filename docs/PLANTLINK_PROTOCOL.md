@@ -43,9 +43,33 @@ version through the final payload byte.
 - `RawZigbeeEvent`
 - `FactoryResetNetwork`
 
-`FactoryResetNetwork` is reserved but the first H2 firmware deliberately ignores
-it. Destructive reset will require an explicit confirmation token before it is
-implemented.
+`FactoryResetNetwork` (type `0x40`) now requires an explicit on-screen hold
+and a two-stage guarded transaction. Normal updates, H2 reboots, and malformed
+legacy reset frames cannot trigger the reset. Both controllers must run the new
+firmware before the reset UI can succeed; other PlantLink v2 messages and
+records remain unchanged.
+
+### Factory Reset Network (v2, 12-byte transaction)
+
+Each request/response has three little-endian `uint32_t` fields:
+`phase_magic`, `nonce` (nonzero random value), `guard_magic` (`ESR2`).
+Request 1 uses `PREP`; the H2 returns `RADY` with `FlagResponse` and arms
+that nonce for 10 seconds. Request 2 uses `EXEC` with the same nonce; if
+armed and not expired, H2 returns `ACPT` with `FlagResponse` and schedules
+`Zigbee.factoryReset(true)` after a short acknowledgement window. If H2's
+stored network fingerprint cannot be erased, it returns `DENY` with
+`FlagResponse|FlagError` and does **not** reset.
+
+The Waveshare only clears its own user namespaces after a matching `ACPT`
+response. An offline/unresponsive H2 cannot start the Waveshare wipe. Its
+factory reset clears `espplants` and `espnet` in the dedicated `plantdata`
+partition, plus the legacy `espplants` NVS namespace, **not** app partitions.
+The `_schema=1` migration marker is restored after wiping to prevent stale
+pre-migration data from returning. Firmware and OTA installation stay intact.
+The Zigbee network is factory-new afterward, requiring sensors/repeaters to
+rejoin or be re-paired. As with any reset spanning two chips, loss of power
+or acknowledgement exactly during execution may require retrying the reset.
+
 
 ## SensorReport v2
 

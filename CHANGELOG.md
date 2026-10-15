@@ -5,6 +5,25 @@ architecture changes. Do not rely on commit messages alone for project history.
 
 ## [Unreleased]
 
+### Child lock and coordinated full factory reset (uncompiled, hardware validation pending)
+
+- Shared plant-count header now supports a 3-second hold to lock/unlock on every
+  Waveshare page, with a lock symbol beside the count; state persists across reboots.
+  Sensor reporting and background tasks continue, but ordinary touches are
+  blocked by a transparent shield. Rebuilding the appearance disposes of the
+  old shield before creating the replacement.
+- The existing Advanced Zigbee page gains one FACTORY RESET entry without
+  moving Settings controls, Zigbee list, or bottom navigation. It opens a
+  separate warning dialog requiring a 5-second hold.
+- The H2 now responds to guarded PREP/EXEC reset messages and performs the
+  Zigbee SDK factory-reset/reboot only after the Waveshare confirmation.
+  Waveshare clears only ESP PLANTS user namespaces (including Wi-Fi) after
+  H2 acceptance, retaining firmware, OTA partitions, and migration safety.
+- Updated both 800x480 and 1024x600 EEZ projects, generated screen bindings,
+  and interactive simulator source. Physical Zigbee reset must be tested on
+  disposable hardware before release; interrupted execution across controllers
+  cannot be fully atomic.
+
 ### H2 permit-join close stability (H2 alpha.31)
 
 - Fixed a hardware-reproduced ESP32-H2 crash when an active Zigbee permit-join

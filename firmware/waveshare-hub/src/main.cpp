@@ -33,6 +33,9 @@ constexpr int kPlantLinkRxPin = 44;
 constexpr int kPlantLinkTxPin = 43;
 constexpr uint32_t kHelloIntervalMs = 1500;
 constexpr uint32_t kLinkTimeoutMs = 7000;
+constexpr uint32_t kScreenLockHoldMs = 3000;
+constexpr uint32_t kFactoryResetHoldMs = 5000;
+constexpr uint32_t kFactoryResetTimeoutMs = 8000;
 constexpr uint32_t kUiRefreshIntervalMs = 1000;
 constexpr uint32_t kHomeManualSelectionMs = 30 * 1000;
 constexpr uint32_t kPhraseDisplaySettleMs = 650;
@@ -286,6 +289,26 @@ struct UiDirtyState {
 
 UiDirtyState dirty;
 bool updateModalOpen = false;
+bool screenLocked = false;
+bool lockPressArmed = false;
+uint32_t lockPressStartedMs = 0;
+lv_obj_t *lockTouchShield = nullptr;
+lv_obj_t *lockCountHotspot = nullptr;
+lv_obj_t *headerLockBody = nullptr;
+lv_obj_t *headerLockShackle = nullptr;
+lv_obj_t *factoryResetScrim = nullptr;
+lv_obj_t *factoryResetDialog = nullptr;
+lv_obj_t *factoryResetStatus = nullptr;
+lv_obj_t *factoryResetConfirm = nullptr;
+char factoryResetMessageBuffer[224]{};
+bool factoryResetMessageDirty = false;
+bool factoryResetDialogOpen = false;
+bool factoryResetHolding = false;
+uint32_t factoryResetHoldStartedMs = 0;
+enum class FactoryResetState : uint8_t { Idle, WaitPrepared, WaitExecuted, Wipe };
+FactoryResetState factoryResetState = FactoryResetState::Idle;
+uint32_t factoryResetNonce = 0;
+uint32_t factoryResetDeadlineMs = 0;
 #if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
 // Diagnostics only: correlate the touch callback with the next LVGL status
 // refresh. This does not defer either Wi-Fi or drawing.
@@ -1486,6 +1509,120 @@ lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
 }
 
 void refreshUi(bool force = false, bool alreadyInLvglContext = false);
+
+bool persistScreenLock(bool locked) {
+  if (preferences.putBool("screen_lock", locked) != 1) {
+    Serial.println("[lock] unable to save lock state");
+    return false;
+  }
+  screenLocked = locked;
+  dirty.header = true;
+  if (lockTouchShield) {
+    if (locked) lv_obj_clear_flag(lockTouchShield, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(lockTouchShield, LV_OBJ_FLAG_HIDDEN);
+  }
+  Serial.printf("[lock] %s\n", locked ? "LOCKED" : "UNLOCKED");
+  return true;
+}
+
+void lockCountEvent(lv_event_t *event) {
+  const auto code = lv_event_get_code(event);
+  if (code == LV_EVENT_PRESSED) {
+    // When locked the full-screen shield gets all touches; accept only the
+    // plant-count area as an unlock gesture, never an arbitrary 3-second hold.
+    bool countArea = true;
+    if (lv_event_get_target(event) == lockTouchShield) {
+      const lv_indev_t *indev = lv_indev_get_act();
+      lv_point_t point{};
+      if (indev) lv_indev_get_point(const_cast<lv_indev_t *>(indev), &point);
+      else countArea = false;
+      countArea = countArea && point.x >= uiX(680) &&
+                  point.y >= 0 && point.y < uiY(65);
+    }
+    lockPressArmed = countArea;
+    lockPressStartedMs = millis();
+  } else if (code == LV_EVENT_PRESSING) {
+    if (lockPressArmed && millis() - lockPressStartedMs >= kScreenLockHoldMs) {
+      lockPressArmed = false;
+      if (persistScreenLock(!screenLocked)) refreshUi(true, true);
+    }
+  } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+    lockPressArmed = false;
+  }
+}
+
+// LVGL 8.3 ships no LV_SYMBOL_LOCK glyph. Draw the indicator with ordinary
+// LVGL objects instead so both Waveshare fonts render it consistently.
+void buildHeaderLockIndicator() {
+  if (!headerCount || !objects.header) return;
+  const lv_color_t ink = lv_obj_get_style_text_color(headerCount, LV_PART_MAIN);
+
+  headerLockShackle = lv_obj_create(objects.header);
+  lv_obj_set_pos(headerLockShackle, uiX(767), uiY(22));
+  lv_obj_set_size(headerLockShackle, uiX(8), uiY(14));
+  lv_obj_set_style_pad_all(headerLockShackle, 0, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(headerLockShackle, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_color(headerLockShackle, ink, LV_PART_MAIN);
+  lv_obj_set_style_border_width(headerLockShackle, uiX(2), LV_PART_MAIN);
+  lv_obj_set_style_radius(headerLockShackle, uiX(5), LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(headerLockShackle, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(headerLockShackle, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(headerLockShackle, LV_OBJ_FLAG_HIDDEN);
+
+  headerLockBody = lv_obj_create(objects.header);
+  lv_obj_set_pos(headerLockBody, uiX(764), uiY(30));
+  lv_obj_set_size(headerLockBody, uiX(14), uiY(12));
+  lv_obj_set_style_pad_all(headerLockBody, 0, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(headerLockBody, ink, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(headerLockBody, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_width(headerLockBody, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(headerLockBody, uiX(2), LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(headerLockBody, 0, LV_PART_MAIN);
+  lv_obj_clear_flag(headerLockBody, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(headerLockBody, LV_OBJ_FLAG_HIDDEN);
+}
+
+void showHeaderLockIndicator() {
+  if (!headerCount) return;
+  // Preserve EEZ's normal count position; reserve icon room only while locked.
+  lv_obj_set_style_translate_x(headerCount, screenLocked ? -uiX(21) : 0, LV_PART_MAIN);
+  if (headerLockBody) {
+    if (screenLocked) lv_obj_clear_flag(headerLockBody, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(headerLockBody, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (headerLockShackle) {
+    if (screenLocked) lv_obj_clear_flag(headerLockShackle, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(headerLockShackle, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void buildScreenLock() {
+  buildHeaderLockIndicator();
+  // The layer-top shield blocks every page/modal while locked, but its top-right
+  // count hotspot stays above it. No existing EEZ layout is moved or resized.
+  lockTouchShield = lv_obj_create(lv_layer_top());
+  lv_obj_set_pos(lockTouchShield, 0, 0);
+  lv_obj_set_size(lockTouchShield, ESP_PANEL_LCD_WIDTH, ESP_PANEL_LCD_HEIGHT);
+  lv_obj_set_style_bg_opa(lockTouchShield, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(lockTouchShield, 0, 0);
+  lv_obj_set_style_pad_all(lockTouchShield, 0, 0);
+  lv_obj_clear_flag(lockTouchShield, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(lockTouchShield, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(lockTouchShield, lockCountEvent, LV_EVENT_ALL, nullptr);
+  if (!screenLocked) lv_obj_add_flag(lockTouchShield, LV_OBJ_FLAG_HIDDEN);
+
+  // Child of the shared EEZ header, so ordinary modal dialogs stay above this
+  // hotspot (unlike a permanent top-layer control that would steal modal taps).
+  lockCountHotspot = lv_obj_create(objects.header);
+  lv_obj_set_pos(lockCountHotspot, uiX(680), 0);
+  lv_obj_set_size(lockCountHotspot, uiX(120), uiY(65));
+  lv_obj_set_style_bg_opa(lockCountHotspot, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(lockCountHotspot, 0, 0);
+  lv_obj_set_style_pad_all(lockCountHotspot, 0, 0);
+  lv_obj_clear_flag(lockCountHotspot, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(lockCountHotspot, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(lockCountHotspot, lockCountEvent, LV_EVENT_ALL, nullptr);
+}
 void buildUi(Page initialPage = Page::Home, bool initializeTheme = true);
 
 void metric(lv_obj_t *parent, const char *caption, int x, int y, lv_obj_t **value,
@@ -1528,9 +1665,20 @@ void attachSharedUiLayer() {
   if (objects.rename_modal) lv_obj_set_parent(objects.rename_modal, top);
   if (objects.pair_modal) lv_obj_set_parent(objects.pair_modal, top);
   if (objects.update_modal) lv_obj_set_parent(objects.update_modal, top);
+  if (objects.factory_reset_scrim) lv_obj_set_parent(objects.factory_reset_scrim, top);
+  if (objects.factory_reset_dialog) lv_obj_set_parent(objects.factory_reset_dialog, top);
 }
 
 void deleteGeneratedUiTree() {
+  // Lock controls live in the persistent LVGL top layer, unlike generated
+  // screen roots. Delete them on appearance rebuild to avoid stale shields.
+  if (lockCountHotspot) lv_obj_del(lockCountHotspot);
+  if (lockTouchShield) lv_obj_del(lockTouchShield);
+  lockCountHotspot = nullptr;
+  lockTouchShield = nullptr;
+  headerLockBody = nullptr;  // Owned and deleted by the shared EEZ header.
+  headerLockShackle = nullptr;
+  lockPressArmed = false;
   // Shared objects no longer belong to objects.home after attachSharedUiLayer(),
   // so delete them explicitly, then remove every EEZ screen. This is used only
   // for the appearance rebuild and prevents two complete UI trees from
@@ -1540,6 +1688,10 @@ void deleteGeneratedUiTree() {
   if (objects.rename_modal) lv_obj_del(objects.rename_modal);
   if (objects.pair_modal) lv_obj_del(objects.pair_modal);
   if (objects.update_modal) lv_obj_del(objects.update_modal);
+  if (objects.factory_reset_dialog) lv_obj_del(objects.factory_reset_dialog);
+  if (objects.factory_reset_scrim) lv_obj_del(objects.factory_reset_scrim);
+  factoryResetDialogOpen = false;
+  factoryResetMessageDirty = false;
 
   if (objects.home) lv_obj_del(objects.home);
   if (objects.all_sensors) lv_obj_del(objects.all_sensors);
@@ -3082,6 +3234,84 @@ void buildSettings(lv_obj_t *screen) {
                       LV_EVENT_CLICKED, nullptr);
 }
 
+
+void setFactoryResetStatus(const char *message) {
+  // UART/loop callbacks are not LVGL-thread callbacks. Queue text for the
+  // normal locked refresh path; never mutate widgets from the Zigbee handler.
+  snprintf(factoryResetMessageBuffer, sizeof(factoryResetMessageBuffer), "%s",
+           message ? message : "");
+  factoryResetMessageDirty = true;
+}
+
+void factoryResetCancelEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED ||
+      factoryResetState != FactoryResetState::Idle) return;
+  factoryResetHolding = false;
+  factoryResetDialogOpen = false;
+  lv_obj_add_flag(factoryResetDialog, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(factoryResetScrim, LV_OBJ_FLAG_HIDDEN);
+}
+
+void factoryResetOpenEvent(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || screenLocked ||
+      factoryResetState != FactoryResetState::Idle ||
+      espplants_update::checking() || espplants_update::installing()) return;
+  factoryResetHolding = false;
+  factoryResetDialogOpen = true;
+  setFactoryResetStatus("This will erase ALL plants, names, Wi-Fi settings, and the H2 Zigbee network. Sensors must be paired again. Firmware remains installed.");
+  lv_obj_clear_flag(factoryResetScrim, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(factoryResetDialog, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(factoryResetScrim);
+  lv_obj_move_foreground(factoryResetDialog);
+}
+
+void factoryResetConfirmEvent(lv_event_t *event) {
+  const auto code = lv_event_get_code(event);
+  if (!factoryResetDialogOpen || factoryResetState != FactoryResetState::Idle) return;
+  if (code == LV_EVENT_PRESSED) {
+    factoryResetHolding = true;
+    factoryResetHoldStartedMs = millis();
+  } else if (code == LV_EVENT_PRESSING) {
+    if (!factoryResetHolding || millis() - factoryResetHoldStartedMs < kFactoryResetHoldMs) return;
+    factoryResetHolding = false;
+    if (espplants_update::checking() || espplants_update::installing()) {
+      setFactoryResetStatus("Update in progress. Nothing was erased. Try again later.");
+      return;
+    }
+    if (!h2Online || !h2BuildId[0]) {
+      setFactoryResetStatus("H2 is OFFLINE. Nothing was erased. Reconnect H2 and try again.");
+      return;
+    }
+    factoryResetNonce = esp_random();
+    if (!factoryResetNonce) factoryResetNonce = 1;
+    uint8_t payload[plantlink::kFactoryResetPayloadBytes]{};
+    plantlink::putU32LE(payload, plantlink::kFactoryResetPrepareMagic);
+    plantlink::putU32LE(payload + 4, factoryResetNonce);
+    plantlink::putU32LE(payload + 8, plantlink::kFactoryResetGuardMagic);
+    factoryResetState = FactoryResetState::WaitPrepared;
+    factoryResetDeadlineMs = millis() + kFactoryResetTimeoutMs;
+    setFactoryResetStatus("Asking H2 to prepare full network reset...");
+    sendFrame(plantlink::MessageType::FactoryResetNetwork, payload, sizeof(payload));
+  } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+    factoryResetHolding = false;
+  }
+}
+
+void buildFactoryResetDialog() {
+  factoryResetScrim = objects.factory_reset_scrim;
+  factoryResetDialog = objects.factory_reset_dialog;
+  factoryResetStatus = objects.factory_reset_message;
+  factoryResetConfirm = objects.factory_reset_confirm_button;
+  lv_obj_add_event_cb(objects.advanced_factory_reset_button, factoryResetOpenEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(objects.factory_reset_cancel_button, factoryResetCancelEvent,
+                      LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(factoryResetConfirm, factoryResetConfirmEvent,
+                      LV_EVENT_ALL, nullptr);
+  lv_obj_add_flag(factoryResetDialog, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(factoryResetScrim, LV_OBJ_FLAG_HIDDEN);
+}
+
 void buildAdvanced(lv_obj_t *screen) {
   (void)screen;
 
@@ -3324,10 +3554,12 @@ void buildUi(Page initialPage, bool initializeTheme) {
   buildPlant(objects.plant_detail);
   buildSettings(objects.settings);
   buildAdvanced(objects.advanced_zigbee);
+  buildFactoryResetDialog();
   buildNav(objects.home);
   buildRename(objects.home);
   buildPairDialog(objects.home);
   buildUpdateDialog(objects.home);
+  buildScreenLock();
   showPage(initialPage);
 
   if (oldScreen && oldScreen != screenForPage(initialPage)) lv_obj_del(oldScreen);
@@ -3380,7 +3612,8 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
       (updateModalOpen || pairDialogState != PairDialogState::Hidden);
   const bool modalDirty =
       (updateModalOpen && dirty.update) ||
-      (pairDialogState != PairDialogState::Hidden && dirty.pair);
+      (pairDialogState != PairDialogState::Hidden && dirty.pair) ||
+      (factoryResetDialogOpen && factoryResetMessageDirty);
 
   if (!force && !dirty.header && !pageDirty && !modalDirty &&
       !timedPageWork && !timedModalWork) return;
@@ -3404,6 +3637,11 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
 
   if (intervalElapsed) lastUiRefreshMs = now;
 
+  if (factoryResetDialogOpen && factoryResetMessageDirty && factoryResetStatus) {
+    lv_label_set_text(factoryResetStatus, factoryResetMessageBuffer);
+    factoryResetMessageDirty = false;
+  }
+
   char text[200]{};
   const size_t count = registeredCount();
   const size_t reporting = reportedCount();
@@ -3414,6 +3652,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
     snprintf(text, sizeof(text), "%u %s", static_cast<unsigned>(count),
              count == 1 ? "PLANT" : "PLANTS");
     label(headerCount, text);
+    showHeaderLockIndicator();
     if (headerUpdateButton) {
       if (espplants_update::updateAvailable())
         lv_obj_clear_flag(headerUpdateButton, LV_OBJ_FLAG_HIDDEN);
@@ -3860,8 +4099,7 @@ void refreshUi(bool force, bool alreadyInLvglContext) {
   if (lockedHere) lvgl_port_unlock();
 #if defined(ESP_PLANTS_WAVESHARE_7B) && !defined(ESP_PLANTS_DISTRIBUTION_BUILD)
   if (traceDisconnectRedraw) {
-    // These times mark CPU-side LVGL object updates, not RGB frame presentation.
-    // Print only after releasing the LVGL lock to avoid perturbing the redraw.
+    // CPU-side LVGL object updates, not RGB frame presentation.
     Serial.printf("[wifi-ui-diag] tap_us=%lu redraw_start_us=%lu "
                   "redraw_end_us=%lu tap_to_redraw_us=%lu redraw_duration_us=%lu\n",
                   static_cast<unsigned long>(sevenBDisconnectTapUs),
@@ -4223,6 +4461,36 @@ void handleFrame(const plantlink::Frame &frame) {
       dirty.update = true;
       break;
     }
+    case plantlink::MessageType::FactoryResetNetwork:
+      if ((factoryResetState == FactoryResetState::WaitPrepared ||
+           factoryResetState == FactoryResetState::WaitExecuted) &&
+          frame.payloadLength == plantlink::kFactoryResetPayloadBytes &&
+          (frame.flags & plantlink::FlagResponse) &&
+          plantlink::getU32LE(frame.payload + 4) == factoryResetNonce &&
+          plantlink::getU32LE(frame.payload + 8) == plantlink::kFactoryResetGuardMagic) {
+        if (frame.flags & plantlink::FlagError) {
+          factoryResetState = FactoryResetState::Idle;
+          setFactoryResetStatus("H2 refused reset. Nothing was erased. Try again.");
+          break;
+        }
+        const uint32_t phase = plantlink::getU32LE(frame.payload);
+        if (factoryResetState == FactoryResetState::WaitPrepared &&
+            phase == plantlink::kFactoryResetReadyMagic) {
+          uint8_t payload[plantlink::kFactoryResetPayloadBytes]{};
+          plantlink::putU32LE(payload, plantlink::kFactoryResetExecuteMagic);
+          plantlink::putU32LE(payload + 4, factoryResetNonce);
+          plantlink::putU32LE(payload + 8, plantlink::kFactoryResetGuardMagic);
+          factoryResetState = FactoryResetState::WaitExecuted;
+          factoryResetDeadlineMs = millis() + kFactoryResetTimeoutMs;
+          setFactoryResetStatus("H2 ready. Confirming Zigbee network erase...");
+          sendFrame(plantlink::MessageType::FactoryResetNetwork, payload, sizeof(payload));
+        } else if (factoryResetState == FactoryResetState::WaitExecuted &&
+                   phase == plantlink::kFactoryResetAcceptedMagic) {
+          factoryResetState = FactoryResetState::Wipe;
+          setFactoryResetStatus("H2 accepted reset. Erasing Waveshare user data...");
+        }
+      }
+      break;
     case plantlink::MessageType::NetworkStatus: handleNetworkStatus(frame); break;
     case plantlink::MessageType::DeviceJoined: handleDeviceJoined(frame); break;
     case plantlink::MessageType::DeviceLeft: handleDeviceLeft(frame); break;
@@ -4268,6 +4536,7 @@ void setup() {
     Serial.println("[storage] ERROR: plantdata unavailable; falling back to default NVS");
     preferences.begin("espplants", false);
   }
+  screenLocked = preferences.getBool("screen_lock", false);
   useFahrenheit = preferences.getBool("fahrenheit", true);
   espplants_ui_set_light(preferences.getBool("ui_light", kDefaultLightAppearance));
   brightnessLevel = preferences.getUChar("bright_lvl", 5);
@@ -4322,9 +4591,7 @@ void setup() {
   Serial.println("[display] ready");
 
 #ifdef ESP_PLANTS_WAVESHARE_7B
-  // Controlled 7B A/B test: retain the complete 6.5s photo splash and
-  // defer the Wi-Fi station until Home replaces the splash. If splash creation
-  // fails, connect immediately as before.
+  // Defer station startup until the complete splash is dismissed.
   espplants_update::begin(bootSplashActive);
 #else
   espplants_update::begin();
@@ -4334,6 +4601,40 @@ void setup() {
 
 void loop() {
   servicePlantLink();
+  if (factoryResetState == FactoryResetState::Wipe) {
+    // Persist nothing from old registry after this point. Only erase the two
+    // ESP PLANTS namespaces in plantdata, not partition tables or firmware.
+    // Preserve migration tombstone to prevent legacy NVS resurrection.
+    bool ok = preferences.clear();
+    if (ok) ok = preferences.putUInt("_schema", 1) == sizeof(uint32_t);
+    if (ok) ok = preferences.putBool("_nvs_mig1", true) == 1;
+    Preferences network;
+    if (network.begin("espnet", false, "plantdata")) {
+      if (!network.clear()) ok = false;
+      network.end();
+    } else ok = false;
+    Preferences legacy;
+    if (legacy.begin("espplants", false, "nvs")) {
+      if (!legacy.clear()) ok = false;
+      legacy.end();
+    }
+    Serial.printf("[factory-reset] Waveshare scoped erase %s; restarting\n",
+                  ok ? "completed" : "FAILED");
+    Serial.flush();
+    if (!ok) {
+      factoryResetState = FactoryResetState::Idle;
+      setFactoryResetStatus("Waveshare erase FAILED. Do not power off; check USB logs.");
+    } else {
+      delay(150);
+      ESP.restart();
+    }
+  }
+  if ((factoryResetState == FactoryResetState::WaitPrepared ||
+       factoryResetState == FactoryResetState::WaitExecuted) &&
+      static_cast<int32_t>(millis() - factoryResetDeadlineMs) >= 0) {
+    factoryResetState = FactoryResetState::Idle;
+    setFactoryResetStatus("H2 did not acknowledge in time. Check H2/USB logs before retrying.");
+  }
   serviceSensorLiveness();
   servicePhraseDisplaySettle();
   serviceDeferredPersistence();
@@ -4381,8 +4682,6 @@ void loop() {
       bootSplashActive = false;
       lvgl_port_unlock();
 #ifdef ESP_PLANTS_WAVESHARE_7B
-      // Start the Wi-Fi settle clock only after the complete splash is gone.
-      // No new LVGL work or panel restart is performed here.
       espplants_update::notifyBootSplashDismissed();
 #endif
     }
